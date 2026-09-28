@@ -1,5 +1,6 @@
 # Minecraft chat macro - PowerShell (built into Windows, nothing to install)
-# Press U in Minecraft. For each slot 1 to 9 it does: number, T, paste (Ctrl+V), Enter
+# Press U in Minecraft. Does exactly:
+# 1,T,paste,Enter  2,T,paste,Enter  ...  8,T,paste,Enter  9
 # Press F9 (or close this window) to stop.
 
 Add-Type @"
@@ -34,15 +35,49 @@ while ($true) {
     $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0     # U
     if ($isDown -and -not $wasDown -and ([K]::Title() -like "*Minecraft*")) {
         while ([K]::GetAsyncKeyState(0x55) -band 0x8000) { Start-Sleep -Milliseconds 10 }  # wait until U is let go
-        for ($n = 1; $n -le 9; $n++) {
-            [K]::Tap([byte](0x30 + $n));  Start-Sleep -Milliseconds $AfterNumber   # 1..9
-            [K]::Tap($VK_T);              Start-Sleep -Milliseconds $ChatOpen      # T
-            [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20                     # Ctrl+V
-            [K]::Tap($VK_V);      Start-Sleep -Milliseconds 20
-            [K]::Up($VK_LCTRL);           Start-Sleep -Milliseconds $AfterPaste
-            [K]::Tap($VK_ENTER);          Start-Sleep -Milliseconds $AfterEnter    # Enter
-        }
-        Write-Host "Done 1-9."
+        # --- 1, T, paste, Enter ---
+        [K]::Tap(0x31); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 2, T, paste, Enter ---
+        [K]::Tap(0x32); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 3, T, paste, Enter ---
+        [K]::Tap(0x33); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 4, T, paste, Enter ---
+        [K]::Tap(0x34); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 5, T, paste, Enter ---
+        [K]::Tap(0x35); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 6, T, paste, Enter ---
+        [K]::Tap(0x36); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 7, T, paste, Enter ---
+        [K]::Tap(0x37); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 8, T, paste, Enter ---
+        [K]::Tap(0x38); Start-Sleep -Milliseconds $AfterNumber
+        [K]::Tap($VK_T); Start-Sleep -Milliseconds $ChatOpen
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20; [K]::Tap($VK_V); Start-Sleep -Milliseconds 20; [K]::Up($VK_LCTRL); Start-Sleep -Milliseconds $AfterPaste
+        [K]::Tap($VK_ENTER); Start-Sleep -Milliseconds $AfterEnter
+        # --- 9 ---
+        [K]::Tap(0x39)
+        Write-Host "Done."
     }
     $wasDown = $isDown
     Start-Sleep -Milliseconds 15
