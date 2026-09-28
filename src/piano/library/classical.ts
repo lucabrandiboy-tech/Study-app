@@ -1,0 +1,47 @@
+import type { SongDef } from './make';
+import { rep } from './make';
+
+export const ANTHEMS: SongDef[] = [
+  { id: 'america', t: "America (My Country, 'Tis of Thee)", c: 'Traditional', lv: 'I', cat: 'Hymns & Anthems', time: [3, 4], bpm: 90,
+    rh: 'C4:q C4 D4 | B3:q. C4:e D4:q | E4 E4 F4 | E4:q. D4:e C4:q | D4 C4 B3 | C4:h. | G4:q G4 G4 | G4:q. F4:e E4:q | F4 F4 F4 | F4:q. E4:e D4:q | E4:q F4:e E4 D4 C4 | E4:q. F4:e G4:q | A4:e F4 E4:q D4 | C4:h.',
+    ch: 'C | G | C | C | G | C | C | C | G7 | G7 | C | C | F:1 G7:2 | C' },
+  { id: 'america-the-beautiful', t: 'America the Beautiful', c: 'Samuel A. Ward', lv: 'I', cat: 'Hymns & Anthems', bpm: 92,
+    rh: 'r:h r:q G4:q | G4:q. E4:e E4:q G4 | G4:q. D4:e D4:q E4 | F4 G4 A4 B4 | G4:h. G4:q | G4:q. E4:e E4:q G4 | G4:q. D4:e D4:q D5 | C#5 D5 E5 A4 | D5:h. G4:q | E5:q. E5:e D5:q C5 | C5:q. B4:e B4:q C5 | D5 B4 A4 G4 | C5:h. C5:q | C5:q. A4:e A4:q C5 | C5:q. G4:e G4:q G4 | A4 C5 G4 D5 | C5:h. r:q',
+    ch: 'N | C | G | Dm:2 G:2 | C | C | G | A7 | Dm:3 G:1 | C | G | G7 | C | F | C | Dm:2 G7:2 | C' },
+];
+
+export const CLASSICAL: SongDef[] = [
+  { id: 'ode-to-joy-full', t: 'Ode to Joy (full)', c: 'Ludwig van Beethoven', lv: 'I', cat: 'Classical', bpm: 100,
+    rh: 'E4:q E4 F4 G4 | G4 F4 E4 D4 | C4 C4 D4 E4 | E4:q. D4:e D4:h | E4:q E4 F4 G4 | G4 F4 E4 D4 | C4 C4 D4 E4 | D4:q. C4:e C4:h | D4:q D4 E4 C4 | D4 E4:e F4 E4:q C4 | D4 E4:e F4 E4:q D4 | C4 D4 G3:h | E4:q E4 F4 G4 | G4 F4 E4 D4 | C4 C4 D4 E4 | D4:q. C4:e C4:h',
+    ch: 'C | G | C | G | C | G | C | G:2 C:2 | G | C | G | C:2 G:2 | C | G | C | G:2 C:2' },
+  { id: 'going-home', t: 'Going Home (New World Symphony, Largo)', c: 'Antonín Dvořák', lv: 'B', cat: 'Classical', bpm: 70,
+    rh: 'E4:q. G4:e G4:h | E4:q. D4:e C4:h | D4:q E4 G4 E4 | D4:w | E4:q. G4:e G4:h | E4:q. D4:e C4:h | D4:q E4 D4 C4 | C4:w',
+    ch: 'C | C | G | G | C | C | G | C' },
+  { id: 'morning-mood', t: 'Morning Mood (Peer Gynt)', c: 'Edvard Grieg', lv: 'I', cat: 'Classical', time: [6, 8], bpm: 100,
+    rh: 'G4:e E4 D4 C4 D4 E4 | G4:e E4 D4 C4 D4 E4 | D4:e E4 G4 E4 G4 A4 | E4:e A4 G4 E4 D4 C4 | C4:h.',
+    ch: 'C | C | G | C | C' },
+  { id: 'mountain-king', t: 'In the Hall of the Mountain King', c: 'Edvard Grieg', lv: 'I', cat: 'Classical', bpm: 110,
+    rh: 'A3:e B3 C4 D4 E4 C4 E4:q | D#4:e B3 D#4:q D4:e Bb3 D4:q | A3:e B3 C4 D4 E4 C4 E4 A4 | G4:e E4 C4 E4 G4:h',
+    ch: 'Am | B:2 Bb:2 | Am | C' },
+  { id: 'can-can', t: 'Can-Can (Infernal Galop)', c: 'Jacques Offenbach', lv: 'I', cat: 'Classical', time: [2, 4], bpm: 132,
+    rh: 'C4:q D4:e F4 | E4:e D4 G4:q | G4:q G4:e A4 | E4:e F4 D4:q | D4:q D4:e F4 | E4:e D4 C4 C5 | B4:e A4 G4 F4 | E4:e D4 C4:q',
+    ch: 'C | C:1 G:1 | C | G | G | G:1 C:1 | G | G:1 C:1' },
+  { id: 'vivaldi-spring', t: 'Spring (The Four Seasons)', c: 'Antonio Vivaldi', lv: 'I', cat: 'Classical', key: 4, bpm: 100,
+    rh: 'r:h r:q E4:q | G#4:q G#4 G#4 F#4:e E4 | B4:h. B4:e A4 | G#4:q G#4 G#4 F#4:e E4 | B4:h. B4:e A4 | G#4:q A4:e B4 A4:q G#4 | F#4:h. r:q',
+    ch: 'N | E | E | E | E | E | B' },
+  { id: 'toccata-d-minor', t: 'Toccata in D minor (opening)', c: 'Johann Sebastian Bach', lv: 'I', cat: 'Classical', key: -1, bpm: 60,
+    rh: 'A5:e G5 A5:h. | G5:s F5 E5 D5 C#5:q D5:h | A4:e G4 A4:h. | G4:s F4 E4 D4 C#4:q D4:h | [D4 F4 A4]:w',
+    lh: 'D2:w | D2:w | D2:w | D2:w | [D2 D3]:w' },
+  { id: 'beethoven-5', t: 'Symphony No. 5 (opening)', c: 'Ludwig van Beethoven', lv: 'B', cat: 'Classical', time: [2, 4], key: -3, bpm: 108,
+    rh: 'r:e G4:e G4 G4 | Eb4:h | r:e F4:e F4 F4 | D4:h~ | D4:h',
+    lh: 'r:e G3:e G3 G3 | Eb3:h | r:e F3:e F3 F3 | D3:h~ | D3:h' },
+  { id: 'eine-kleine', t: 'Eine kleine Nachtmusik (opening)', c: 'Wolfgang Amadeus Mozart', lv: 'I', cat: 'Classical', key: 1, bpm: 120,
+    rh: 'G4:q r:e D4:e G4:q r:e D4:e | G4:e D4 G4 B4 D5:q r:q | C5:q r:e A4:e C5:q r:e A4:e | C5:e A4 F#4 A4 D4:q r:q | G4:h r:h',
+    ch: 'G | G | D | D | G' },
+  { id: 'funeral-march', t: 'Funeral March (Sonata No. 2)', c: 'Frédéric Chopin', lv: 'P', cat: 'Classical', key: -3, bpm: 60,
+    rh: 'C4:q C4:e. C4:s C4:q Eb4:e. D4:s | D4:e. C4:s C4:e. B3:s C4:h | C4:q C4:e. C4:s C4:q Eb4:e. D4:s | D4:e. C4:s C4:e. B3:s C4:h',
+    lh: rep('[C3 G3]:q [Ab2 Eb3] [C3 G3] [Ab2 Eb3]', 4) },
+  { id: 'surprise-symphony', t: 'Surprise Symphony (theme)', c: 'Joseph Haydn', lv: 'I', cat: 'Classical', time: [2, 4], bpm: 100,
+    rh: 'C4:e C4 E4 E4 | G4:e G4 E4:q | F4:e F4 D4 D4 | B3:e B3 G3:q | C4:e C4 E4 E4 | G4:e G4 C5:q | A4:e A4 F#4 F#4 | G4:q [G3 B3 D4 G4]:q',
+    ch: 'C | C | G7 | G | C | C | D7 | G' },
+];

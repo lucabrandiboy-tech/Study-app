@@ -24,6 +24,8 @@ for (const lang of ['spanish', 'french'] as const) {
 const pieces = [
   ...COURSE.flatMap((u) => [...u.lessons.map((l) => ({ id: l.id, ex: l.ex })), ...(u.song ? [{ id: `u${u.n}-song`, ex: u.song.ex }] : []), ...(u.test ? [{ id: `u${u.n}-test`, ex: u.test }] : [])]),
 ];
+const lib = songLibrary();
+for (const s of lib) if (s.ex) pieces.push({ id: `song:${s.id}`, ex: s.ex });
 for (const p of pieces) {
   try {
     const pc = lessonPiece(p.id, p.id, p.ex);
@@ -54,5 +56,5 @@ for (const p of pieces) {
   } catch (e) { fail(`${p.id} threw ${(e as Error).message}`); }
 }
 for (const s of songLibrary()) { try { s.piece(); } catch (e) { fail(`song ${s.id}: ${(e as Error).message}`); } }
-console.log(problems ? `${problems} problem(s)` : `All good: ${pieces.length} course pieces, all topic generators OK.`);
+console.log(problems ? `${problems} problem(s)` : `All good: ${pieces.length} pieces (${lib.length} library songs), all topic generators OK.`);
 process.exit(problems ? 1 : 0);
