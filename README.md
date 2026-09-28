@@ -9,6 +9,8 @@ npm install
 npm run dev
 ```
 
+For a single downloadable `index.html` (no install needed), run `npm run build:single`. The file is written to `dist-single/`.
+
 Open **http://localhost:5173** in **Chrome or Edge** on a PC. `npm run dev` starts both the website (Vite) and the small AI helper server (`server/`).
 
 ### Turn on Study Buddy (optional)
@@ -44,7 +46,13 @@ Plug in a USB MIDI keyboard, then open **Settings → Detect keyboard**. The sus
 | Progress | Streak calendar, XP history, accuracy by subject and topic, weak spots, minutes per week, piano stars per lesson, songs, note-game speed, badge collection |
 | Settings | MIDI setup/test, daily goals, timer lengths, volume, metronome sound, language, AI status, reset (type RESET to confirm) |
 
-Progress is saved in the browser's `localStorage`.
+### Saving progress to a file
+
+Progress is always kept in the browser, and it can also be saved to a real file on your computer. Go to **Settings → Save file** and choose one:
+
+- **Create new save file** (Chrome/Edge): pick where to save it, for example Documents or a USB stick. Every change after that is saved to the file automatically. After you restart the browser, click **Reconnect save file** in the sidebar and the app loads your progress from the file.
+- **Open existing save file**: load progress from a file you saved earlier, for example on another computer, and keep saving to it.
+- **Export / Import backup** (any browser): download a `.json` copy of your progress, or load one back in.
 
 ## Project layout
 
