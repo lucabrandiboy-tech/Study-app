@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useApp, setDecks, recordQuiz, recordActivity, addFocusRound, addMinutes, setNote, openChat, getState } from '../lib/store';
+import { Link } from 'react-router-dom';
+import { setMistakes, useApp, recordMistake, setDecks, recordQuiz, recordActivity, addFocusRound, addMinutes, setNote, openChat, getState } from '../lib/store';
 import { usePage } from '../lib/hooks';
 import { PageHeader, Tabs, Rich } from '../components/ui';
-import { QuestionView, Graded } from './QuestionView';
+import { QuestionView, Graded, correctAnswerText } from './QuestionView';
 import type { Question, Subject } from './types';
 import { useSubjects } from './pages';
 import { shuffle } from './rand';
@@ -139,6 +140,7 @@ export function QuizPage() {
     setDone(true);
     const score = res.filter((r) => r.correct).length;
     recordQuiz(subject.name, score, 10);
+    qs?.forEach((q, k) => { const r = res[k]; if (r && !r.correct) recordMistake({ topicId: `quiz-${subject.id}`, topic: `${subject.name} quiz`, prompt: q.prompt, given: r.given || '(blank)', correct: correctAnswerText(q), why: r.feedback || 'Time ran out before you answered.', solution: q.explanation }); });
     recordActivity('study');
   };
   useEffect(() => {
@@ -196,7 +198,8 @@ export function QuizPage() {
                     {!r?.correct && <>
                       <div className="text-sm mt-2"><span className="muted">Your answer:</span> <span className="text-bad">{r?.given || '(blank)'}</span></div>
                       {r?.feedback && <div className="text-sm text-streak">{r.feedback}</div>}
-                      <Rich text={`**Solution:** ${q.explanation}`} className="text-sm mt-1" />
+                      <div className="text-sm"><span className="muted">Correct answer:</span> <b className="text-good">{correctAnswerText(q)}</b></div>
+                      <Rich text={`**Why:** ${q.explanation}`} className="text-sm mt-1" />
                     </>}
                   </div>
                   {!r?.correct && q.diagram && <div className="w-[260px]">{q.diagram}</div>}
@@ -357,6 +360,61 @@ export function EssayCoach() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------- My Mistakes ----------------
+/** Every question answered wrong, with your answer, why it was wrong, the correct answer and the full solution. */
+export function MistakesPage() {
+  const mistakes = useApp((s) => s.mistakes);
+  const subjects = useSubjects();
+  const [show, setShow] = useState<'todo' | 'all'>('todo');
+  const [topic, setTopic] = useState('all');
+  usePage({ label: 'Study > My Mistakes', detail: 'The student is reviewing questions they got wrong. The answers are already revealed; help them understand the method.', subject: 'general' });
+  const topics = [...new Map(mistakes.map((m) => [m.topicId, m.topic])).entries()];
+  const list = mistakes.filter((m) => (show === 'all' || !m.reviewed) && (topic === 'all' || m.topicId === topic));
+  const todo = mistakes.filter((m) => !m.reviewed).length;
+  const linkFor = (id: string) => { const s = subjects.find((x) => x.topics.some((t) => t.id === id)); return s ? `/study/${s.id}/${id}` : null; };
+  return (
+    <div>
+      <PageHeader title="📖 My Mistakes" sub="Every question you got wrong, explained. Read why, then mark it as understood." right={
+        mistakes.some((m) => m.reviewed) ? <button className="btn-ghost" onClick={() => setMistakes(mistakes.filter((m) => !m.reviewed))}>🧹 Clear understood ones</button> : undefined
+      } />
+      <div className="flex gap-3 items-center mb-4 flex-wrap">
+        <Tabs value={show} onChange={setShow} tabs={[{ id: 'todo', label: `To review (${todo})` }, { id: 'all', label: `All (${mistakes.length})` }]} />
+        <select className="input" value={topic} onChange={(e) => setTopic(e.target.value)}>
+          <option value="all">All topics</option>
+          {topics.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        </select>
+      </div>
+      {list.length === 0 ? (
+        <div className="card text-center py-10"><div className="text-5xl mb-2">🎉</div><div className="h2">{mistakes.length ? 'All caught up!' : 'No mistakes yet'}</div><div className="muted">{mistakes.length ? 'You reviewed every mistake.' : 'Any question you miss in practice or quizzes will show up here with an explanation.'}</div></div>
+      ) : (
+        <div className="space-y-3">
+          {list.map((m) => {
+            const link = linkFor(m.topicId);
+            return (
+              <div key={m.id} className={`card ${m.reviewed ? 'opacity-60' : 'border-bad/50'}`}>
+                <div className="flex justify-between text-xs muted mb-1"><span>{m.topic}</span><span>{m.date}</span></div>
+                <Rich text={m.prompt} className="font-semibold mb-2" />
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-lg bg-bad/10 border border-bad/40 p-2"><div className="text-xs muted">You answered</div><div className="text-bad font-bold">{m.given || '(blank)'}</div></div>
+                  <div className="rounded-lg bg-good/10 border border-good/40 p-2"><div className="text-xs muted">Correct answer</div><div className="text-good font-bold">{m.correct}</div></div>
+                </div>
+                {m.why && <div className="text-sm mt-2"><b className="text-streak">Why yours was wrong:</b> {m.why}</div>}
+                <Rich text={`**Step by step:** ${m.solution}`} className="text-sm mt-1" />
+                <div className="flex gap-2 mt-3">
+                  {!m.reviewed ? <button className="btn py-1" onClick={() => setMistakes(mistakes.map((x) => (x.id === m.id ? { ...x, reviewed: true } : x)))}>✓ Got it</button>
+                    : <button className="btn-ghost py-1" onClick={() => setMistakes(mistakes.map((x) => (x.id === m.id ? { ...x, reviewed: false } : x)))}>↺ Review again</button>}
+                  <button className="btn-ghost py-1" onClick={() => openChat(`I got this wrong and I want to understand it better:\n"${m.prompt}"\nI answered ${m.given}; the correct answer is ${m.correct}. Can you explain the method a different way and give me a similar problem to try?`)}>🤖 Explain it differently</button>
+                  {link && <Link to={link} className="btn-ghost py-1">📝 Practice this topic</Link>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

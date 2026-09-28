@@ -19,21 +19,33 @@ export function bankTopic(t: {
         const v = pick(t.vocab);
         const flip = Math.random() < 0.5;
         const others = shuffle(t.vocab.filter((x) => x !== v)).slice(0, d === 0 ? 2 : 3);
+        const why: Record<string, string> = {};
+        others.forEach((o) => { why[flip ? o.term : o.def] = flip ? `"${o.term}" means: ${o.def}. That's a different idea.` : `That is the definition of "${o.term}", not "${v.term}".`; });
         return {
           prompt: flip ? `Which term matches this definition?\n"${v.def}"` : `What does "${v.term}" mean?`,
-          answer: mc(flip ? v.term : v.def, others.map((o) => (flip ? o.term : o.def))),
+          answer: mc(flip ? v.term : v.def, others.map((o) => (flip ? o.term : o.def)), why),
           hints: ['Think back to the lesson vocabulary for this topic.', `Key idea: ${flip ? 'look for a word in the definition that connects to the term.' : 'break the term into parts you know.'}`],
           explanation: `${v.term}: ${v.def}`,
         };
       }
       const [q, a, wrong, hint] = pick(pool.length ? pool : t.questions);
-      const choice = mc(a, shuffle(wrong).slice(0, d === 0 ? 2 : 3));
+      // explain each wrong choice: use the vocab list when the choice is a known term/definition
+      const why: Record<string, string> = {};
+      for (const w of wrong) {
+        const asTerm = t.vocab.find((v) => v.term.toLowerCase() === w.toLowerCase());
+        const asDef = t.vocab.find((v) => v.def.toLowerCase() === w.toLowerCase());
+        // (never names the right answer, so a second try is still a real try)
+        why[w] = asTerm ? `"${w}" means ${asTerm.def.replace(/\.$/, '')}, which doesn't fit this question. Think: ${hint}`
+          : asDef ? `That describes "${asDef.term}", not what this question asks. Think: ${hint}`
+          : `"${w}" isn't right. Think about it this way: ${hint}`;
+      }
+      const choice = mc(a, shuffle(wrong).slice(0, d === 0 ? 2 : 3), why);
       const elim = choice.choices.find((c, i) => i !== choice.correct);
       return {
         prompt: q,
         answer: choice,
         hints: [hint, `You can rule out "${elim}".`],
-        explanation: `Answer: ${a}. ${hint}`,
+        explanation: `The correct answer is **${a}**. Why: ${hint}`,
       };
     },
   };

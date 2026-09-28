@@ -13,7 +13,7 @@ for (const lang of ['spanish', 'french'] as const) {
       let q;
       try { q = t.generate(d); } catch (e) { fail(`${t.id} d${d} threw ${(e as Error).message}`); break; }
       const a = q.answer;
-      if (!q.prompt || q.hints.length === 0) fail(`${t.id} missing prompt/hints`);
+      if (!q.prompt || q.hints.length === 0 || !q.explanation) fail(`${t.id} missing prompt/hints/explanation`);
       if (a.kind === 'number' && !Number.isFinite(a.value)) fail(`${t.id} d${d} NaN answer: ${q.prompt}`);
       if (a.kind === 'choice' && (a.correct < 0 || new Set(a.choices).size !== a.choices.length || a.choices.length < 2)) fail(`${t.id} d${d} bad choices: ${JSON.stringify(a.choices)} ${q.prompt}`);
       if (a.kind === 'point' && (!Number.isInteger(a.x) || !Number.isInteger(a.y))) fail(`${t.id} bad point`);

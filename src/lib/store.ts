@@ -17,6 +17,8 @@ export interface ChatMsg { role: 'user' | 'assistant'; content: string }
 export interface Deck { id: string; name: string; cards: { front: string; back: string }[] }
 export interface Recording { id: string; name: string; date: string; events: { t: number; midi: number; on: boolean; vel: number }[] }
 
+export interface Mistake { id: string; date: string; topicId: string; topic: string; prompt: string; given: string; correct: string; why: string; solution: string; reviewed?: boolean }
+
 export interface AppState {
   version: 1;
   xp: number;
@@ -46,6 +48,7 @@ export interface AppState {
   lastStudy: { path: string; label: string } | null;
   lastPiano: { path: string; label: string } | null;
   chats: Record<string, ChatMsg[]>;
+  mistakes: Mistake[];
 }
 
 const KEY = 'study-piano-app-v1';
@@ -66,6 +69,7 @@ const fresh = (): AppState => ({
   lastStudy: null,
   lastPiano: null,
   chats: {},
+  mistakes: [],
 });
 
 /** Fill in any fields missing from older saves. */
@@ -307,6 +311,10 @@ export function setLast(kind: 'study' | 'piano', path: string, label: string) {
   update((s) => (kind === 'study' ? { ...s, lastStudy: { path, label } } : { ...s, lastPiano: { path, label } }));
 }
 export function setChat(subject: string, msgs: ChatMsg[]) { update((s) => ({ ...s, chats: { ...s.chats, [subject]: msgs.slice(-80) } })); }
+export function recordMistake(m: Omit<Mistake, 'id' | 'date'>) {
+  update((s) => ({ ...s, mistakes: [{ ...m, id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date: dayKey() }, ...s.mistakes].slice(0, 300) }));
+}
+export function setMistakes(mistakes: Mistake[]) { update((s) => ({ ...s, mistakes })); }
 export function resetProgress() { state = fresh(); emit(); }
 
 /** Listen for any saved-progress change (used by the save-file auto-saver). */

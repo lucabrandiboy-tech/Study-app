@@ -14,7 +14,13 @@ export function grade(q: Question, raw: string, sel: number | null, point: [numb
       if (isNaN(v)) return { correct: false, given: raw, feedback: "I couldn't read that as a number. Try something like 12, 3.5, 3/4, or 5√2." };
       if (close(v, a.value)) return { correct: true, given: raw, feedback: 'Correct!' };
       const m = a.mistakes?.find((x) => close(v, x.value));
-      return { correct: false, given: raw, feedback: m ? m.msg : 'Not quite. Re-check each step — especially signs, squaring, and which formula applies.' };
+      if (m) return { correct: false, given: raw, feedback: m.msg };
+      const t = a.value;
+      const why = t !== 0 && close(-v, t) ? 'You have the right size but the wrong sign (+/−). Check where a negative sign should flip.'
+        : t !== 0 && (close(v, t * 10) || close(v, t / 10) || close(v, t * 100) || close(v, t / 100)) ? 'The digits look right, but the decimal point is in the wrong place.'
+        : Math.abs(v - t) <= Math.max(0.6, Math.abs(t) * 0.02) ? 'Very close! This looks like a rounding slip. Check how many decimal places the question asks for, and round only at the end.'
+        : `Your answer is too ${v > t ? 'high' : 'low'}. Re-check each step, especially signs, squaring, and which formula applies.`;
+      return { correct: false, given: raw, feedback: why };
     }
     case 'choice': {
       if (sel === null) return { correct: false, given: '', feedback: 'Pick an answer first.' };
@@ -41,6 +47,18 @@ export function grade(q: Question, raw: string, sel: number | null, point: [numb
       const ok = a.accept.some((x) => x.toLowerCase().trim() === raw.toLowerCase().trim());
       return { correct: ok, given: raw, feedback: ok ? 'Correct!' : 'Not quite.' };
     }
+  }
+}
+
+/** The correct answer written out in words. */
+export function correctAnswerText(q: Question): string {
+  const a = q.answer;
+  switch (a.kind) {
+    case 'number': { const v = Math.round(a.value * 100) / 100; return `${v}${a.unit ? ` ${a.unit}` : ''}`; }
+    case 'choice': return a.choices[a.correct];
+    case 'point': return `(${a.x}, ${a.y})`;
+    case 'proof': return a.steps.map((st, i) => `${i + 1}. ${st.reason}`).join('; ');
+    case 'text': return a.accept[0];
   }
 }
 
@@ -179,7 +197,16 @@ export function QuestionView({ q, mode, onDone, context }: { q: Question; mode: 
             <div className={`animate-pop rounded-xl border-2 px-4 py-3 ${result.correct ? 'border-good bg-good/10' : 'border-bad bg-bad/10'}`}>
               <div className={`font-bold ${result.correct ? 'text-good' : 'text-bad'}`}>{result.correct ? '✓ ' : '✗ '}{result.feedback}</div>
               {canRetry && <div className="text-sm muted mt-1">You get one more try. Use a hint if you need one.</div>}
-              {locked && <Rich text={`**Solution:** ${q.explanation}`} className="text-sm mt-2" />}
+              {locked && !result.correct && (
+                <div className="mt-3 rounded-lg bg-navy/60 border border-edge/30 p-3 space-y-1.5 text-sm">
+                  <div className="font-bold text-edge">📖 Here's why</div>
+                  {result.given && <div><span className="muted">You answered:</span> <span className="text-bad">{result.given}</span> — {result.feedback}</div>}
+                  <div><span className="muted">Correct answer:</span> <b className="text-good">{correctAnswerText(q)}</b></div>
+                  <Rich text={`**Step by step:** ${q.explanation}`} />
+                  <div className="muted text-xs">Saved to My Mistakes so you can review it later.</div>
+                </div>
+              )}
+              {locked && result.correct && <Rich text={`**Solution:** ${q.explanation}`} className="text-sm mt-2" />}
             </div>
           )}
         </div>

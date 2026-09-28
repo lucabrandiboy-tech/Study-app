@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useApp, recordAnswer, recordActivity, setTopicDifficulty, topicStats, DIFF_NAMES, Difficulty, setNote, celebrate, openChat } from '../lib/store';
+import { useApp, recordMistake, recordAnswer, recordActivity, setTopicDifficulty, topicStats, DIFF_NAMES, Difficulty, setNote, celebrate, openChat } from '../lib/store';
 import { useActiveMinutes, usePage } from '../lib/hooks';
 import { getSubjects, findTopic } from './subjects';
 import { GEOMETRY_IDS, GEOMETRY_TOPICS } from './geometry';
-import { QuestionView, Graded } from './QuestionView';
+import { QuestionView, Graded, correctAnswerText } from './QuestionView';
 import { PageHeader, ProgressBar, Rich, Tabs, Modal } from '../components/ui';
 import type { Question, Subject } from './types';
 import { FlashcardDeck } from './tools';
@@ -60,8 +60,8 @@ export function StudyHome() {
         })}
       </div>
       <h2 className="h2 mb-3">Study tools</h2>
-      <div className="grid grid-cols-5 gap-3 mb-8">
-        {[['/study/flashcards', '🃏', 'Flashcards'], ['/study/quiz', '📝', 'Practice Quiz'], ['/study/timer', '🍅', 'Focus Timer'], ['/study/notes', '🗒️', 'Notes'], ['/study/essay', '✍️', 'Essay Coach']].map(([to, i, l]) => (
+      <div className="grid grid-cols-6 gap-3 mb-8">
+        {[['/study/mistakes', '📖', 'My Mistakes'], ['/study/flashcards', '🃏', 'Flashcards'], ['/study/quiz', '📝', 'Practice Quiz'], ['/study/timer', '🍅', 'Focus Timer'], ['/study/notes', '🗒️', 'Notes'], ['/study/essay', '✍️', 'Essay Coach']].map(([to, i, l]) => (
           <Link key={to} to={to} className="card text-center py-4"><div className="text-3xl">{i}</div><div className="font-bold mt-1">{l}</div></Link>
         ))}
       </div>
@@ -143,6 +143,7 @@ export function TopicPage() {
   const onDone = (g: Graded) => {
     setAnswered(true);
     const mastered = recordAnswer(topic.id, g.correct, GEOMETRY_IDS);
+    if (!g.correct && q) recordMistake({ topicId: topic.id, topic: label, prompt: q.prompt, given: g.given, correct: correctAnswerText(q), why: g.feedback, solution: q.explanation });
     if (mastered) {
       celebrate(`${DIFF_NAMES[diff]} mastered!`, '🏅', diff < 3 ? `${DIFF_NAMES[diff + 1]} questions are now unlocked.` : 'You conquered the Challenge level!');
       if (diff < 3) setTopicDifficulty(topic.id, (diff + 1) as Difficulty);
