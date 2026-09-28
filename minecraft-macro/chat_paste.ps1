@@ -1,72 +1,56 @@
 # Minecraft chat macro - PowerShell (built into Windows, nothing to install)
-# Press U in Minecraft. Does: scroll up, T, paste, Enter  (about 0.2 sec)
+# Press U in Minecraft: T (open chat) -> Ctrl+V (paste) -> Enter (send)
 # Press F9 (or close this window) to stop.
 
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
 public class K {
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
-    [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
-    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public int mouseData; public uint dwFlags; public uint time; public IntPtr extra; }
-    [StructLayout(LayoutKind.Explicit)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public MOUSEINPUT mi; }
-    [StructLayout(LayoutKind.Explicit)] public struct INPUT32 { [FieldOffset(0)] public uint type; [FieldOffset(4)] public MOUSEINPUT mi; }
-    [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] i, int size);
-    [DllImport("user32.dll", EntryPoint = "SendInput")] public static extern uint SendInput32(uint n, INPUT32[] i, int size);
-    // Scroll wheel up one notch (like rolling the mouse wheel forward)
-    public static void ScrollUp() {
-        uint sent;
-        if (IntPtr.Size == 8) {
-            INPUT[] a = new INPUT[1]; a[0].type = 0; a[0].mi.mouseData = 120; a[0].mi.dwFlags = 0x0800;
-            sent = SendInput(1, a, 40);
-        } else {
-            INPUT32[] a = new INPUT32[1]; a[0].type = 0; a[0].mi.mouseData = 120; a[0].mi.dwFlags = 0x0800;
-            sent = SendInput32(1, a, 28);
-        }
-        if (sent == 0) mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero);   // fallback
-    }
+    [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
+    [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
     public static void Down(byte vk) { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 0, UIntPtr.Zero); }
     public static void Up(byte vk)   { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 2, UIntPtr.Zero); }
+    // Types text straight into the chat box (works even if Ctrl+V doesn't)
+    public static void TypeText(string text) {
+        foreach (char c in text) {
+            if (c == '\r' || c == '\n') continue;
+            INPUT[] ins = new INPUT[2];
+            ins[0].type = 1; ins[0].ki.wScan = c; ins[0].ki.dwFlags = 4;       // KEYEVENTF_UNICODE
+            ins[1].type = 1; ins[1].ki.wScan = c; ins[1].ki.dwFlags = 4 | 2;   // + KEYUP
+            SendInput(2, ins, Marshal.SizeOf(typeof(INPUT)));
+        }
+    }
     public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(10); Up(vk); }
-    public static string Title() { var sb = new StringBuilder(256); GetWindowText(GetForegroundWindow(), sb, 256); return sb.ToString(); }
 }
 "@
 
-# ---- Timing (milliseconds). Whole thing takes about 0.2 sec. ----
-$AfterScroll = 20    # after scrolling up
-$ChatOpen    = 100   # wait for chat box to open before pasting (raise if paste gets lost)
-$AfterPaste  = 20    # before pressing Enter
+function Test-MinecraftFocused {
+    $procId = [uint32]0
+    [void][K]::GetWindowThreadProcessId([K]::GetForegroundWindow(), [ref]$procId)
+    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    return $p -and ($p.ProcessName -eq 'javaw' -or $p.ProcessName -eq 'java')
+}
 
-$VK_LCTRL = 0xA2; $VK_V = 0x56; $VK_T = 0x54; $VK_ENTER = 0x0D
-
-# Only allow one copy of the macro to run (two copies = everything happens twice)
-$mutex = New-Object System.Threading.Mutex($false, "MinecraftChatMacro")
-if (-not $mutex.WaitOne(0)) { Write-Host "The macro is already running in another window. Close this one."; exit }
-
-Write-Host "Macro running. Copy your text, then press U in Minecraft. F9 = stop."
+Write-Host "Macro running. Press U in Minecraft. Press F9 to stop."
 $wasDown = $false
 while ($true) {
-    if ([K]::GetAsyncKeyState(0x78) -band 0x8000) { break }      # F9 = quit
-    $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0     # U
-    if ($isDown -and -not $wasDown -and ([K]::Title() -like "*Minecraft*")) {
-        while ([K]::GetAsyncKeyState(0x55) -band 0x8000) { Start-Sleep -Milliseconds 10 }  # wait until U is let go
-        # Remove any line break at the end of the copied text (that causes an extra Enter)
-        $clip = Get-Clipboard -Raw
-        if ($clip -and $clip -ne $clip.TrimEnd("`r","`n")) { Set-Clipboard -Value $clip.TrimEnd("`r","`n") }
-        [K]::ScrollUp();              Start-Sleep -Milliseconds $AfterScroll   # scroll up
-        [K]::Tap($VK_T);              Start-Sleep -Milliseconds $ChatOpen      # T
-        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 10                     # paste (Ctrl+V)
-        [K]::Tap($VK_V);      Start-Sleep -Milliseconds 10
-        [K]::Up($VK_LCTRL);           Start-Sleep -Milliseconds $AfterPaste
-        [K]::Tap($VK_ENTER)                                                    # Enter
-        Write-Host "Done."
-        Start-Sleep -Milliseconds 300          # ignore extra U presses right after
-        $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0
+    if ([K]::GetAsyncKeyState(0x78) -band 0x8000) { break }   # F9 = quit
+    $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0  # U
+    if ($isDown -and -not $wasDown -and (Test-MinecraftFocused)) {
+        $text = Get-Clipboard -Raw     # read clipboard first (saves time)
+        Start-Sleep -Milliseconds 27
+        [K]::Tap(0x54)                 # T  - open chat
+        Start-Sleep -Milliseconds 50   # wait for chat box (raise to 80 if paste gets lost)
+        if ($text) { [K]::TypeText($text) }   # paste clipboard text
+        Start-Sleep -Milliseconds 17
+        [K]::Tap(0x0D)                 # Enter - send
     }
     $wasDown = $isDown
     Start-Sleep -Milliseconds 15
