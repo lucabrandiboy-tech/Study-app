@@ -13,7 +13,23 @@ public class K {
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
-    public static void ScrollUp() { mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero); }
+    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public int mouseData; public uint dwFlags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Explicit)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public MOUSEINPUT mi; }
+    [StructLayout(LayoutKind.Explicit)] public struct INPUT32 { [FieldOffset(0)] public uint type; [FieldOffset(4)] public MOUSEINPUT mi; }
+    [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] i, int size);
+    [DllImport("user32.dll", EntryPoint = "SendInput")] public static extern uint SendInput32(uint n, INPUT32[] i, int size);
+    // Scroll wheel up one notch (like rolling the mouse wheel forward)
+    public static void ScrollUp() {
+        uint sent;
+        if (IntPtr.Size == 8) {
+            INPUT[] a = new INPUT[1]; a[0].type = 0; a[0].mi.mouseData = 120; a[0].mi.dwFlags = 0x0800;
+            sent = SendInput(1, a, 40);
+        } else {
+            INPUT32[] a = new INPUT32[1]; a[0].type = 0; a[0].mi.mouseData = 120; a[0].mi.dwFlags = 0x0800;
+            sent = SendInput32(1, a, 28);
+        }
+        if (sent == 0) mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero);   // fallback
+    }
     public static void Down(byte vk) { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 0, UIntPtr.Zero); }
     public static void Up(byte vk)   { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 2, UIntPtr.Zero); }
     public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(20); Up(vk); }
