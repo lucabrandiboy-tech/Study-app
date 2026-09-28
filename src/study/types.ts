@@ -40,4 +40,5 @@ export interface Subject {
   color: string;
   blurb: string;
   topics: Topic[];
+  advanced?: boolean; // Super Advanced section (one grade ahead)
 }

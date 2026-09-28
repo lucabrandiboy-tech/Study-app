@@ -46,7 +46,7 @@ export function StudyHome() {
     <div>
       <PageHeader title="Study Zone" sub="Learn it, practice it, master it. The app teaches — you do the solving." right={<button className="btn-ghost" onClick={() => setFormulas(true)}>📐 Formula sheet</button>} />
       <div className="grid grid-cols-3 gap-4 mb-8">
-        {subjects.map((s) => {
+        {subjects.filter((s) => !s.advanced).map((s) => {
           const mastered = s.topics.filter((t) => (topics[t.id]?.masteredLevel ?? -1) >= 0).length;
           return (
             <Link key={s.id} to={`/study/${s.id}`} className="card hover:-translate-y-0.5 transition">
@@ -92,7 +92,7 @@ export function SubjectPage() {
   if (!subject) return <div>Subject not found. <Link to="/study" className="text-edge">Back</Link></div>;
   return (
     <div>
-      <PageHeader title={<span>{subject.icon} {subject.name}</span>} sub={subject.blurb} right={<Link to="/study" className="btn-ghost">← Study Zone</Link>} />
+      <PageHeader title={<span>{subject.icon} {subject.name}</span>} sub={subject.blurb} right={<Link to={subject.advanced ? '/advanced' : '/study'} className="btn-ghost">← {subject.advanced ? 'Super Advanced' : 'Study Zone'}</Link>} />
       <div className="grid grid-cols-2 gap-3">
         {subject.topics.map((t, i) => {
           const st = topics[t.id];
@@ -242,3 +242,33 @@ export function TopicPage() {
 
 // re-export for convenience
 export { useRef };
+
+/** Super Advanced: everything one grade ahead of the normal Study Zone. */
+export function AdvancedHome() {
+  const subjects = useSubjects().filter((s) => s.advanced);
+  const topics = useApp((s) => s.topics);
+  usePage({ label: 'Super Advanced (9th grade level)', subject: 'general' });
+  return (
+    <div>
+      <PageHeader title="🚀 Super Advanced" sub="One grade ahead: 9th grade material. Same learn, practice, master flow. Challenge yourself!" />
+      <div className="card2 mb-6 flex items-center gap-4 border-streak/60">
+        <div className="text-4xl">🔥</div>
+        <div className="text-sm"><b>Heads up:</b> these topics are harder than your grade level. It is totally fine to get things wrong here. Use hints, the worked examples, and Study Buddy. Mastering a topic still earns XP and badges.</div>
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        {subjects.map((s) => {
+          const mastered = s.topics.filter((t) => (topics[t.id]?.masteredLevel ?? -1) >= 0).length;
+          return (
+            <Link key={s.id} to={`/study/${s.id}`} className="card hover:-translate-y-0.5 transition">
+              <div className="flex justify-between"><div className="text-4xl mb-2">{s.icon}</div><span className="chip border-streak text-streak h-fit">GRADE 9</span></div>
+              <div className="h2" style={{ color: s.color }}>{s.name}</div>
+              <div className="muted text-sm mb-3">{s.blurb}</div>
+              <ProgressBar value={mastered} max={s.topics.length} color={s.color} />
+              <div className="text-xs muted mt-1">{mastered}/{s.topics.length} topics mastered</div>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

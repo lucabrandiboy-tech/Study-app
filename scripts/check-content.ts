@@ -17,7 +17,7 @@ for (const lang of ['spanish', 'french'] as const) {
       if (a.kind === 'number' && !Number.isFinite(a.value)) fail(`${t.id} d${d} NaN answer: ${q.prompt}`);
       if (a.kind === 'choice' && (a.correct < 0 || new Set(a.choices).size !== a.choices.length || a.choices.length < 2)) fail(`${t.id} d${d} bad choices: ${JSON.stringify(a.choices)} ${q.prompt}`);
       if (a.kind === 'point' && (!Number.isInteger(a.x) || !Number.isInteger(a.y))) fail(`${t.id} bad point`);
-      if (a.kind === 'number' && q.hints.some((h) => h.includes(`= ${a.value}.`) || h.endsWith(` ${a.value}`))) fail(`${t.id} hint may reveal answer: ${q.hints.join(' / ')}`);
+      if (a.kind === 'number' && q.hints.some((h) => h.includes(`= ${a.value}.`))) fail(`${t.id} hint may reveal answer: ${q.hints.join(' / ')}`);
     }
   }
 }

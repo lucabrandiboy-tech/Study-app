@@ -4,7 +4,7 @@ import { Sidebar, Celebrations } from './components/Shell';
 import { ChatButton, ChatPanel } from './components/ChatPanel';
 import { useUi } from './lib/store';
 import { Home, Progress, Settings } from './pages/pages';
-import { StudyHome, SubjectPage, TopicPage } from './study/pages';
+import { StudyHome, SubjectPage, TopicPage, AdvancedHome } from './study/pages';
 import { FlashcardsPage, QuizPage, FocusTimer, NotesPage, EssayCoach } from './study/tools';
 import { PianoCourse, UnitPage, LessonPage, SongPlayer, FreePlay } from './piano/pages';
 import { PracticeGames } from './piano/games';
@@ -27,6 +27,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/study" element={<StudyHome />} />
+              <Route path="/advanced" element={<AdvancedHome />} />
               <Route path="/study/flashcards" element={<FlashcardsPage />} />
               <Route path="/study/quiz" element={<QuizPage />} />
               <Route path="/study/timer" element={<FocusTimer />} />

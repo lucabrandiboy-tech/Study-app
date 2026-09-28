@@ -8,6 +8,7 @@ import { SaveBadge } from './SaveFile';
 const NAV = [
   { to: '/', icon: '🏠', label: 'Home', end: true },
   { to: '/study', icon: '📚', label: 'Study Zone' },
+  { to: '/advanced', icon: '🚀', label: 'Super Advanced', sub: true },
   { to: '/piano', icon: '🎹', label: 'Piano Course' },
   { to: '/practice', icon: '🎯', label: 'Practice Games', sub: true },
   { to: '/songs', icon: '🎼', label: 'Song Player' },
