@@ -40,6 +40,9 @@ export class PlayEngine {
   onFrame: (beat: number) => void = () => {};
   onFinish: (r: PlayResult) => void = () => {};
   onMark: (midi: number, good: boolean) => void = () => {};
+  /** Called once per expected note: 'hit' when played (in time), 'miss' when its moment passed without it. */
+  onNoteResult: (e: NoteEv, result: 'hit' | 'miss') => void = () => {};
+  private missIdx = 0;
 
   constructor(piece: Piece, opts: EngineOpts) { this.piece = piece; this.opts = opts; }
 
@@ -61,7 +64,7 @@ export class PlayEngine {
     this.expected.forEach((e) => { const k = e.beat.toFixed(3); gm.set(k, [...(gm.get(k) ?? []), e]); });
     this.groups = [...gm.entries()].map(([b, notes]) => ({ beat: Number(b), notes })).sort((a, b) => a.beat - b.beat);
     this.gi = 0; this.groupHit.clear(); this.groupErr = false; this.groupsClean = 0;
-    this.hits.clear(); this.wrongNotes = [];
+    this.hits.clear(); this.wrongNotes = []; this.missIdx = 0;
     const lead = this.opts.countIn && this.opts.mode !== 'wait' ? ml : this.opts.mode === 'wait' ? 0 : 0.25;
     this.beat0 = this.startBeat - lead; this.beat = this.beat0;
     this.t0 = clock() + 0.15;
@@ -120,6 +123,13 @@ export class PlayEngine {
       }
       this.schedIdx++;
     }
+    if (mode === 'perform') {
+      const win = Math.max(0.25, Math.min(0.5, 0.4 * this.bps));
+      while (this.missIdx < this.expected.length && this.expected[this.missIdx].beat + win < b) {
+        const e = this.expected[this.missIdx++];
+        if (!this.hits.has(e.id)) this.onNoteResult(e, 'miss');
+      }
+    }
     this.onFrame(b);
 
     // end / loop
@@ -141,7 +151,7 @@ export class PlayEngine {
         this.groupHit.add(midi);
         this.onMark(midi, true);
         if (g.notes.every((n) => this.groupHit.has(n.midi))) {
-          g.notes.forEach((n) => this.hits.set(n.id, 0));
+          g.notes.forEach((n) => { this.hits.set(n.id, 0); this.onNoteResult(n, 'hit'); });
           if (!this.groupErr) this.groupsClean++;
           this.gi++; this.groupHit.clear(); this.groupErr = false;
           // if the student played it early, the music catches up to them
@@ -163,7 +173,7 @@ export class PlayEngine {
       const d = Math.abs(e.beat - b);
       if (d <= win && d < bestD) { best = e; bestD = d; }
     }
-    if (best) { this.hits.set(best.id, ((b - best.beat) / this.bps) * 1000); this.onMark(midi, true); }
+    if (best) { this.hits.set(best.id, ((b - best.beat) / this.bps) * 1000); this.onMark(midi, true); this.onNoteResult(best, 'hit'); }
     else { this.wrongNotes.push({ beat: b, midi }); this.onMark(midi, false); }
   }
 

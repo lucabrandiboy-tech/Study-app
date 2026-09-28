@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { LevelTag } from './SheetLibrary';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useApp, recordLesson, recordUnitTest, recordActivity, setPlacement, recordSong, setRecordings, celebrate, openChat, getState } from '../lib/store';
+import { useApp, recordLesson, recordUnitTest, recordActivity, setPlacement, setRecordings, celebrate, openChat, getState } from '../lib/store';
 import { useActiveMinutes, usePage } from '../lib/hooks';
 import { COURSE, TOTAL_UNITS, lessonPiece, PLACEMENT, Unit } from './course';
 import { PlayAlong, ResultCard } from './PlayAlong';
@@ -11,8 +9,7 @@ import { Keyboard } from './Keyboard';
 import { PageHeader, Rich, Stars, Tabs, ProgressBar } from '../components/ui';
 import { initAudio, playNote, now, click, setPedal, isPedalDown } from './audio';
 import { onNote, emitNote } from './input';
-import { songLibrary, SongEntry, LEVELS } from './songs';
-import { parseMusicXML, parseMidiFile, Piece, midiName } from './notation';
+import { midiName } from './notation';
 import { MidiBadge } from './MidiSetup';
 
 // ---------------------------------------------------------------- Course map
@@ -235,70 +232,6 @@ export function LessonPage() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- Song player
-export function SongPlayer() {
-  const lib = useMemo(songLibrary, []);
-  const songs = useApp((s) => s.piano.songs);
-  const [params] = useSearchParams();
-  const [sel, setSel] = useState<SongEntry | null>(() => lib.find((s) => s.id === params.get('id')) ?? null);
-  const [imported, setImported] = useState<Piece | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const piece = useMemo(() => imported ?? sel?.piece() ?? null, [sel, imported]);
-  const [last, setLast] = useState<PlayResult | null>(null);
-  useActiveMinutes('piano');
-  usePage({ label: piece ? `Piano > Song Player: ${piece.title}` : 'Piano > Song Player', detail: last ? `Last result: ${last.stars} stars, ${last.accuracy}% notes. ${last.missed.slice(0, 5).join('; ')}` : undefined, subject: 'piano' }, { kind: 'piano', path: '/songs' });
-
-  const onFile = async (f: File) => {
-    setErr(null);
-    try {
-      if (/\.midi?$/i.test(f.name)) setImported(await parseMidiFile(await f.arrayBuffer(), f.name));
-      else if (/\.mxl$/i.test(f.name)) throw new Error('Compressed .mxl files are not supported yet — export as uncompressed .musicxml or .xml.');
-      else setImported(parseMusicXML(await f.text(), f.name));
-      setSel(null);
-    } catch (e) { setErr((e as Error).message); }
-  };
-  const onFinish = (r: PlayResult) => {
-    if (r.mode !== 'perform' || !piece) return;
-    setLast(r);
-    recordSong(piece.id, r.stars, r.accuracy, r.missed.slice(0, 10));
-    if (r.stars >= 1) recordActivity('piano');
-  };
-
-  if (!piece) return (
-    <div>
-      <PageHeader title="Song Player" sub="Public-domain songs sorted by level — or import your own MusicXML / MIDI." right={
-        <label className="btn cursor-pointer">📂 Import MusicXML / MIDI<input type="file" accept=".xml,.musicxml,.mid,.midi,.mxl" className="hidden" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} /></label>
-      } />
-      {err && <div className="card border-bad text-bad mb-4">{err}</div>}
-      <p className="muted text-sm mb-4">Tip: free, legal public-domain sheet music is available as MusicXML/MIDI on sites like MuseScore (public-domain filter), IMSLP, and Mutopia.</p>
-      {LEVELS.map(({ id: lvl }) => (
-        <div key={lvl} className="mb-6">
-          <h2 className="h2 mb-3 flex items-center gap-2"><LevelTag level={lvl} big />{lvl}</h2>
-          <div className="grid grid-cols-3 gap-3">
-            {lib.filter((s) => s.level === lvl).map((s) => {
-              const rec = songs[s.id];
-              return (
-                <button key={s.id} className="card text-left flex items-center gap-3" onClick={() => { setSel(s); setImported(null); setLast(null); }}>
-                  <div className="text-3xl">🎼</div>
-                  <div className="flex-1"><div className="font-bold">{s.title}</div><div className="text-xs muted">{s.composer}</div></div>
-                  {rec && <div className="text-right"><Stars n={rec.stars} size="text-sm" /><div className="text-xs muted">{rec.accuracy}%</div></div>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-  return (
-    <div>
-      <PageHeader title={piece.title} sub={[piece.composer ?? sel?.composer, `${piece.bpm} bpm`, `${piece.beats}/${piece.beatUnit}`].filter(Boolean).join(' · ')} right={<button className="btn-ghost" onClick={() => { setSel(null); setImported(null); setLast(null); }}>← Library</button>} />
-      <PlayAlong piece={piece} full onFinish={onFinish} defaultView="sheet" />
-      {last && <div className="mt-2 flex justify-end"><button className="btn-ghost" onClick={() => openChat(`I played "${piece.title}" and got ${last.stars} stars (${last.accuracy}% notes, ${last.onTime}% on time). Missed: ${last.missed.slice(0, 6).join('; ')}. How should I practice the tricky parts?`)}>🤖 Ask for practice tips</button></div>}
     </div>
   );
 }
