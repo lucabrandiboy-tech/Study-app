@@ -44,6 +44,10 @@ $AfterPaste  = 40    # before pressing Enter
 
 $VK_LCTRL = 0xA2; $VK_V = 0x56; $VK_T = 0x54; $VK_ENTER = 0x0D
 
+# Only allow one copy of the macro to run (two copies = everything happens twice)
+$mutex = New-Object System.Threading.Mutex($false, "MinecraftChatMacro")
+if (-not $mutex.WaitOne(0)) { Write-Host "The macro is already running in another window. Close this one."; exit }
+
 Write-Host "Macro running. Copy your text, then press U in Minecraft. F9 = stop."
 $wasDown = $false
 while ($true) {
@@ -58,6 +62,8 @@ while ($true) {
         [K]::Up($VK_LCTRL);           Start-Sleep -Milliseconds $AfterPaste
         [K]::Tap($VK_ENTER)                                                    # Enter
         Write-Host "Done."
+        Start-Sleep -Milliseconds 300          # ignore extra U presses right after
+        $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0
     }
     $wasDown = $isDown
     Start-Sleep -Milliseconds 15
