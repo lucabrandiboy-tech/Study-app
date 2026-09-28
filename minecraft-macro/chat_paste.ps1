@@ -2,6 +2,7 @@
 # Press U in Minecraft: T (open chat) -> Ctrl+V (paste) -> Enter (send)
 # Press F9 (or close this window) to stop.
 
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -10,8 +11,23 @@ public class K {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-    public static void Down(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); }
-    public static void Up(byte vk)   { keybd_event(vk, 0, 2, UIntPtr.Zero); }
+    [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
+    [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
+    public static void Down(byte vk) { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 0, UIntPtr.Zero); }
+    public static void Up(byte vk)   { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 2, UIntPtr.Zero); }
+    // Types text straight into the chat box (works even if Ctrl+V doesn't)
+    public static void TypeText(string text) {
+        foreach (char c in text) {
+            if (c == '\r' || c == '\n') continue;
+            INPUT[] ins = new INPUT[2];
+            ins[0].type = 1; ins[0].ki.wScan = c; ins[0].ki.dwFlags = 4;       // KEYEVENTF_UNICODE
+            ins[1].type = 1; ins[1].ki.wScan = c; ins[1].ki.dwFlags = 4 | 2;   // + KEYUP
+            SendInput(2, ins, Marshal.SizeOf(typeof(INPUT)));
+            System.Threading.Thread.Sleep(2);
+        }
+    }
     public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(30); Up(vk); }
 }
 "@
@@ -32,7 +48,8 @@ while ($true) {
         Start-Sleep -Milliseconds 80
         [K]::Tap(0x54)                 # T  - open chat
         Start-Sleep -Milliseconds 150  # wait for chat box (raise to 250 if paste gets lost)
-        [K]::Down(0x11); [K]::Tap(0x56); [K]::Up(0x11)   # Ctrl+V - paste
+        $text = Get-Clipboard -Raw                       # paste clipboard text
+        if ($text) { [K]::TypeText($text) }
         Start-Sleep -Milliseconds 50
         [K]::Tap(0x0D)                 # Enter - send
     }
