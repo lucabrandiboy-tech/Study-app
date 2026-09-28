@@ -1,5 +1,5 @@
 # Minecraft chat macro - PowerShell (built into Windows, nothing to install)
-# Press U in Minecraft. Does: scroll up, T, paste, Enter  (about 0.4 sec)
+# Press U in Minecraft. Does: scroll up, T, paste, Enter  (about 0.2 sec)
 # Press F9 (or close this window) to stop.
 
 Add-Type @"
@@ -32,15 +32,15 @@ public class K {
     }
     public static void Down(byte vk) { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 0, UIntPtr.Zero); }
     public static void Up(byte vk)   { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 2, UIntPtr.Zero); }
-    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(20); Up(vk); }
+    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(10); Up(vk); }
     public static string Title() { var sb = new StringBuilder(256); GetWindowText(GetForegroundWindow(), sb, 256); return sb.ToString(); }
 }
 "@
 
-# ---- Timing (milliseconds). Whole thing takes about 0.4 sec. ----
-$AfterScroll = 40    # after scrolling up
-$ChatOpen    = 200   # wait for chat box to open before pasting (raise if paste gets lost)
-$AfterPaste  = 40    # before pressing Enter
+# ---- Timing (milliseconds). Whole thing takes about 0.2 sec. ----
+$AfterScroll = 20    # after scrolling up
+$ChatOpen    = 100   # wait for chat box to open before pasting (raise if paste gets lost)
+$AfterPaste  = 20    # before pressing Enter
 
 $VK_LCTRL = 0xA2; $VK_V = 0x56; $VK_T = 0x54; $VK_ENTER = 0x0D
 
@@ -55,10 +55,13 @@ while ($true) {
     $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0     # U
     if ($isDown -and -not $wasDown -and ([K]::Title() -like "*Minecraft*")) {
         while ([K]::GetAsyncKeyState(0x55) -band 0x8000) { Start-Sleep -Milliseconds 10 }  # wait until U is let go
+        # Remove any line break at the end of the copied text (that causes an extra Enter)
+        $clip = Get-Clipboard -Raw
+        if ($clip -and $clip -ne $clip.TrimEnd("`r","`n")) { Set-Clipboard -Value $clip.TrimEnd("`r","`n") }
         [K]::ScrollUp();              Start-Sleep -Milliseconds $AfterScroll   # scroll up
         [K]::Tap($VK_T);              Start-Sleep -Milliseconds $ChatOpen      # T
-        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 20                     # paste (Ctrl+V)
-        [K]::Tap($VK_V);      Start-Sleep -Milliseconds 20
+        [K]::Down($VK_LCTRL); Start-Sleep -Milliseconds 10                     # paste (Ctrl+V)
+        [K]::Tap($VK_V);      Start-Sleep -Milliseconds 10
         [K]::Up($VK_LCTRL);           Start-Sleep -Milliseconds $AfterPaste
         [K]::Tap($VK_ENTER)                                                    # Enter
         Write-Host "Done."
