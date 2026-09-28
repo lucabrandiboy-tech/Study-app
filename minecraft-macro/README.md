@@ -1,9 +1,11 @@
 # Minecraft chat paste macro
 
-Presses **T → Paste (Ctrl+V) → Enter** when you hit **U** in Minecraft Java.
+Press **U** in Minecraft Java → presses **T, Paste (Ctrl+V), Enter**.
 
-1. Install AutoHotkey v2: https://www.autohotkey.com/
-2. Download `chat_paste.ahk` and double-click it.
-3. Copy some text, go in-game, press **U**. Press **F9** to quit the script.
+## No-install version (Windows PowerShell)
+1. Download `chat_paste.ps1` and `start_macro.bat` into the same folder.
+2. Double-click `start_macro.bat` (a black window opens — leave it open).
+3. Copy text, go in-game, press **U**. Press **F9** or close the window to stop.
 
-If chat doesn't open in time, raise `Sleep 150` to 250.
+## AutoHotkey version
+`chat_paste.ahk` — needs AutoHotkey v2.
