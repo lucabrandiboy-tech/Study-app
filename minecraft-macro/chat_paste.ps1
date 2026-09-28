@@ -1,5 +1,5 @@
 # Minecraft chat macro - PowerShell (built into Windows, nothing to install)
-# Press U in Minecraft: T (open chat) -> Ctrl+V (paste) -> Enter (send)
+# Press U in Minecraft: for slots 1-9: number, T, paste, Enter (~4.5 sec total)
 # Press F9 (or close this window) to stop.
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -17,19 +17,16 @@ public class K {
     [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
     public static void Down(byte vk) { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 0, UIntPtr.Zero); }
     public static void Up(byte vk)   { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 2, UIntPtr.Zero); }
-    // Types text straight into the chat box (works even if Ctrl+V doesn't)
+    // Types the whole text into the chat box in one go (fast)
     public static void TypeText(string text) {
-        foreach (char c in text) {
-            if (c == '\r' || c == '\n') continue;
-            INPUT[] ins = new INPUT[2];
-            ins[0].type = 1; ins[0].ki.wScan = c; ins[0].ki.dwFlags = 4;       // KEYEVENTF_UNICODE
-            ins[1].type = 1; ins[1].ki.wScan = c; ins[1].ki.dwFlags = 4 | 2;   // + KEYUP
-            SendInput(2, ins, Marshal.SizeOf(typeof(INPUT)));
-            System.Threading.Thread.Sleep(2);
+        text = text.Replace("\r", "").Replace("\n", "");
+        INPUT[] ins = new INPUT[text.Length * 2];
+        for (int i = 0; i < text.Length; i++) {
+            ins[2*i].type = 1;   ins[2*i].ki.wScan = text[i];   ins[2*i].ki.dwFlags = 4;       // KEYEVENTF_UNICODE
+            ins[2*i+1].type = 1; ins[2*i+1].ki.wScan = text[i]; ins[2*i+1].ki.dwFlags = 4 | 2; // + KEYUP
         }
+        if (ins.Length > 0) SendInput((uint)ins.Length, ins, Marshal.SizeOf(typeof(INPUT)));
     }
-    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(30); Up(vk); }
-}
 "@
 
 function Test-MinecraftFocused {
@@ -45,13 +42,17 @@ while ($true) {
     if ([K]::GetAsyncKeyState(0x78) -band 0x8000) { break }   # F9 = quit
     $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0  # U
     if ($isDown -and -not $wasDown -and (Test-MinecraftFocused)) {
-        Start-Sleep -Milliseconds 80
-        [K]::Tap(0x54)                 # T  - open chat
-        Start-Sleep -Milliseconds 150  # wait for chat box (raise to 250 if paste gets lost)
-        $text = Get-Clipboard -Raw                       # paste clipboard text
-        if ($text) { [K]::TypeText($text) }
-        Start-Sleep -Milliseconds 50
-        [K]::Tap(0x0D)                 # Enter - send
+        $text = Get-Clipboard -Raw
+        for ($n = 1; $n -le 9; $n++) {
+            [K]::Tap([byte](0x30 + $n))    # 1..9 - hotbar slot
+            Start-Sleep -Milliseconds 40
+            [K]::Tap(0x54)                 # T - open chat
+            Start-Sleep -Milliseconds 120  # wait for chat box (raise if text gets lost)
+            if ($text) { [K]::TypeText($text) }   # paste
+            Start-Sleep -Milliseconds 30
+            [K]::Tap(0x0D)                 # Enter - send
+            Start-Sleep -Milliseconds 250  # let chat close before next slot
+        }
     }
     $wasDown = $isDown
     Start-Sleep -Milliseconds 15
