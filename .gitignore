@@ -3,3 +3,5 @@ dist
 .env
 *.log
 *.tsbuildinfo
+dist-single
+study-piano-app.html

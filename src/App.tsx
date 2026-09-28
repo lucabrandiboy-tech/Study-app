@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar, Celebrations } from './components/Shell';
 import { ChatButton, ChatPanel } from './components/ChatPanel';
 import { useUi } from './lib/store';
@@ -10,12 +10,14 @@ import { PianoCourse, UnitPage, LessonPage, SongPlayer, FreePlay } from './piano
 import { PracticeGames } from './piano/games';
 import { installComputerKeyboard, connectMidi } from './piano/input';
 
+const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
+
 export default function App() {
   const chatOpen = useUi((u) => u.chatOpen);
   useEffect(() => installComputerKeyboard(), []);
   useEffect(() => { void connectMidi(); }, []);
   return (
-    <BrowserRouter>
+    <Router>
       <div className="flex min-h-screen">
         <Sidebar />
         <main className={`flex-1 p-8 min-w-0 transition-[margin] ${chatOpen ? 'mr-[420px]' : ''}`}>
@@ -46,6 +48,6 @@ export default function App() {
       <ChatButton />
       <ChatPanel />
       <Celebrations />
-    </BrowserRouter>
+    </Router>
   );
 }
