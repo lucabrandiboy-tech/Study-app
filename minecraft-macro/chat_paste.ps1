@@ -1,5 +1,5 @@
 # Minecraft chat macro - PowerShell (built into Windows, nothing to install)
-# Press U in Minecraft: T (open chat) -> Ctrl+V (paste) -> Enter (send)
+# Press U in Minecraft: T (open chat) -> paste -> Enter (send) -> scroll wheel up
 # Press F9 (or close this window) to stop.
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -27,7 +27,9 @@ public class K {
             SendInput(2, ins, Marshal.SizeOf(typeof(INPUT)));
         }
     }
-    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(10); Up(vk); }
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
+    public static void ScrollUp() { mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero); }   // mouse wheel up one notch
+    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(3); Up(vk); }
 }
 "@
 
@@ -45,12 +47,14 @@ while ($true) {
     $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0  # U
     if ($isDown -and -not $wasDown -and (Test-MinecraftFocused)) {
         $text = Get-Clipboard -Raw     # read clipboard first (saves time)
-        Start-Sleep -Milliseconds 27
+        Start-Sleep -Milliseconds 9
         [K]::Tap(0x54)                 # T  - open chat
-        Start-Sleep -Milliseconds 50   # wait for chat box (raise to 80 if paste gets lost)
+        Start-Sleep -Milliseconds 17   # wait for chat box (raise to 50 if paste gets lost)
         if ($text) { [K]::TypeText($text) }   # paste clipboard text
-        Start-Sleep -Milliseconds 17
+        Start-Sleep -Milliseconds 6
         [K]::Tap(0x0D)                 # Enter - send
+        Start-Sleep -Milliseconds 10   # let chat close so the scroll reaches the hotbar
+        [K]::ScrollUp()                # scroll wheel up
     }
     $wasDown = $isDown
     Start-Sleep -Milliseconds 15
