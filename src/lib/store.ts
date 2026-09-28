@@ -68,13 +68,16 @@ const fresh = (): AppState => ({
   chats: {},
 });
 
+/** Fill in any fields missing from older saves. */
+function normalize(parsed: Partial<AppState>): AppState {
+  const base = fresh();
+  return { ...base, ...parsed, piano: { ...base.piano, ...parsed.piano }, settings: { ...base.settings, ...parsed.settings }, streak: { ...base.streak, ...parsed.streak } } as AppState;
+}
+
 function load(): AppState {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return fresh();
-    const parsed = JSON.parse(raw);
-    const base = fresh();
-    return { ...base, ...parsed, piano: { ...base.piano, ...parsed.piano }, settings: { ...base.settings, ...parsed.settings }, streak: { ...base.streak, ...parsed.streak } };
+    return raw ? normalize(JSON.parse(raw)) : fresh();
   } catch {
     return fresh();
   }
@@ -305,3 +308,15 @@ export function setLast(kind: 'study' | 'piano', path: string, label: string) {
 }
 export function setChat(subject: string, msgs: ChatMsg[]) { update((s) => ({ ...s, chats: { ...s.chats, [subject]: msgs.slice(-80) } })); }
 export function resetProgress() { state = fresh(); emit(); }
+
+/** Listen for any saved-progress change (used by the save-file auto-saver). */
+export function subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn); }; }
+
+/** Replace all progress with data loaded from a save file. Throws if it isn't a save file. */
+export function replaceState(data: unknown) {
+  if (!data || typeof data !== 'object' || (data as AppState).version !== 1 || typeof (data as AppState).xp !== 'number') {
+    throw new Error("This doesn't look like a Study + Piano save file.");
+  }
+  state = normalize(data as AppState);
+  emit();
+}

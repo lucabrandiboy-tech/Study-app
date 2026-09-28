@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useApp, useUi, dismissCelebration, liveStreak, levelInfo } from '../lib/store';
 import { beep } from '../piano/audio';
 import { Flame, ProgressBar } from './ui';
+import { SaveBadge } from './SaveFile';
 
 const NAV = [
   { to: '/', icon: '🏠', label: 'Home', end: true },
@@ -34,6 +35,7 @@ export function Sidebar() {
         <div className="flex items-center gap-2"><Flame n={streak} size={28} /><div><div className="font-extrabold text-streak">{streak} day{streak === 1 ? '' : 's'}</div><div className="text-xs muted">🧊 {s.streak.freezes} freeze{s.streak.freezes === 1 ? '' : 's'}</div></div></div>
         <div className="text-xs muted">Level {lv.level} · {lv.into}/{lv.need} XP</div>
         <ProgressBar value={lv.into} max={lv.need} />
+        <div className="pt-1 border-t border-edge/20"><SaveBadge /></div>
       </div>
     </nav>
   );

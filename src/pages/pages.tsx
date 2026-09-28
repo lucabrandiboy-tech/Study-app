@@ -10,6 +10,7 @@ import { useSubjects } from '../study/pages';
 import { COURSE } from '../piano/course';
 import { MidiSetupPanel } from '../piano/MidiSetup';
 import { setVolume, initAudio, click } from '../piano/audio';
+import { SaveFileCard } from '../components/SaveFile';
 
 const tooltipStyle = { contentStyle: { background: '#141B3D', border: '1px solid #7FD3FF', borderRadius: 10, color: '#E8ECFF' }, labelStyle: { color: '#A9A8D6' } };
 
@@ -226,6 +227,7 @@ export function Settings() {
     <div>
       <PageHeader title="Settings" />
       <div className="grid grid-cols-2 gap-4">
+        <SaveFileCard />
         <div className="card space-y-3 col-span-2"><div className="h2">🎹 MIDI keyboard</div><MidiSetupPanel /></div>
         <div className="card space-y-3">
           <div className="h2">👤 Profile & goals</div>

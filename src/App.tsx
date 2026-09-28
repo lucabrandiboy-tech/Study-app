@@ -9,13 +9,14 @@ import { FlashcardsPage, QuizPage, FocusTimer, NotesPage, EssayCoach } from './s
 import { PianoCourse, UnitPage, LessonPage, SongPlayer, FreePlay } from './piano/pages';
 import { PracticeGames } from './piano/games';
 import { installComputerKeyboard, connectMidi } from './piano/input';
+import { initFileSave } from './lib/filesave';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
 export default function App() {
   const chatOpen = useUi((u) => u.chatOpen);
   useEffect(() => installComputerKeyboard(), []);
-  useEffect(() => { void connectMidi(); }, []);
+  useEffect(() => { void connectMidi(); void initFileSave(); }, []);
   return (
     <Router>
       <div className="flex min-h-screen">
