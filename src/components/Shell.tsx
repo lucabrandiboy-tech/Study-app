@@ -11,6 +11,7 @@ const NAV = [
   { to: '/piano', icon: '🎹', label: 'Piano Course' },
   { to: '/practice', icon: '🎯', label: 'Practice Games', sub: true },
   { to: '/songs', icon: '🎼', label: 'Song Player' },
+  { to: '/sheets', icon: '📜', label: 'Sheet Music', sub: true },
   { to: '/free', icon: '🎶', label: 'Free Play' },
   { to: '/progress', icon: '📈', label: 'Progress' },
   { to: '/settings', icon: '⚙️', label: 'Settings' },

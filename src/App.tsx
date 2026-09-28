@@ -8,6 +8,7 @@ import { StudyHome, SubjectPage, TopicPage } from './study/pages';
 import { FlashcardsPage, QuizPage, FocusTimer, NotesPage, EssayCoach } from './study/tools';
 import { PianoCourse, UnitPage, LessonPage, SongPlayer, FreePlay } from './piano/pages';
 import { PracticeGames } from './piano/games';
+import { SheetLibrary } from './piano/SheetLibrary';
 import { installComputerKeyboard, connectMidi } from './piano/input';
 import { initFileSave } from './lib/filesave';
 
@@ -38,6 +39,7 @@ export default function App() {
               <Route path="/piano/lesson/:id" element={<LessonPage />} />
               <Route path="/practice" element={<PracticeGames />} />
               <Route path="/songs" element={<SongPlayer />} />
+              <Route path="/sheets" element={<SheetLibrary />} />
               <Route path="/free" element={<FreePlay />} />
               <Route path="/progress" element={<Progress />} />
               <Route path="/settings" element={<Settings />} />

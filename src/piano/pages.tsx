@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { LevelTag } from './SheetLibrary';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useApp, recordLesson, recordUnitTest, recordActivity, setPlacement, recordSong, setRecordings, celebrate, openChat, getState } from '../lib/store';
 import { useActiveMinutes, usePage } from '../lib/hooks';
@@ -9,7 +11,7 @@ import { Keyboard } from './Keyboard';
 import { PageHeader, Rich, Stars, Tabs, ProgressBar } from '../components/ui';
 import { initAudio, playNote, now, click, setPedal, isPedalDown } from './audio';
 import { onNote, emitNote } from './input';
-import { songLibrary, SongEntry } from './songs';
+import { songLibrary, SongEntry, LEVELS } from './songs';
 import { parseMusicXML, parseMidiFile, Piece, midiName } from './notation';
 import { MidiBadge } from './MidiSetup';
 
@@ -241,7 +243,8 @@ export function LessonPage() {
 export function SongPlayer() {
   const lib = useMemo(songLibrary, []);
   const songs = useApp((s) => s.piano.songs);
-  const [sel, setSel] = useState<SongEntry | null>(null);
+  const [params] = useSearchParams();
+  const [sel, setSel] = useState<SongEntry | null>(() => lib.find((s) => s.id === params.get('id')) ?? null);
   const [imported, setImported] = useState<Piece | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const piece = useMemo(() => imported ?? sel?.piece() ?? null, [sel, imported]);
@@ -272,9 +275,9 @@ export function SongPlayer() {
       } />
       {err && <div className="card border-bad text-bad mb-4">{err}</div>}
       <p className="muted text-sm mb-4">Tip: free, legal public-domain sheet music is available as MusicXML/MIDI on sites like MuseScore (public-domain filter), IMSLP, and Mutopia.</p>
-      {(['Beginner', 'Intermediate', 'Advanced'] as const).map((lvl) => (
+      {LEVELS.map(({ id: lvl }) => (
         <div key={lvl} className="mb-6">
-          <h2 className="h2 mb-3">{lvl}</h2>
+          <h2 className="h2 mb-3 flex items-center gap-2"><LevelTag level={lvl} big />{lvl}</h2>
           <div className="grid grid-cols-3 gap-3">
             {lib.filter((s) => s.level === lvl).map((s) => {
               const rec = songs[s.id];
