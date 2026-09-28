@@ -1,6 +1,8 @@
+import { ask } from '../lib/embed';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useSaveInfo, fileSaveSupported, createSaveFile, openSaveFile, reconnectSaveFile, forgetSaveFile, saveNow, exportBackup, importBackup } from '../lib/filesave';
+import { embedded } from '../lib/embed';
+import { backupText, restoreFromText, useSaveInfo, fileSaveSupported, createSaveFile, openSaveFile, reconnectSaveFile, forgetSaveFile, saveNow, exportBackup, importBackup } from '../lib/filesave';
 
 const time = (d: Date | null) => (d ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
 
@@ -40,25 +42,47 @@ export function SaveFileCard() {
           <div className="flex gap-2 flex-wrap">
             {s.status === 'needs-permission' && <button className="btn" onClick={reconnectSaveFile}>🔓 Reconnect</button>}
             <button className={s.fileName ? 'btn-ghost' : 'btn'} onClick={createSaveFile}>➕ Create new save file</button>
-            <button className="btn-ghost" onClick={() => { if (!s.fileName || confirm('Opening a save file replaces the progress shown now with the progress in that file. Continue?')) void openSaveFile(); }}>📂 Open existing save file</button>
+            <button className="btn-ghost" onClick={() => { if (!s.fileName || ask('Opening a save file replaces the progress shown now with the progress in that file. Continue?')) void openSaveFile(); }}>📂 Open existing save file</button>
             {s.fileName && s.status !== 'needs-permission' && <button className="btn-ghost" onClick={saveNow}>Save now</button>}
             {s.fileName && <button className="btn-ghost" onClick={forgetSaveFile}>Stop using this file</button>}
           </div>
         </>
       ) : (
-        <p className="text-sm text-streak">Automatic file saving needs Chrome or Edge. In this browser, use Export / Import below to keep a backup file.</p>
+        <p className="text-sm text-streak">{embedded ? 'You are using the shared online link. Your progress is saved in this browser automatically. To keep a copy or move it to another computer, use the backup code below — or download the app file to get automatic save files.' : 'Automatic file saving needs Chrome or Edge. In this browser, use Export / Import below to keep a backup file.'}</p>
       )}
-      <div className="border-t border-edge/20 pt-3 flex items-center gap-2 flex-wrap">
+      {embedded && <BackupCode />}
+      <div className={`border-t border-edge/20 pt-3 flex items-center gap-2 flex-wrap ${embedded ? 'hidden' : ''}`}>
         <span className="text-sm muted mr-2">Backup copy (any browser):</span>
         <button className="btn-ghost" onClick={exportBackup}>⬇️ Export backup</button>
         <button className="btn-ghost" onClick={() => input.current?.click()}>⬆️ Import backup</button>
         <input ref={input} type="file" accept=".json,application/json" className="hidden" onChange={async (e) => {
           const f = e.target.files?.[0]; e.target.value = '';
-          if (!f || !confirm('Importing replaces your current progress with the backup. Continue?')) return;
+          if (!f || !ask('Importing replaces your current progress with the backup. Continue?')) return;
           try { await importBackup(f); setMsg('✓ Backup imported.'); } catch (err) { setMsg(`✗ ${(err as Error).message}`); }
         }} />
         {msg && <span className={`text-sm ${msg.startsWith('✓') ? 'text-good' : 'text-bad'}`}>{msg}</span>}
       </div>
+    </div>
+  );
+}
+
+/** Online-link backup: copy a backup code to the clipboard, paste it back to restore. */
+function BackupCode() {
+  const [text, setText] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const copy = async () => {
+    const code = backupText();
+    try { await navigator.clipboard.writeText(code); setMsg('✓ Backup code copied. Paste it into a note or email to yourself.'); }
+    catch { setText(code); setMsg('Select all the text in the box and copy it.'); }
+  };
+  return (
+    <div className="border-t border-edge/20 pt-3 space-y-2">
+      <div className="flex gap-2 flex-wrap items-center">
+        <button className="btn-ghost" onClick={copy}>📋 Copy backup code</button>
+        <button className="btn-ghost" disabled={!text.trim()} onClick={() => { try { restoreFromText(text); setMsg('✓ Progress restored.'); setText(''); } catch (e) { setMsg(`✗ ${(e as Error).message === 'Unexpected end of JSON input' ? 'That backup code is incomplete.' : (e as Error).message}`); } }}>⬆️ Restore from pasted code</button>
+        {msg && <span className={`text-sm ${msg.startsWith('✗') ? 'text-bad' : 'text-good'}`}>{msg}</span>}
+      </div>
+      <textarea id="backup-code" className="input w-full h-24 font-mono text-xs" placeholder="Paste a backup code here to restore your progress (this replaces the current progress)." value={text} onChange={(e) => setText(e.target.value)} />
     </div>
   );
 }

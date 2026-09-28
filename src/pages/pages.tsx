@@ -1,3 +1,4 @@
+import { ask } from '../lib/embed';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from 'recharts';
@@ -262,7 +263,7 @@ export function Settings() {
           <div className="h2 text-bad">⚠️ Reset progress</div>
           <p className="text-sm muted">This permanently erases your streak, XP, badges, mastery, piano stars, notes, decks, recordings and chats. Type <b>RESET</b> to confirm.</p>
           <div className="flex gap-2"><input className="input w-40" value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="RESET" />
-            <button className="btn bg-bad" disabled={confirmText !== 'RESET'} onClick={() => { if (confirm('Are you absolutely sure? This cannot be undone.')) { resetProgress(); setConfirmText(''); } }}>Erase everything</button></div>
+            <button className="btn bg-bad" disabled={confirmText !== 'RESET'} onClick={() => { if (ask('Are you absolutely sure? This cannot be undone.')) { resetProgress(); setConfirmText(''); } }}>Erase everything</button></div>
         </div>
       </div>
     </div>

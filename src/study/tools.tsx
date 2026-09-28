@@ -1,3 +1,4 @@
+import { ask } from '../lib/embed';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { setMistakes, useApp, recordMistake, setDecks, recordQuiz, recordActivity, addFocusRound, addMinutes, setNote, openChat, getState } from '../lib/store';
@@ -105,7 +106,7 @@ export function FlashcardsPage() {
           <div className="flex gap-2">
             <button className="btn-ghost" onClick={() => setDecks(decks.map((d) => (d.id === editDeck.id ? { ...d, cards: [...d.cards, { front: '', back: '' }] } : d)))}>+ Add card</button>
             <button className="btn" onClick={() => { setSource(editDeck.id); setEditing(null); }}>Done — study it</button>
-            <button className="btn-ghost text-bad border-bad ml-auto" onClick={() => { if (confirm('Delete this deck?')) { setDecks(decks.filter((d) => d.id !== editDeck.id)); setEditing(null); setSource(''); } }}>Delete deck</button>
+            <button className="btn-ghost text-bad border-bad ml-auto" onClick={() => { if (ask('Delete this deck?')) { setDecks(decks.filter((d) => d.id !== editDeck.id)); setEditing(null); setSource(''); } }}>Delete deck</button>
           </div>
         </div>
       ) : deck ? (

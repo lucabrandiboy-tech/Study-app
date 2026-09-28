@@ -5,6 +5,7 @@ import { toMusicXML, pieceLength, measureLen } from './notation';
 import { SheetMusic } from './views';
 import { PageHeader } from '../components/ui';
 import { usePage } from '../lib/hooks';
+import { embedded } from '../lib/embed';
 
 const KEYS: Record<number, string> = { [-5]: 'D♭ major', [-3]: 'E♭ major', [-2]: 'B♭ major', [-1]: 'F major', 0: 'C major / A minor', 1: 'G major / E minor', 2: 'D major', 4: 'E major / C♯ minor' };
 
@@ -38,7 +39,7 @@ export function SheetLibrary() {
           sub={`${open.composer} · ${KEYS[piece.key ?? 0] ?? ''} · ${piece.beats}/${piece.beatUnit} · ${piece.bpm} bpm · ${bars} measures`}
           right={<div className="flex gap-2 shrink-0 whitespace-nowrap">
             <button className="btn" onClick={() => nav(`/songs?id=${open.id}`)}>▶ Play along</button>
-            <button className="btn-ghost" onClick={download} title="Open in MuseScore or other notation apps">⬇️ MusicXML</button>
+            {!embedded && <button className="btn-ghost" onClick={download} title="Open in MuseScore or other notation apps">⬇️ MusicXML</button>}
             <button className="btn-ghost" onClick={() => setOpen(null)}>← All sheets</button>
           </div>} />
         <SheetMusic xml={xml} height={640} zoom={1.1} />

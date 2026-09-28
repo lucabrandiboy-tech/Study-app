@@ -16,7 +16,8 @@ type PermHandle = FileSystemFileHandle & {
   requestPermission(o: { mode: 'readwrite' }): Promise<PermissionState>;
 };
 const w = window as unknown as { showSaveFilePicker?: Picker; showOpenFilePicker?: Picker };
-export const fileSaveSupported = typeof w.showSaveFilePicker === 'function';
+import { embedded } from './embed';
+export const fileSaveSupported = typeof w.showSaveFilePicker === 'function' && !embedded;
 
 let info: Info = { status: fileSaveSupported ? 'none' : 'unsupported', fileName: null, lastSaved: null, error: null };
 const listeners = new Set<() => void>();
@@ -144,3 +145,7 @@ export function exportBackup() {
 export async function importBackup(file: File) {
   replaceState(JSON.parse(await file.text()));
 }
+
+/** Backup as text, for hosted links where downloads are blocked: copy it, keep it somewhere, paste it back later. */
+export const backupText = () => snapshot();
+export function restoreFromText(text: string) { replaceState(JSON.parse(text)); }
