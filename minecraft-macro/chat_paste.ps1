@@ -29,7 +29,7 @@ public class K {
     }
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
     public static void ScrollUp() { mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero); }   // mouse wheel up one notch
-    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(3); Up(vk); }
+    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(1); Up(vk); }
 }
 "@
 
@@ -47,13 +47,13 @@ while ($true) {
     $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0  # U
     if ($isDown -and -not $wasDown -and (Test-MinecraftFocused)) {
         $text = Get-Clipboard -Raw     # read clipboard first (saves time)
-        Start-Sleep -Milliseconds 9
+        Start-Sleep -Milliseconds 3
         [K]::Tap(0x54)                 # T  - open chat
-        Start-Sleep -Milliseconds 17   # wait for chat box (raise to 50 if paste gets lost)
+        Start-Sleep -Milliseconds 6    # wait for chat box (raise to 50 if paste gets lost)
         if ($text) { [K]::TypeText($text) }   # paste clipboard text
-        Start-Sleep -Milliseconds 6
+        Start-Sleep -Milliseconds 2
         [K]::Tap(0x0D)                 # Enter - send
-        Start-Sleep -Milliseconds 10   # let chat close so the scroll reaches the hotbar
+        Start-Sleep -Milliseconds 3    # let chat close so the scroll reaches the hotbar
         [K]::ScrollUp()                # scroll wheel up
     }
     $wasDown = $isDown
