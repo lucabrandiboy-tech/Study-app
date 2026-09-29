@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApp, useUi, openChat, closeChat, clearChatDraft, setChat, ChatMsg, getState } from '../lib/store';
 import { Rich } from './ui';
+import { localReply } from '../lib/localTutor';
 
 const MODES = [
   { id: 'explain', label: '💡 Explain it' }, { id: 'hint', label: '🔎 Give me a hint' }, { id: 'check', label: '✅ Check my work' },
@@ -9,7 +10,7 @@ const MODES = [
 type Mode = (typeof MODES)[number]['id'];
 const STARTERS: Record<Mode, string> = {
   explain: 'Can you explain the concept on this page in simple words?', hint: 'Can I get a hint for the next step?', check: 'Here are my steps: ',
-  quiz: 'Quiz me with 5 questions on this topic!', differently: "I'm still confused. Can you explain it a different way?", piano: 'Based on my recent scores, what should I practice next?',
+  quiz: 'Quiz me on this topic!', differently: "I'm still confused. Can you explain it a different way?", piano: 'Based on my recent scores, what should I practice next?',
 };
 
 function progressSummary(subject: string) {
@@ -42,6 +43,7 @@ export function ChatPanel() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<'unknown' | 'ok' | 'no-key' | 'offline'>('unknown');
   const [err, setErr] = useState<string | null>(null);
+  const [useCloud, setUseCloud] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,6 +59,14 @@ export function ChatPanel() {
     const next: ChatMsg[] = [...msgs, { role: 'user', content: text.trim() }];
     setChat(ctx.subject, next);
     setInput(''); setBusy(true); setErr(null);
+    if (!useCloud || status !== 'ok') {
+      await new Promise((r) => setTimeout(r, 350));
+      let reply: string;
+      try { reply = localReply(text, mode, ctx); } catch (e) { reply = `Oops, I got confused (${(e as Error).message}). Try asking another way!`; }
+      setChat(ctx.subject, [...next, { role: 'assistant', content: reply }]);
+      setBusy(false);
+      return;
+    }
     try {
       const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: next, mode, context: { ...ctx, progress: progressSummary(ctx.subject) } }) });
       const j = await r.json();
@@ -87,22 +97,13 @@ export function ChatPanel() {
         </div>
       </div>
       <div ref={scroller} className="flex-1 overflow-auto p-4 space-y-3">
-        {status === 'no-key' || status === 'offline' ? (
-          <div className="card text-sm space-y-2">
-            <div className="font-bold text-streak">Study Buddy isn't set up yet</div>
-            {status === 'offline' ? <p>The helper server isn't running. Start the app with <code className="text-edge">npm run dev</code> (it starts both the website and the helper server).</p> : null}
-            <p>To turn on the AI helper:</p>
-            <ol className="list-decimal pl-5 space-y-1">
-              <li>Get a Claude API key from <span className="text-edge">console.anthropic.com</span> (ask a parent to help).</li>
-              <li>In the project folder, copy <code className="text-edge">.env.example</code> to a new file named <code className="text-edge">.env</code>.</li>
-              <li>Paste the key after <code className="text-edge">ANTHROPIC_API_KEY=</code> and save.</li>
-              <li>Stop the app (Ctrl+C) and run <code className="text-edge">npm run dev</code> again.</li>
-            </ol>
-            <p className="muted">Everything else in the app works without it!</p>
-          </div>
-        ) : msgs.length === 0 ? (
+        {status === 'ok' && (
+          <label className="flex items-center gap-2 text-xs muted"><input type="checkbox" checked={useCloud} onChange={(e) => setUseCloud(e.target.checked)} /> Use Claude AI (API key found on the helper server)</label>
+        )}
+        {msgs.length === 0 ? (
           <div className="muted text-sm space-y-2">
-            <p>Hi! I'm your Study Buddy. I can explain ideas, give hints, check your work, and quiz you.</p>
+            <p>Hi! I'm your Study Buddy. I can explain ideas, give hints, check your work, and quiz you — <b className="text-ink">no internet or API key needed</b>.</p>
+            <p>Try: <i>"explain this"</i>, <i>"quiz me"</i>, <i>"what is a ratio"</i>, or pick a button above.</p>
             <p>I <b className="text-ink">won't give you final answers</b> — I'll help you figure them out yourself. You've got this! 💪</p>
           </div>
         ) : null}
@@ -115,11 +116,11 @@ export function ChatPanel() {
         {err && <div className="text-bad text-sm">{err}</div>}
       </div>
       <div className="p-3 border-t border-edge/30">
-        <textarea className="input w-full h-24 text-sm resize-none" placeholder={status === 'ok' ? 'Type your question… (Enter to send, Shift+Enter for new line)' : 'AI helper not set up'} value={input} disabled={status === 'no-key' || status === 'offline'}
+        <textarea className="input w-full h-24 text-sm resize-none" placeholder="Type your question… (Enter to send, Shift+Enter for new line)" value={input}
           onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
         <div className="flex justify-between items-center mt-2">
           <span className="text-xs muted">Mode: {MODES.find((m) => m.id === mode)?.label}</span>
-          <button className="btn py-1.5" disabled={busy || !input.trim() || status === 'no-key' || status === 'offline'} onClick={() => send()}>Send</button>
+          <button className="btn py-1.5" disabled={busy || !input.trim()} onClick={() => send()}>Send</button>
         </div>
       </div>
     </aside>
