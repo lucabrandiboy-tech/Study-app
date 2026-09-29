@@ -5,6 +5,7 @@ import { FOLK, HOLIDAY } from './library/folkHoliday';
 import { ANTHEMS, CLASSICAL } from './library/classical';
 import { ORIGINALS } from './library/originals';
 import { PRE_ADVANCED } from './library/preAdvanced';
+import { STYLE_POP } from './library/stylePop';
 
 export type { SongEntry, Level, Category };
 
@@ -67,7 +68,7 @@ export function songLibrary(): SongEntry[] {
     const level: Level = /Bach|Mozart|Satie|Chopin/.test(composer) ? 'Pre-Advanced' : 'Advanced';
     return { id: `rep-${l.id}`, title, composer, level, category: 'Classical', ex: l.ex, piece: () => lessonPiece(`rep-${l.id}`, title, l.ex) };
   });
-  const baseDefs = [...KIDS, ...FOLK, ...HOLIDAY, ...ANTHEMS, ...CLASSICAL, ...CLASSIC_EXTRAS, ...ORIGINALS, ...PRE_ADVANCED];
+  const baseDefs = [...KIDS, ...FOLK, ...HOLIDAY, ...ANTHEMS, ...CLASSICAL, ...CLASSIC_EXTRAS, ...ORIGINALS, ...PRE_ADVANCED, ...STYLE_POP];
   // Every easier song also gets a harder Pre-Advanced arrangement (octaves, broken chords, faster, two verses).
   const courseDefs: SongDef[] = [...course, jingle].filter((e) => e.level !== 'Advanced' && e.level !== 'Pre-Advanced' && e.ex?.rh).map((e) => ({ id: e.id, t: e.title, c: e.composer, lv: 'I', cat: e.category, rh: e.ex!.rh!, lh: e.ex!.lh, time: e.ex!.time, key: e.ex!.key, bpm: e.ex!.bpm }));
   const arrangements = [...baseDefs.filter((d) => d.lv === 'B' || d.lv === 'I'), ...courseDefs].map(proArrangement);
