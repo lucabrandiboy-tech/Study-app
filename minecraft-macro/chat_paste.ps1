@@ -1,5 +1,5 @@
 # Minecraft chat macro - PowerShell (built into Windows, nothing to install)
-# Press U in Minecraft: T (open chat) -> paste -> Enter (send) -> scroll wheel up
+# Press middle mouse (wheel click) in Minecraft: T (open chat) -> paste -> Enter (send) -> scroll wheel up
 # Press F9 (or close this window) to stop.
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -40,11 +40,11 @@ function Test-MinecraftFocused {
     return $p -and ($p.ProcessName -eq 'javaw' -or $p.ProcessName -eq 'java')
 }
 
-Write-Host "Macro running. Press U in Minecraft. Press F9 to stop."
+Write-Host "Macro running. Press middle mouse (wheel click) in Minecraft. Press F9 to stop."
 $wasDown = $false
 while ($true) {
     if ([K]::GetAsyncKeyState(0x78) -band 0x8000) { break }   # F9 = quit
-    $isDown = ([K]::GetAsyncKeyState(0x55) -band 0x8000) -ne 0  # U
+    $isDown = ([K]::GetAsyncKeyState(0x04) -band 0x8000) -ne 0  # middle mouse button
     if ($isDown -and -not $wasDown -and (Test-MinecraftFocused)) {
         $text = Get-Clipboard -Raw     # read clipboard first (saves time)
         Start-Sleep -Milliseconds 3
