@@ -41,7 +41,7 @@ export interface AppState {
     volume: number; metronome: 'click' | 'wood' | 'beep';
     language: 'spanish' | 'french';
     name: string;
-    jazz: boolean; jazzVolume: number;
+    jazz: boolean; jazzVolume: number; midiAppSound: boolean;
   };
   notes: Record<string, string>;
   decks: Deck[];
@@ -65,7 +65,7 @@ const fresh = (): AppState => ({
   topics: {},
   quizzes: [],
   piano: { lessons: {}, unitTests: {}, unlockedUnit: 1, placementDone: false, songs: {}, noteGameNPM: [] },
-  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5 },
+  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5, midiAppSound: true },
   notes: {},
   decks: [],
   recordings: [],

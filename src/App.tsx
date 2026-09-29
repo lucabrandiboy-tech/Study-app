@@ -1,3 +1,4 @@
+import { useApp } from './lib/store';
 import { useEffect } from 'react';
 import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar, Celebrations } from './components/Shell';
@@ -10,7 +11,7 @@ import { PianoCourse, UnitPage, LessonPage, FreePlay } from './piano/pages';
 import { SongPlayer } from './piano/SongLibrary';
 import { PracticeGames } from './piano/games';
 import { SheetLibrary } from './piano/SheetLibrary';
-import { installComputerKeyboard, connectMidi } from './piano/input';
+import { installComputerKeyboard, connectMidi, setMidiAppSound } from './piano/input';
 import { initFileSave } from './lib/filesave';
 import { JazzController } from './components/Jazz';
 
@@ -20,6 +21,8 @@ export default function App() {
   const chatOpen = useUi((u) => u.chatOpen);
   useEffect(() => installComputerKeyboard(), []);
   useEffect(() => { void connectMidi(); void initFileSave(); }, []);
+  const midiAppSound = useApp((s) => s.settings.midiAppSound);
+  useEffect(() => setMidiAppSound(midiAppSound), [midiAppSound]);
   return (
     <Router>
       <div className="flex min-h-screen">
