@@ -14,7 +14,7 @@ import { MidiBadge } from './MidiSetup';
 
 // ---------------------------------------------------------------- Course map
 export function unitStatus(u: Unit, s: ReturnType<typeof getState>) {
-  const unlocked = u.n <= s.piano.unlockedUnit;
+  const unlocked = true; // every unit is open — no need to pass anything to move on
   const passed = u.exam ? u.lessons.every((l) => (s.piano.lessons[l.id] ?? 0) >= 2) : (s.piano.unitTests[u.n] ?? 0) >= 2;
   return { unlocked, passed };
 }
@@ -86,7 +86,7 @@ function PlacementTest({ onDone }: { onDone: () => void }) {
   return (
     <div>
       <PageHeader title={`Placement ${i + 1}/${PLACEMENT.length}: ${item.label}`} sub="Perform it with 2+ stars to move on." right={<button className="btn-ghost" onClick={() => finish(i === 0 ? 1 : PLACEMENT[i - 1].unit + 1)}>I'll stop here</button>} />
-      {piece && <PlayAlong key={i} piece={piece} modes={['wait', 'perform']} onFinish={(r) => { if (r.mode === 'perform') setLast(r); }} />}
+      {piece && <PlayAlong key={i} piece={piece} modes={['perform', 'wait']} onFinish={(r) => { if (r.mode === 'perform') setLast(r); }} />}
       {last && (
         <div className="mt-3 flex gap-3">
           {last.stars >= 2
@@ -190,7 +190,7 @@ export function LessonPage() {
       if (kind === 'test' || (unit.exam && kind === 'lesson')) {
         if (kind === 'test') recordUnitTest(unit.n, r.stars, TOTAL_UNITS);
         else { recordLesson(id, r.stars); const s = getState(); if (unit.lessons.every((l) => (s.piano.lessons[l.id] ?? 0) >= 2)) recordUnitTest(unit.n, 3, TOTAL_UNITS); }
-        if (r.stars >= 2) celebrate(kind === 'test' ? `Unit ${unit.n} passed!` : 'Exam piece passed!', '🏁', kind === 'test' && unit.n < TOTAL_UNITS ? `Unit ${unit.n + 1} is unlocked.` : undefined);
+        if (r.stars >= 2) celebrate(kind === 'test' ? `Unit ${unit.n} passed!` : 'Exam piece passed!', '🏁', kind === 'test' ? 'Great playing!' : undefined);
       } else recordLesson(id, r.stars);
       if (r.stars >= 1) recordActivity('piano');
       setStep('feedback');
@@ -200,13 +200,13 @@ export function LessonPage() {
   };
 
   const idx = unit.lessons.findIndex((l) => l.id === id);
-  const nextId = kind === 'lesson' ? (unit.lessons[idx + 1]?.id ?? (unit.song ? `u${unit.n}-song` : unit.test ? `u${unit.n}-test` : null)) : kind === 'song' ? (unit.test ? `u${unit.n}-test` : null) : null;
+  const nextId = kind === 'lesson' ? (unit.lessons[idx + 1]?.id ?? (unit.song ? `u${unit.n}-song` : unit.test ? `u${unit.n}-test` : null)) : kind === 'song' ? (unit.test ? `u${unit.n}-test` : null) : (COURSE.find((u) => u.n === unit.n + 1)?.lessons[0]?.id ?? null);
   const stepList: { id: Step; label: string }[] = [
     { id: 'learn', label: '1. Learn' }, { id: 'demo', label: '2. Demo' }, { id: 'practice', label: '3. Practice' }, { id: 'perform', label: '4. Perform' }, { id: 'feedback', label: '5. Feedback' },
   ];
   return (
     <div>
-      <PageHeader title={title} sub={<span>Unit {unit.n}: {unit.title} · Best: <Stars n={stars} size="text-base" /></span>} right={<Link to={`/piano/unit/${unit.n}`} className="btn-ghost">← Unit</Link>} />
+      <PageHeader title={title} sub={<span>Unit {unit.n}: {unit.title} · Best: <Stars n={stars} size="text-base" /></span>} right={<div className="flex gap-2"><Link to={`/piano/unit/${unit.n}`} className="btn-ghost">← Unit</Link>{nextId && <button className="btn" onClick={() => nav(`/piano/lesson/${nextId}`)}>Next lesson →</button>}</div>} />
       <div className="mb-4"><Tabs<Step> value={step} onChange={setStep} tabs={stepList.map((s) => ({ ...s, disabled: s.id === 'feedback' && !result }))} /></div>
 
       {step === 'learn' && (
@@ -220,7 +220,7 @@ export function LessonPage() {
         </div>
       )}
       {step === 'demo' && <><PlayAlong piece={piece} mode="demo" /><button className="btn mt-4" onClick={() => setStep('practice')}>Next: practice it →</button></>}
-      {step === 'practice' && <><div className="card2 mb-3 text-sm">⏳ <b>Wait-for-me mode:</b> the music waits until you play the right note(s). Take your time!</div><PlayAlong piece={piece} mode="wait" onFinish={onFinish} /><button className="btn mt-4" onClick={() => setStep('perform')}>Ready to perform →</button></>}
+      {step === 'practice' && <><div className="card2 mb-3 text-sm">🎶 <b>Play along:</b> the music keeps moving — play what you can. (Want it to stop and wait for you? Pick "Wait" below.)</div><PlayAlong piece={piece} modes={['perform', 'wait']} onFinish={onFinish} /><button className="btn mt-4" onClick={() => setStep('perform')}>Ready to perform →</button></>}
       {step === 'perform' && <><div className="card2 mb-3 text-sm">🎯 <b>Performance:</b> after a 1-measure count-in, play along at tempo. Stars are based on correct notes and timing. {kind === 'test' ? 'You need 2+ stars to pass.' : ''}</div><PlayAlong piece={piece} mode="perform" onFinish={onFinish} lockTempo={kind === 'test'} /></>}
       {step === 'feedback' && result && (
         <div className="space-y-4">

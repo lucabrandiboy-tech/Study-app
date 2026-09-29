@@ -42,7 +42,7 @@ export function SimplyPlayer({ piece, title, composer, level, best, onClose, onF
   piece: Piece; title: string; composer?: string; level?: Level; best?: number;
   onClose: () => void; onFinish?: (r: PlayResult) => void; onNext?: () => void;
 }) {
-  const [mode, setMode] = useState<PlayMode>('wait');
+  const [mode, setMode] = useState<PlayMode>('perform');
   const [view, setView] = useState<'sheet' | 'falling'>('sheet');
   const [tempo, setTempo] = useState(1);
   const [hands, setHands] = useState<'both' | 'R' | 'L'>('both');

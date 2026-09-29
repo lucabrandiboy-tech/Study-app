@@ -42,7 +42,7 @@ function WarmUps() {
   return (
     <div className="space-y-3">
       <div className="flex gap-2 flex-wrap">{WARMUPS.map((x, k) => <button key={x.id} className={k === i ? 'btn' : 'btn-ghost'} onClick={() => setI(k)}>{x.title}</button>)}</div>
-      <PlayAlong piece={piece} modes={['wait', 'perform', 'demo']} onFinish={(r) => { if (r.mode !== 'demo') addXp(5 + r.stars * 5); }} />
+      <PlayAlong piece={piece} modes={['perform', 'wait', 'demo']} onFinish={(r) => { if (r.mode !== 'demo') addXp(5 + r.stars * 5); }} />
     </div>
   );
 }

@@ -183,9 +183,9 @@ export function Progress() {
           <div className="font-bold mb-2">Course map · stars per lesson</div>
           {COURSE.map((u) => (
             <div key={u.n} className="flex items-center gap-2 py-1 border-b border-edge/10 text-sm">
-              <span className={`w-16 shrink-0 ${u.n <= s.piano.unlockedUnit ? '' : 'opacity-40'}`}>{u.exam ? 'Final' : `Unit ${u.n}`}</span>
+              <span className={`w-16 shrink-0 `}>{u.exam ? 'Final' : `Unit ${u.n}`}</span>
               <div className="flex gap-1 flex-1 flex-wrap">{u.lessons.map((l) => <span key={l.id} title={l.title} className="text-xs"><Stars n={s.piano.lessons[l.id] ?? 0} size="text-xs" /></span>)}</div>
-              {!u.exam && <span className="text-xs">{(s.piano.unitTests[u.n] ?? 0) >= 2 ? '✅' : u.n <= s.piano.unlockedUnit ? '▶️' : '🔒'}</span>}
+              {!u.exam && <span className="text-xs">{(s.piano.unitTests[u.n] ?? 0) >= 2 ? '✅' : '▶️'}</span>}
             </div>
           ))}
         </div>
