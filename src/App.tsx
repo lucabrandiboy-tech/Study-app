@@ -14,6 +14,7 @@ import { SheetLibrary } from './piano/SheetLibrary';
 import { installComputerKeyboard, connectMidi, setMidiAppSound } from './piano/input';
 import { initFileSave } from './lib/filesave';
 import { JazzController } from './components/Jazz';
+import { GeoTools } from './components/GeoTools';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
@@ -56,6 +57,7 @@ export default function App() {
         </main>
       </div>
       <JazzController />
+      <GeoTools />
       <ChatButton />
       <ChatPanel />
       <Celebrations />
