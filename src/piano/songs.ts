@@ -1,9 +1,10 @@
 import { COURSE, lessonPiece } from './course';
-import { toEntry, type SongEntry, type Level, type Category, type SongDef } from './library/make';
+import { toEntry, proArrangement, type SongEntry, type Level, type Category, type SongDef } from './library/make';
 import { KIDS } from './library/kids';
 import { FOLK, HOLIDAY } from './library/folkHoliday';
 import { ANTHEMS, CLASSICAL } from './library/classical';
 import { ORIGINALS } from './library/originals';
+import { PRE_ADVANCED } from './library/preAdvanced';
 
 export type { SongEntry, Level, Category };
 
@@ -66,7 +67,11 @@ export function songLibrary(): SongEntry[] {
     const level: Level = /Bach|Mozart|Satie|Chopin/.test(composer) ? 'Pre-Advanced' : 'Advanced';
     return { id: `rep-${l.id}`, title, composer, level, category: 'Classical', ex: l.ex, piece: () => lessonPiece(`rep-${l.id}`, title, l.ex) };
   });
-  const defs = [...KIDS, ...FOLK, ...HOLIDAY, ...ANTHEMS, ...CLASSICAL, ...CLASSIC_EXTRAS, ...ORIGINALS].map(toEntry);
+  const baseDefs = [...KIDS, ...FOLK, ...HOLIDAY, ...ANTHEMS, ...CLASSICAL, ...CLASSIC_EXTRAS, ...ORIGINALS, ...PRE_ADVANCED];
+  // Every easier song also gets a harder Pre-Advanced arrangement (octaves, broken chords, faster, two verses).
+  const courseDefs: SongDef[] = [...course, jingle].filter((e) => e.level !== 'Advanced' && e.level !== 'Pre-Advanced' && e.ex?.rh).map((e) => ({ id: e.id, t: e.title, c: e.composer, lv: 'I', cat: e.category, rh: e.ex!.rh!, lh: e.ex!.lh, time: e.ex!.time, key: e.ex!.key, bpm: e.ex!.bpm }));
+  const arrangements = [...baseDefs.filter((d) => d.lv === 'B' || d.lv === 'I'), ...courseDefs].map(proArrangement);
+  const defs = [...baseDefs, ...arrangements].map(toEntry);
   const order = { Beginner: 0, Intermediate: 1, 'Pre-Advanced': 2, Advanced: 3 };
   const all = [...course, jingle, ...rep, ...defs];
   const seen = new Set<string>();

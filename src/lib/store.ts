@@ -50,6 +50,7 @@ export interface AppState {
   lastPiano: { path: string; label: string } | null;
   chats: Record<string, ChatMsg[]>;
   mistakes: Mistake[];
+  importedSongs: ImportedSong[]; // songs the student imported (MusicXML / MIDI)
   studyUnits: Record<string, number>; // best unit-test score (out of 10), key "subject:unitIndex"
 }
 
@@ -73,6 +74,7 @@ const fresh = (): AppState => ({
   chats: {},
   mistakes: [],
   studyUnits: {},
+  importedSongs: [],
 });
 
 /** Fill in any fields missing from older saves. */
@@ -317,6 +319,9 @@ export function setChat(subject: string, msgs: ChatMsg[]) { update((s) => ({ ...
 export function recordMistake(m: Omit<Mistake, 'id' | 'date'>) {
   update((s) => ({ ...s, mistakes: [{ ...m, id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date: dayKey() }, ...s.mistakes].slice(0, 300) }));
 }
+export interface ImportedSong { id: string; title: string; composer: string; level: 'Beginner' | 'Intermediate' | 'Pre-Advanced' | 'Advanced'; added: string; piece: import('../piano/notation').Piece }
+export function addImportedSong(song: ImportedSong) { update((s) => ({ ...s, importedSongs: [song, ...s.importedSongs.filter((x) => x.id !== song.id)].slice(0, 40) })); }
+export function removeImportedSong(id: string) { update((s) => ({ ...s, importedSongs: s.importedSongs.filter((x) => x.id !== id) })); }
 export function recordUnitTest10(key: string, score: number) {
   update((s0) => {
     const prev = s0.studyUnits[key] ?? 0;

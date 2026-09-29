@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useApp, recordSong, recordActivity } from '../lib/store';
+import { useApp, recordSong, recordActivity, addImportedSong, removeImportedSong } from '../lib/store';
+import { importMusicFile } from './importer';
 import { useActiveMinutes, usePage } from '../lib/hooks';
 import { songLibrary, LEVELS, CATEGORIES, type SongEntry, type Level, type Category } from './songs';
-import { parseMusicXML, parseMidiFile, type Piece } from './notation';
+import type { Piece } from './notation';
 import { SimplyPlayer } from './SimplyPlayer';
 import type { PlayResult } from './engine';
 
@@ -31,7 +32,11 @@ function SongCard({ s, stars, onOpen }: { s: SongEntry; stars?: number; onOpen: 
 
 /** Song Player: a bright, Simply-Piano-style song library that opens a full-screen player. */
 export function SongPlayer() {
-  const lib = useMemo(songLibrary, []);
+  const base = useMemo(songLibrary, []);
+  const importedSongs = useApp((s) => s.importedSongs);
+  const lib = useMemo<SongEntry[]>(() => [...importedSongs.map((m) => ({ id: m.id, title: m.title, composer: m.composer, level: m.level, category: 'Imported' as Category, piece: () => m.piece })), ...base], [base, importedSongs]);
+  const [dragging, setDragging] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
   const done = useApp((s) => s.piano.songs);
   const [params] = useSearchParams();
   const [open, setOpen] = useState<SongEntry | null>(() => lib.find((s) => s.id === params.get('id')) ?? null);
@@ -45,12 +50,13 @@ export function SongPlayer() {
   usePage({ label: piece ? `Piano > Song Player: ${piece.title}` : 'Piano > Song Player', subject: 'piano' }, { kind: 'piano', path: '/songs' });
 
   const onFile = async (f: File) => {
-    setErr(null);
+    setErr(null); setMsg(null);
     try {
-      if (/\.midi?$/i.test(f.name)) setImported(await parseMidiFile(await f.arrayBuffer(), f.name));
-      else if (/\.mxl$/i.test(f.name)) throw new Error('Compressed .mxl files are not supported yet. Export as .musicxml or .xml instead.');
-      else setImported(parseMusicXML(await f.text(), f.name));
-    } catch (e) { setErr((e as Error).message); }
+      const song = await importMusicFile(f);
+      addImportedSong(song);
+      setMsg(`✅ Imported "${song.title}" (${song.piece.events.length} notes, rated ${song.level}). It's saved in the 📂 Imported row.`);
+      setImported(song.piece);
+    } catch (e) { setErr(`Couldn't import ${f.name}: ${(e as Error).message}`); }
   };
   const onFinish = (r: PlayResult) => {
     if (r.mode !== 'perform' || !piece) return;
@@ -63,19 +69,22 @@ export function SongPlayer() {
   const next = open ? filtered[(filtered.findIndex((s) => s.id === open.id) + 1) % filtered.length] : undefined;
 
   return (
-    <div className="-m-8 min-h-screen bg-[#F7F7FB] text-[#111827] p-8">
+    <div className={`-m-8 min-h-screen bg-[#F7F7FB] text-[#111827] p-8 ${dragging ? 'ring-4 ring-inset ring-[#22C55E]' : ''}`}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); Array.from(e.dataTransfer.files).forEach((f) => void onFile(f)); }}>
       <div className="max-w-[1400px] mx-auto">
         <div className="flex items-end justify-between gap-4 flex-wrap mb-6">
           <div>
             <h1 className="text-4xl font-black">Songs</h1>
-            <p className="text-[#6B7280] mt-1">{lib.length} songs to play with your piano. Pick one and press Start.</p>
+            <p className="text-[#6B7280] mt-1">{lib.length} songs to play with your piano. Pick one and press Start — or drag a MusicXML / MIDI file here to import it.</p>
           </div>
           <div className="flex gap-2 items-center">
             <input className="w-72 rounded-full border border-[#E5E7EB] bg-white px-4 py-2.5 outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/30" placeholder="🔍 Search songs or composers" value={q} onChange={(e) => setQ(e.target.value)} />
             <label className="rounded-full border border-[#E5E7EB] bg-white px-4 py-2.5 font-bold cursor-pointer hover:bg-[#F1F5F9]">📂 Import MusicXML / MIDI
-              <input type="file" accept=".xml,.musicxml,.mid,.midi,.mxl" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void onFile(f); }} /></label>
+              <input type="file" multiple accept=".xml,.musicxml,.mid,.midi,.mxl" className="hidden" onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; fs.forEach((f) => void onFile(f)); }} /></label>
           </div>
         </div>
+        {msg && <div className="rounded-xl bg-[#F0FDF4] text-[#166534] px-4 py-3 mb-4">{msg}</div>}
         {err && <div className="rounded-xl bg-[#FEF2F2] text-[#B91C1C] px-4 py-3 mb-4">{err}</div>}
 
         <div className="flex gap-2 flex-wrap mb-3">
@@ -87,7 +96,7 @@ export function SongPlayer() {
         </div>
         <div className="flex gap-2 flex-wrap mb-8">
           <button onClick={() => setCat('all')} className={`px-3 py-1 rounded-full text-sm font-semibold border ${cat === 'all' ? 'bg-[#111827] text-white border-[#111827]' : 'bg-white border-[#E5E7EB]'}`}>All categories</button>
-          {CATEGORIES.filter((c) => c.id !== 'Imported').map((c) => (
+          {CATEGORIES.filter((c) => c.id !== 'Imported' || importedSongs.length).map((c) => (
             <button key={c.id} onClick={() => setCat(c.id)} className={`px-3 py-1 rounded-full text-sm font-semibold border ${cat === c.id ? 'bg-[#111827] text-white border-[#111827]' : 'bg-white border-[#E5E7EB]'}`}>{c.icon} {c.id}</button>
           ))}
         </div>
@@ -101,7 +110,12 @@ export function SongPlayer() {
                 <button onClick={() => setCat(c.id)} className="text-sm font-bold text-[#16A34A] hover:underline">See all</button>
               </div>
               <div className="flex items-start gap-5 overflow-x-auto pb-3 pt-1 -mx-1 px-1">
-                {row.map((s) => <SongCard key={s.id} s={s} stars={done[s.id]?.stars} onOpen={() => { setImported(null); setOpen(s); }} />)}
+                {row.map((s) => (
+                  <div key={s.id} className="relative">
+                    <SongCard s={s} stars={done[s.id]?.stars} onOpen={() => { setImported(null); setOpen(s); }} />
+                    {c.id === 'Imported' && <button title="Remove from library" onClick={() => { if (confirm(`Remove "${s.title}" from your library?`)) removeImportedSong(s.id); }} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 border border-[#E5E7EB] text-sm hover:bg-[#FEE2E2]">✕</button>}
+                  </div>
+                ))}
               </div>
             </section>
           );

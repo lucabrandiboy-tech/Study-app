@@ -167,7 +167,7 @@ const HOMEWORK = /\b(answer (to|for)|solve (this|it|for me)|do my|just tell me|g
 
 export function localReply(text: string, mode: TutorMode, ctx: PageContext): string {
   const clean = text.trim();
-  if (pendingQuiz && mode === 'quiz' && !/quiz me/i.test(clean)) return gradeQuiz(clean);
+  if (pendingQuiz && !/quiz|explain|hint|what is|help/i.test(clean)) return gradeQuiz(clean);
   if (mode === 'piano' || ctx.subject === 'piano' && /piano|practice|song|next/i.test(clean)) return pianoTips();
 
   const def = define(clean);

@@ -22,7 +22,7 @@ export interface SongDef {
 }
 
 const LEVEL: Record<SongDef['lv'], Level> = { B: 'Beginner', I: 'Intermediate', P: 'Pre-Advanced', A: 'Advanced' };
-const STYLE: Record<SongDef['lv'], Style> = { B: 'root', I: 'oompah', P: 'broken', A: 'broken' };
+const STYLE: Record<SongDef['lv'], Style> = { B: 'root', I: 'broken', P: 'broken', A: 'broken' };
 
 const DUR: [number, string][] = [[4, 'w'], [3, 'h.'], [2, 'h'], [1.5, 'q.'], [1, 'q'], [0.75, 'e.'], [0.5, 'e'], [0.25, 's']];
 function durTokens(q: number): string[] {
@@ -92,9 +92,48 @@ export function chordLH(ch: string, time: [number, number] = [4, 4], style: Styl
   }).join(' | ');
 }
 
+/** Split a voice into tokens, keeping [chord] groups together. */
+function tokens(src: string): string[] {
+  const out: string[] = [];
+  for (const t of src.replace(/\[\s*/g, '[').replace(/\s*\]/g, ']').split(/\s+/).filter(Boolean)) {
+    if (out.length && out[out.length - 1].startsWith('[') && !out[out.length - 1].includes(']')) out[out.length - 1] += ' ' + t;
+    else out.push(t);
+  }
+  return out;
+}
+const OCT_MAX = 6; // don't double above octave 6
+/** Double the melody in octaves (the top note of each chord gets an octave added) — a classic harder-arrangement technique. */
+export function octaves(rh: string): string {
+  return tokens(rh).map((tok) => {
+    if (tok === '|') return tok;
+    const m = tok.match(/^(\[[^\]]+\]|[^:~]+)(.*)$/);
+    if (!m || m[1] === 'r') return tok;
+    const notes = m[1].startsWith('[') ? m[1].slice(1, -1).split(/\s+/) : [m[1]];
+    const top = notes[notes.length - 1];
+    const oct = Number(top.match(/(-?\d)$/)?.[1] ?? 9);
+    if (oct >= OCT_MAX) return tok;
+    return `[${[...notes, up(top)].join(' ')}]${m[2]}`;
+  }).join(' ');
+}
+const bars = (v: string) => v.split('|').length;
+const twice = (v: string) => `${v} | ${v}`;
+
+/** A Pre-Advanced arrangement of an easier song: verse as written, then a second verse in octaves, broken-chord left hand, faster. */
+export function proArrangement(d: SongDef): SongDef {
+  const time = d.time ?? [4, 4];
+  const lh1 = d.ch ? chordLH(d.ch, time, 'broken') : d.lh;
+  return {
+    ...d, id: `${d.id}-pa`, t: `${d.t} — Pre-Advanced Arrangement`, lv: 'P', ch: undefined,
+    rh: `${d.rh} | ${octaves(d.rh)}`, lh: lh1 ? twice(lh1) : undefined, bpm: Math.round((d.bpm ?? 90) * 1.12),
+  };
+}
+
 export function toEntry(d: SongDef): SongEntry {
   const time = d.time ?? [4, 4];
-  const ex: Exercise = { rh: d.rh, lh: d.lh ?? (d.ch ? chordLH(d.ch, time, d.style ?? STYLE[d.lv]) : undefined), time, key: d.key ?? 0, bpm: d.bpm ?? 90 };
+  let rh = d.rh, lh = d.lh ?? (d.ch ? chordLH(d.ch, time, d.style ?? STYLE[d.lv]) : undefined);
+  // Short songs play through twice so every song is a real, full-length piece.
+  if (d.lv !== 'P' && bars(rh) < 16 && (!lh || bars(lh) === bars(rh))) { rh = twice(rh); if (lh) lh = twice(lh); }
+  const ex: Exercise = { rh, lh, time, key: d.key ?? 0, bpm: d.bpm ?? 90 };
   return { id: d.id, title: d.t, composer: d.c, level: LEVEL[d.lv], category: d.cat, ex, piece: () => makePiece(d.id, d.t, ex) };
 }
 
