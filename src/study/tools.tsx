@@ -1,7 +1,7 @@
 import { ask } from '../lib/embed';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { setMistakes, useApp, recordMistake, setDecks, recordQuiz, recordActivity, addFocusRound, addMinutes, setNote, openChat, getState } from '../lib/store';
+import { Link, useSearchParams } from 'react-router-dom';
+import { recordUnitTest10, recordFinalExam, setMistakes, useApp, recordMistake, setDecks, recordQuiz, recordActivity, addFocusRound, addMinutes, setNote, openChat, getState } from '../lib/store';
 import { usePage } from '../lib/hooks';
 import { PageHeader, Tabs, Rich } from '../components/ui';
 import { QuestionView, Graded, correctAnswerText } from './QuestionView';
@@ -121,8 +121,9 @@ export function FlashcardsPage() {
 // ---------------- Quiz ----------------
 export function QuizPage() {
   const subjects = useSubjects();
-  const [subjectId, setSubjectId] = useState('geometry');
-  const [topicId, setTopicId] = useState('all');
+  const [params] = useSearchParams();
+  const [subjectId, setSubjectId] = useState(params.get('subject') ?? 'geometry');
+  const [topicId, setTopicId] = useState(params.get('final') ? 'final' : params.get('unit') ? `unit:${params.get('unit')}` : 'all');
   const [timed, setTimed] = useState(false);
   const [qs, setQs] = useState<Question[] | null>(null);
   const [i, setI] = useState(0);
@@ -130,24 +131,29 @@ export function QuizPage() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [done, setDone] = useState(false);
   const subject = subjects.find((s) => s.id === subjectId)!;
-  usePage({ label: `Practice Quiz – ${subject.name}`, detail: qs && !done ? `Quiz question ${i + 1} of 10 (the student must answer this themself — do not give the answer)` : undefined, subject: subjectId });
+  const N = topicId === 'final' ? 25 : 10;
+  usePage({ label: `Practice Quiz – ${subject.name}`, detail: qs && !done ? `Quiz question ${i + 1} of ${N} (the student must answer this themself — do not give the answer)` : undefined, subject: subjectId });
 
   const start = () => {
-    const pool = topicId === 'all' ? subject.topics : subject.topics.filter((t) => t.id === topicId);
-    setQs(Array.from({ length: 10 }, (_, k) => { const t = pool[k % pool.length]; return t.generate(Math.min(2, (getState().topics[t.id]?.difficulty ?? 0)) as 0 | 1 | 2); }).sort(() => Math.random() - 0.5));
-    setI(0); setResults([]); setDone(false); setTimeLeft(10 * 60);
+    const unitIdx = topicId.startsWith('unit:') ? Number(topicId.slice(5)) : -1;
+    const unitIds = unitIdx >= 0 ? subject.units?.[unitIdx]?.topicIds ?? [] : [];
+    const pool = topicId === 'all' || topicId === 'final' ? [...subject.topics].sort(() => Math.random() - 0.5) : unitIdx >= 0 ? subject.topics.filter((t) => unitIds.includes(t.id)) : subject.topics.filter((t) => t.id === topicId);
+    setQs(Array.from({ length: N }, (_, k) => { const t = pool[k % pool.length]; return t.generate((topicId === 'final' ? 1 : Math.min(2, (getState().topics[t.id]?.difficulty ?? 0))) as 0 | 1 | 2); }).sort(() => Math.random() - 0.5));
+    setI(0); setResults([]); setDone(false); setTimeLeft(N * 60);
   };
   const finish = (res: Graded[]) => {
     setDone(true);
     const score = res.filter((r) => r.correct).length;
-    recordQuiz(subject.name, score, 10);
+    recordQuiz(subject.name, score, N);
+    if (topicId === 'final') recordFinalExam(subject.id, Math.round((score / N) * 100));
+    if (topicId.startsWith('unit:')) recordUnitTest10(`${subject.id}:${topicId.slice(5)}`, score);
     qs?.forEach((q, k) => { const r = res[k]; if (r && !r.correct) recordMistake({ topicId: `quiz-${subject.id}`, topic: `${subject.name} quiz`, prompt: q.prompt, given: r.given || '(blank)', correct: correctAnswerText(q), why: r.feedback || 'Time ran out before you answered.', solution: q.explanation }); });
     recordActivity('study');
   };
   useEffect(() => {
     if (!timed || !qs || done) return;
     const id = setInterval(() => setTimeLeft((t) => {
-      if (t <= 1) { clearInterval(id); const filled = [...results]; while (filled.length < 10) filled.push({ correct: false, given: '(time ran out)', feedback: '' }); setResults(filled); finish(filled); return 0; }
+      if (t <= 1) { clearInterval(id); const filled = [...results]; while (filled.length < N) filled.push({ correct: false, given: '(time ran out)', feedback: '' }); setResults(filled); finish(filled); return 0; }
       return t - 1;
     }), 1000);
     return () => clearInterval(id);
@@ -156,7 +162,7 @@ export function QuizPage() {
   const onDone = (g: Graded) => {
     const r = [...results, g];
     setResults(r);
-    if (r.length >= 10) finish(r); else setI(i + 1);
+    if (r.length >= N) finish(r); else setI(i + 1);
   };
 
   if (!qs) return (
@@ -168,10 +174,13 @@ export function QuizPage() {
         </label>
         <label className="block"><span className="muted text-sm">Topic</span>
           <select className="input w-full" value={topicId} onChange={(e) => setTopicId(e.target.value)}>
-            <option value="all">Mixed — all topics</option>{subject.topics.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+            <option value="final">🏆 FINAL EXAM — 25 questions, every unit</option>
+            <option value="all">Mixed — all topics</option>
+            {subject.units?.map((u, k) => <option key={k} value={`unit:${k}`}>🎓 Unit {k + 1} test: {u.title}</option>)}
+            {subject.topics.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
           </select>
         </label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={timed} onChange={(e) => setTimed(e.target.checked)} /> Timed (10 minutes)</label>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={timed} onChange={(e) => setTimed(e.target.checked)} /> Timed ({N} minutes)</label>
         <button className="btn" onClick={start}>Start quiz</button>
       </div>
     </div>
@@ -183,8 +192,8 @@ export function QuizPage() {
       <div>
         <PageHeader title="Quiz results" right={<button className="btn" onClick={() => setQs(null)}>New quiz</button>} />
         <div className="card text-center mb-6 animate-pop">
-          <div className="text-6xl font-extrabold" style={{ color: score === 10 ? '#4ADE80' : score >= 7 ? '#7FD3FF' : '#FF9F43' }}>{score}/10</div>
-          <div className="muted">{score === 10 ? 'Perfect score! 💯' : score >= 7 ? 'Nice work! Review the misses below.' : 'Keep practicing — review each miss below.'}</div>
+          <div className="text-6xl font-extrabold" style={{ color: score === N ? '#4ADE80' : score >= N * 0.7 ? '#7FD3FF' : '#FF9F43' }}>{score}/{N}</div>
+          <div className="muted">{topicId === 'final' ? (score >= N * 0.7 ? `You PASSED the ${subject.name} final (${Math.round((score / N) * 100)}%)! 🏆` : `${Math.round((score / N) * 100)}% — you need 70% to pass. Review the misses and the units they came from.`) : score === N ? 'Perfect score! 💯' : score >= 7 ? 'Nice work! Review the misses below.' : 'Keep practicing — review each miss below.'}</div>
         </div>
         <h2 className="h2 mb-3">Review</h2>
         <div className="space-y-3">
@@ -215,8 +224,8 @@ export function QuizPage() {
 
   return (
     <div>
-      <PageHeader title={`Quiz: ${subject.name}`} sub={`Question ${i + 1} of 10`} right={timed ? <div className={`text-2xl font-extrabold ${timeLeft < 60 ? 'text-bad' : 'text-edge'}`}>⏱ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</div> : undefined} />
-      <div className="flex gap-1 mb-4">{Array.from({ length: 10 }, (_, k) => <div key={k} className={`h-2 flex-1 rounded ${k < i ? 'bg-accent' : k === i ? 'bg-edge' : 'bg-navy'}`} />)}</div>
+      <PageHeader title={`Quiz: ${subject.name}`} sub={`${topicId === 'final' ? 'FINAL EXAM · ' : ''}Question ${i + 1} of ${N}`} right={timed ? <div className={`text-2xl font-extrabold ${timeLeft < 60 ? 'text-bad' : 'text-edge'}`}>⏱ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</div> : undefined} />
+      <div className="flex gap-1 mb-4">{Array.from({ length: N }, (_, k) => <div key={k} className={`h-2 flex-1 rounded ${k < i ? 'bg-accent' : k === i ? 'bg-edge' : 'bg-navy'}`} />)}</div>
       <div className="card"><QuestionView q={qs[i]} mode="quiz" onDone={onDone} /></div>
     </div>
   );

@@ -41,4 +41,5 @@ export interface Subject {
   blurb: string;
   topics: Topic[];
   advanced?: boolean; // Super Advanced section (one grade ahead)
+  units?: { title: string; topicIds: string[] }[]; // course units, in order
 }

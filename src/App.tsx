@@ -12,6 +12,7 @@ import { PracticeGames } from './piano/games';
 import { SheetLibrary } from './piano/SheetLibrary';
 import { installComputerKeyboard, connectMidi } from './piano/input';
 import { initFileSave } from './lib/filesave';
+import { JazzController } from './components/Jazz';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
@@ -51,6 +52,7 @@ export default function App() {
           </div>
         </main>
       </div>
+      <JazzController />
       <ChatButton />
       <ChatPanel />
       <Celebrations />

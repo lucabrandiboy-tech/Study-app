@@ -247,6 +247,8 @@ export function Settings() {
         <div className="card space-y-3">
           <div className="h2">🔊 Sound</div>
           <label className="flex items-center justify-between gap-3"><span>Volume</span><input type="range" min={0} max={1} step={0.05} value={set.volume} className="accent-[#A970FF] w-48" onChange={(e) => { setSettings({ volume: Number(e.target.value) }); setVolume(Number(e.target.value)); }} /></label>
+          <label className="flex items-center justify-between gap-3"><span>🎷 Smooth jazz on menus</span><input type="checkbox" checked={set.jazz} onChange={(e) => setSettings({ jazz: e.target.checked })} /></label>
+          <label className="flex items-center justify-between gap-3"><span>Jazz volume</span><input type="range" min={0} max={1} step={0.05} value={set.jazzVolume} className="accent-[#A970FF] w-48" onChange={(e) => setSettings({ jazzVolume: Number(e.target.value) })} /></label>
           <label className="flex items-center justify-between gap-3"><span>Metronome sound</span>
             <span className="flex gap-2"><select className="input" value={set.metronome} onChange={(e) => setSettings({ metronome: e.target.value as 'click' | 'wood' | 'beep' })}><option value="click">Click</option><option value="wood">Woodblock</option><option value="beep">Beep</option></select>
               <button className="btn-ghost py-1" onClick={async () => { await initAudio(); click(true); setTimeout(() => click(false), 400); }}>Test</button></span></label>

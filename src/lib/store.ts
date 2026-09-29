@@ -41,6 +41,7 @@ export interface AppState {
     volume: number; metronome: 'click' | 'wood' | 'beep';
     language: 'spanish' | 'french';
     name: string;
+    jazz: boolean; jazzVolume: number;
   };
   notes: Record<string, string>;
   decks: Deck[];
@@ -49,6 +50,7 @@ export interface AppState {
   lastPiano: { path: string; label: string } | null;
   chats: Record<string, ChatMsg[]>;
   mistakes: Mistake[];
+  studyUnits: Record<string, number>; // best unit-test score (out of 10), key "subject:unitIndex"
 }
 
 const KEY = 'study-piano-app-v1';
@@ -62,7 +64,7 @@ const fresh = (): AppState => ({
   topics: {},
   quizzes: [],
   piano: { lessons: {}, unitTests: {}, unlockedUnit: 1, placementDone: false, songs: {}, noteGameNPM: [] },
-  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '' },
+  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5 },
   notes: {},
   decks: [],
   recordings: [],
@@ -70,6 +72,7 @@ const fresh = (): AppState => ({
   lastPiano: null,
   chats: {},
   mistakes: [],
+  studyUnits: {},
 });
 
 /** Fill in any fields missing from older saves. */
@@ -313,6 +316,23 @@ export function setLast(kind: 'study' | 'piano', path: string, label: string) {
 export function setChat(subject: string, msgs: ChatMsg[]) { update((s) => ({ ...s, chats: { ...s.chats, [subject]: msgs.slice(-80) } })); }
 export function recordMistake(m: Omit<Mistake, 'id' | 'date'>) {
   update((s) => ({ ...s, mistakes: [{ ...m, id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date: dayKey() }, ...s.mistakes].slice(0, 300) }));
+}
+export function recordUnitTest10(key: string, score: number) {
+  update((s0) => {
+    const prev = s0.studyUnits[key] ?? 0;
+    let s: AppState = { ...s0, studyUnits: { ...s0.studyUnits, [key]: Math.max(prev, score) } };
+    if (score >= 8 && prev < 8) { s = addXpIn(s, 100); setTimeout(() => celebrate('Unit passed!', '🎓', `${score}/10 on the unit test. +100 XP`), 60); }
+    return s;
+  });
+}
+export function recordFinalExam(subjectId: string, pct: number) {
+  update((s0) => {
+    const key = `${subjectId}:final`;
+    const prev = s0.studyUnits[key] ?? 0;
+    let s: AppState = { ...s0, studyUnits: { ...s0.studyUnits, [key]: Math.max(prev, pct) } };
+    if (pct >= 70 && prev < 70) { s = addXpIn(s, 300); setTimeout(() => celebrate('Final exam passed!', '🏆', `${pct}% on the final. +300 XP`), 60); }
+    return s;
+  });
 }
 export function setMistakes(mistakes: Mistake[]) { update((s) => ({ ...s, mistakes })); }
 export function resetProgress() { state = fresh(); emit(); }

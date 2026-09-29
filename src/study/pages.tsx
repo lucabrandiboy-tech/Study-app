@@ -87,29 +87,95 @@ export function SubjectPage() {
   const { subjectId } = useParams();
   const subjects = useSubjects();
   const topics = useApp((s) => s.topics);
+  const unitsBest = useApp((s) => s.studyUnits);
   const subject = subjects.find((s) => s.id === subjectId);
   usePage({ label: `${subject?.name ?? 'Study'}`, subject: subjectId ?? 'general' });
   if (!subject) return <div>Subject not found. <Link to="/study" className="text-edge">Back</Link></div>;
+  const units = subject.units?.length ? subject.units : [{ title: 'All Topics', topicIds: subject.topics.map((t) => t.id) }];
+  const byId = new Map(subject.topics.map((t) => [t.id, t]));
+  const isMastered = (id: string) => (topics[id]?.masteredLevel ?? -1) >= 0;
+  const done = subject.topics.filter((t) => isMastered(t.id)).length;
+  const nextUp = subject.topics.find((t) => !isMastered(t.id))?.id;
+  const finalBest = unitsBest[`${subject.id}:final`];
+  let n = 0;
   return (
     <div>
       <PageHeader title={<span>{subject.icon} {subject.name}</span>} sub={subject.blurb} right={<Link to={subject.advanced ? '/advanced' : '/study'} className="btn-ghost">← {subject.advanced ? 'Super Advanced' : 'Study Zone'}</Link>} />
-      <div className="grid grid-cols-2 gap-3">
-        {subject.topics.map((t, i) => {
-          const st = topics[t.id];
-          const acc = st && st.attempts ? Math.round((st.correct / st.attempts) * 100) : null;
-          const m = masteryLabel(t.id, topics);
-          return (
-            <Link key={t.id} to={`/study/${subject.id}/${t.id}`} className="card flex items-center gap-4 py-4">
-              <div className="w-10 h-10 rounded-full bg-card2 border border-edge/50 flex items-center justify-center font-extrabold text-edge">{i + 1}</div>
-              <div className="flex-1">
-                <div className="font-bold">{subject.id === 'geometry' ? `Unit ${i + 1}: ` : ''}{t.title}</div>
-                <div className="text-xs muted">{acc !== null ? `${acc}% accuracy · ${st!.attempts} answered` : 'Not started'}</div>
-              </div>
-              {m && <span className="chip border-good text-good">✓ {m}</span>}
-            </Link>
-          );
-        })}
+      <div className="card mb-4 flex items-center gap-6">
+        <div className="flex-1">
+          <div className="font-bold mb-1">Course progress: {done}/{subject.topics.length} topics mastered</div>
+          <ProgressBar value={done} max={Math.max(1, subject.topics.length)} />
+        </div>
+        <Link to={`/study/quiz?subject=${subject.id}&final=1`} className="btn">🏆 Final Exam{finalBest !== undefined ? ` · best ${finalBest}%` : ''}</Link>
       </div>
+      <RandomQuestion subject={subject} />
+      {units.map((u, k) => {
+        const ts = u.topicIds.map((id) => byId.get(id)).filter(Boolean) as Subject['topics'];
+        const m = ts.filter((t) => isMastered(t.id)).length;
+        const best = unitsBest[`${subject.id}:${k}`];
+        return (
+          <div key={k} className="mb-6">
+            <div className="flex items-center gap-3 mb-2">
+              <h2 className="h2 flex-1">Unit {k + 1}: {u.title} <span className="text-sm muted font-normal">· {m}/{ts.length} mastered</span></h2>
+              {subject.units?.length ? <Link to={`/study/quiz?subject=${subject.id}&unit=${k}`} className="btn-ghost">🎓 Unit test{best !== undefined ? ` · best ${best}/10${best >= 8 ? ' ✓' : ''}` : ''}</Link> : null}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {ts.map((t) => {
+                n++;
+                const st = topics[t.id];
+                const acc = st && st.attempts ? Math.round((st.correct / st.attempts) * 100) : null;
+                const ml = masteryLabel(t.id, topics);
+                return (
+                  <Link key={t.id} to={`/study/${subject.id}/${t.id}`} className={`card flex items-center gap-4 py-4 ${t.id === nextUp ? 'border-edge ring-2 ring-edge/40' : ''}`}>
+                    <div className="w-10 h-10 rounded-full bg-card2 border border-edge/50 flex items-center justify-center font-extrabold text-edge">{n}</div>
+                    <div className="flex-1">
+                      <div className="font-bold">{t.title}</div>
+                      <div className="text-xs muted">{t.id === nextUp ? '👉 Next up · ' : ''}{acc !== null ? `${acc}% accuracy · ${st!.attempts} answered` : 'Not started'}</div>
+                    </div>
+                    {ml && <span className="chip border-good text-good">✓ {ml}</span>}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Random question generator — pulls a fresh generated question from any topic in the subject. No internet or API key needed. */
+function RandomQuestion({ subject }: { subject: Subject }) {
+  const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState<{ q: Question; title: string; id: string } | null>(null);
+  const [answered, setAnswered] = useState(false);
+  const [count, setCount] = useState({ right: 0, total: 0 });
+  const roll = () => {
+    const t = subject.topics[Math.floor(Math.random() * subject.topics.length)];
+    setPick({ q: t.generate(Math.floor(Math.random() * 3) as Difficulty), title: t.title, id: t.id });
+    setAnswered(false); setOpen(true);
+  };
+  const onDone = (g: Graded) => {
+    setAnswered(true);
+    setCount((c) => ({ right: c.right + (g.correct ? 1 : 0), total: c.total + 1 }));
+    if (!pick) return;
+    recordAnswer(pick.id, g.correct, GEOMETRY_IDS);
+    if (!g.correct) recordMistake({ topicId: pick.id, topic: `${subject.name} > ${pick.title}`, prompt: pick.q.prompt, given: g.given, correct: correctAnswerText(pick.q), why: g.feedback, solution: pick.q.explanation });
+    recordActivity('study');
+  };
+  return (
+    <div className="card mb-6">
+      <div className="flex items-center gap-3">
+        <div className="flex-1"><div className="font-bold">🎲 Random Question Generator</div><div className="text-xs muted">A brand-new question from any {subject.name} topic, every time.{count.total ? ` Session: ${count.right}/${count.total}` : ''}</div></div>
+        <button className="btn" onClick={roll}>{open ? '🎲 New random question' : '🎲 Give me a question'}</button>
+      </div>
+      {open && pick && (
+        <div className="mt-4">
+          <div className="text-xs muted mb-2">From: <b>{pick.title}</b></div>
+          <QuestionView key={pick.q.prompt + count.total} q={pick.q} mode="practice" onDone={onDone} context={`${subject.name} > ${pick.title}`} />
+          {answered && <button className="btn mt-4" onClick={roll}>Next random question →</button>}
+        </div>
+      )}
     </div>
   );
 }
