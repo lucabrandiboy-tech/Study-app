@@ -7,7 +7,7 @@ import { chordTones, spell } from '../theory';
 import { makePiece, type Exercise, type Piece } from '../notation';
 
 export type Level = 'Beginner' | 'Intermediate' | 'Pre-Advanced' | 'Advanced';
-export type Category = 'Kids' | 'Folk & World' | 'Holiday' | 'Classical' | 'Hymns & Anthems' | 'Originals' | 'Imported';
+export type Category = 'Kids' | 'Folk & World' | 'Holiday' | 'Classical' | 'Hymns & Anthems' | 'Originals' | 'Pop Originals' | 'Imported';
 export interface SongEntry { id: string; title: string; composer: string; level: Level; category: Category; piece: () => Piece; ex?: Exercise }
 
 type Style = 'root' | 'oompah' | 'broken';
@@ -37,7 +37,7 @@ function durTokens(q: number): string[] {
   return out;
 }
 /** One note (or chord/rest) lasting `q` beats, tied across tokens if needed. */
-function held(note: string, q: number): string {
+export function held(note: string, q: number): string {
   const toks = durTokens(q);
   if (note === 'r') return toks.map((t) => `r:${t}`).join(' ');
   return toks.map((t, i) => `${note}:${t}${i < toks.length - 1 ? '~' : ''}`).join(' ');

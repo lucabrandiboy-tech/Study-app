@@ -6,6 +6,8 @@ import { ANTHEMS, CLASSICAL } from './library/classical';
 import { ORIGINALS } from './library/originals';
 import { PRE_ADVANCED } from './library/preAdvanced';
 import { STYLE_POP } from './library/stylePop';
+import { popSongs } from './library/popGen';
+import { REAL_CLASSICS } from './library/realClassics';
 
 export type { SongEntry, Level, Category };
 
@@ -20,6 +22,7 @@ export const CATEGORIES: { id: Category; icon: string; from: string; to: string 
   { id: 'Classical', icon: '🎻', from: '#C7D2FE', to: '#6366F1' },
   { id: 'Hymns & Anthems', icon: '🕊️', from: '#BAE6FD', to: '#0284C7' },
   { id: 'Originals', icon: '✨', from: '#F5D0FE', to: '#A855F7' },
+  { id: 'Pop Originals', icon: '🎤', from: '#FBCFE8', to: '#EC4899' },
   { id: 'Imported', icon: '📂', from: '#E5E7EB', to: '#6B7280' },
 ];
 
@@ -68,11 +71,11 @@ export function songLibrary(): SongEntry[] {
     const level: Level = /Bach|Mozart|Satie|Chopin/.test(composer) ? 'Pre-Advanced' : 'Advanced';
     return { id: `rep-${l.id}`, title, composer, level, category: 'Classical', ex: l.ex, piece: () => lessonPiece(`rep-${l.id}`, title, l.ex) };
   });
-  const baseDefs = [...KIDS, ...FOLK, ...HOLIDAY, ...ANTHEMS, ...CLASSICAL, ...CLASSIC_EXTRAS, ...ORIGINALS, ...PRE_ADVANCED, ...STYLE_POP];
+  const baseDefs = [...KIDS, ...FOLK, ...HOLIDAY, ...ANTHEMS, ...CLASSICAL, ...CLASSIC_EXTRAS, ...ORIGINALS, ...PRE_ADVANCED, ...STYLE_POP, ...REAL_CLASSICS];
   // Every easier song also gets a harder Pre-Advanced arrangement (octaves, broken chords, faster, two verses).
   const courseDefs: SongDef[] = [...course, jingle].filter((e) => e.level !== 'Advanced' && e.level !== 'Pre-Advanced' && e.ex?.rh).map((e) => ({ id: e.id, t: e.title, c: e.composer, lv: 'I', cat: e.category, rh: e.ex!.rh!, lh: e.ex!.lh, time: e.ex!.time, key: e.ex!.key, bpm: e.ex!.bpm }));
   const arrangements = [...baseDefs.filter((d) => d.lv === 'B' || d.lv === 'I'), ...courseDefs].map(proArrangement);
-  const defs = [...baseDefs, ...arrangements].map(toEntry);
+  const defs = [...baseDefs, ...arrangements, ...popSongs()].map(toEntry);
   const order = { Beginner: 0, Intermediate: 1, 'Pre-Advanced': 2, Advanced: 3 };
   const all = [...course, jingle, ...rep, ...defs];
   const seen = new Set<string>();
