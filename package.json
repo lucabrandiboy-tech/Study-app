@@ -11,7 +11,8 @@
     "typecheck": "tsc -b",
     "preview": "vite preview",
     "check": "tsx scripts/check-content.ts",
-    "build:single": "vite build --config vite.single.config.ts"
+    "build:single": "vite build --config vite.single.config.ts",
+    "build:pwa": "vite build --config vite.single.config.ts && node scripts/build-pwa.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
