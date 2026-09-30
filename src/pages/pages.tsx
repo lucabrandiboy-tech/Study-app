@@ -10,6 +10,7 @@ import { Flame, ProgressBar, Ring, Stat, PageHeader, Stars } from '../components
 import { useSubjects } from '../study/pages';
 import { COURSE } from '../piano/course';
 import { MidiSetupPanel } from '../piano/MidiSetup';
+import { PhoneBanner, PhoneSetupCard } from '../components/PhoneSetup';
 import { setVolume, initAudio, click } from '../piano/audio';
 import { SaveFileCard } from '../components/SaveFile';
 
@@ -66,6 +67,7 @@ export function Home() {
   return (
     <div>
       <PageHeader title={`${greeting()}${s.settings.name ? `, ${s.settings.name}` : ''}! 👋`} sub={new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })} />
+      <PhoneBanner />
       <div className="grid grid-cols-3 gap-4 mb-4">
         <div className="card flex items-center gap-5">
           <Flame n={streak} size={64} />
@@ -228,6 +230,7 @@ export function Settings() {
     <div>
       <PageHeader title="Settings" />
       <div className="grid grid-cols-2 gap-4">
+        <div className="col-span-2"><PhoneSetupCard /></div>
         <SaveFileCard />
         <div className="card space-y-3 col-span-2"><div className="h2">🎹 MIDI keyboard</div><MidiSetupPanel /></div>
         <div className="card space-y-3">
