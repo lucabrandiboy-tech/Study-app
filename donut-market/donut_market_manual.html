@@ -1,0 +1,86 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DonutSMP Market</title><meta name="color-scheme" content="dark">
+<style>
+:root{--bg:#000;--card:#111;--fg:#fff;--muted:#9a9a9a;--line:#262626;--up:#0ecb81;--down:#f6465d;--acc:#fcd535}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+header{padding:14px 16px;border-bottom:1px solid var(--line)}h1{font-size:20px;margin:0}h1 span{color:var(--acc)}
+.tabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid var(--line)}
+.tab{background:none;border:0;color:var(--muted);font:inherit;font-weight:600;padding:12px 14px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:var(--fg);border-color:var(--acc)}
+form{display:flex;gap:8px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line);align-items:center}
+input,button.go{background:var(--card);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:8px 10px;font:inherit}
+input{width:150px}input#item{width:200px}button.go{background:var(--acc);color:#000;font-weight:700;border:0;cursor:pointer}
+.note{color:var(--muted);font-size:13px;padding:10px 16px 0}
+.wrap{padding:0 16px 24px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:500;font-size:12px;text-align:right;padding:8px 10px;white-space:nowrap}
+td{padding:10px;text-align:right;border-top:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}.name{font-weight:600}.up{color:var(--up)}.down{color:var(--down)}.muted{color:var(--muted)}
+.pill{display:inline-block;min-width:70px;text-align:center;padding:3px 8px;border-radius:4px;font-weight:600}
+.pill.up{background:var(--up);color:#000}.pill.down{background:var(--down);color:#fff}.pill.flat{background:var(--line)}
+.x{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px}
+</style></head><body>
+<header><h1>Donut<span>SMP</span> Market</h1></header>
+<form id="f">
+  <input id="item" list="names" placeholder="Item (e.g. diamond)" required>
+  <input id="ah" placeholder="AH price each (e.g. 1.2k)">
+  <input id="ord" placeholder="/order price each">
+  <button class="go">Add price</button>
+</form>
+<datalist id="names"></datalist>
+<div class="tabs"><button class="tab" data-t="rising">Rising prices</button><button class="tab" data-t="orders">Orders &rarr; AH sell</button></div>
+<div class="note" id="note"></div>
+<div class="wrap"><table id="tbl"></table></div>
+<script>
+// Everything is saved in this browser. Type prices you see in-game; the page tracks them over time.
+const $ = s => document.querySelector(s);
+const load = () => { try { return JSON.parse(localStorage.getItem("donutPrices") || "{}"); } catch(e) { return {}; } };
+const save = () => { try { localStorage.setItem("donutPrices", JSON.stringify(db)); } catch(e) {} };
+let db = load(), tab = location.hash.slice(1) === "orders" ? "orders" : "rising";
+const parse = s => { s = String(s||"").trim().toLowerCase().replace(/[$,\s]/g,""); if (!s) return null;
+  const m = s.match(/^([\d.]+)([kmb]?)$/); if (!m) return null; return +m[1] * ({"":1,k:1e3,m:1e6,b:1e9})[m[2]]; };
+const money = n => n == null ? "-" : "$" + (Math.abs(n)>=1e9?(n/1e9).toFixed(2)+"B":Math.abs(n)>=1e6?(n/1e6).toFixed(2)+"M":Math.abs(n)>=1e3?(n/1e3).toFixed(2)+"K":(+n).toFixed(2));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const last = (a, f) => { for (let i = a.length-1; i >= 0; i--) if (a[i][f] != null) return a[i][f]; return null; };
+const first = (a, f) => { for (const p of a) if (p[f] != null) return p[f]; return null; };
+function spark(h, f){
+  const pts = h.filter(p => p[f] != null); if (pts.length < 2) return '<span class="muted">add more prices</span>';
+  const w=110, ht=32, ys=pts.map(p=>p[f]), mn=Math.min(...ys), mx=Math.max(...ys), r=(mx-mn)||1, up = ys[ys.length-1] >= ys[0];
+  return `<svg width="${w}" height="${ht}"><polyline fill="none" stroke="var(--${up?"up":"down"})" stroke-width="1.8" points="${
+    pts.map((p,i)=>(i/(pts.length-1)*w).toFixed(1)+","+(ht-2-(p[f]-mn)/r*(ht-4)).toFixed(1)).join(" ")}"/></svg>`;
+}
+const pill = c => c == null ? '<span class="muted">-</span>' : `<span class="pill ${c>0.05?"up":c<-0.05?"down":"flat"}">${c>0?"+":""}${c.toFixed(1)}%</span>`;
+const ago = t => { const m = Math.round((Date.now()-t)/60000); return m < 1 ? "just now" : m < 60 ? m+"m ago" : m < 1440 ? Math.round(m/60)+"h ago" : Math.round(m/1440)+"d ago"; };
+function rows(){
+  return Object.keys(db).map(id => { const h = db[id], ah = last(h,"ah"), a0 = first(h,"ah"), ord = last(h,"ord");
+    return { id, h, ah, ord, change: ah != null && a0 ? (ah-a0)/a0*100 : null,
+      profit: ah != null && ord != null ? ah - ord : null, pct: ah != null && ord ? (ah-ord)/ord*100 : null, t: h[h.length-1].t }; });
+}
+function render(){
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  $("#names").innerHTML = Object.keys(db).map(n => `<option value="${esc(n)}">`).join("");
+  let r = rows(), head, row;
+  if (tab === "rising") {
+    $("#note").textContent = "AH prices you've entered, sorted by how much they've gone up since your first entry.";
+    r.sort((a,b) => (b.change ?? -1e9) - (a.change ?? -1e9));
+    head = ["Item","AH price","Change","Chart","Entries","Updated",""];
+    row = i => `<td class="name">${esc(i.id)}</td><td>${money(i.ah)}</td><td>${pill(i.change)}</td><td>${spark(i.h,"ah")}</td><td>${i.h.length}</td><td class="muted">${ago(i.t)}</td>`;
+  } else {
+    $("#note").textContent = "Buy with /order, sell with /ah sell. Sorted by profit %. Green = worth doing.";
+    r.sort((a,b) => (b.pct ?? -1e9) - (a.pct ?? -1e9));
+    head = ["Item","/order price","AH selling for","Profit / item","Profit %","AH chart","Updated",""];
+    row = i => `<td class="name">${esc(i.id)}</td><td>${money(i.ord)}</td><td>${money(i.ah)}</td><td class="${i.profit>0?"up":"down"}">${i.profit==null?"-":(i.profit>0?"+":"")+money(i.profit)}</td><td>${pill(i.pct)}</td><td>${spark(i.h,"ah")}</td><td class="muted">${ago(i.t)}</td>`;
+  }
+  $("#tbl").innerHTML = "<tr>" + head.map(h => `<th>${h}</th>`).join("") + "</tr>" + (r.length
+    ? r.map(i => `<tr>${row(i)}<td><button class="x" data-del="${esc(i.id)}" title="Delete">×</button></td></tr>`).join("")
+    : `<tr><td colspan="${head.length}" class="muted">No prices yet. Check /ah and /order in-game, then add prices above.</td></tr>`);
+}
+$("#f").onsubmit = e => { e.preventDefault();
+  const id = $("#item").value.trim().toLowerCase(), ah = parse($("#ah").value), ord = parse($("#ord").value);
+  if (!id || (ah == null && ord == null)) { alert("Enter an item and at least one price (like 500, 1.2k or 3m)."); return; }
+  (db[id] = db[id] || []).push({ t: Date.now(), ah, ord }); save();
+  $("#ah").value = $("#ord").value = ""; $("#item").focus(); render(); };
+$("#tbl").onclick = e => { const d = e.target.dataset.del; if (d && confirm("Delete all prices for " + d + "?")) { delete db[d]; save(); render(); } };
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => { tab = b.dataset.t; location.hash = tab; render(); });
+render(); setInterval(render, 30000);
+</script></body></html>
