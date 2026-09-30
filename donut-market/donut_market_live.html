@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DonutSMP Market</title>
+<meta name="color-scheme" content="dark">
+<style>
+:root{--bg:#000;--card:#111;--fg:#fff;--muted:#9a9a9a;--line:#262626;--up:#0ecb81;--down:#f6465d;--acc:#fcd535}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)}
+h1{font-size:20px;margin:0}h1 span{color:var(--acc)}
+.live{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--up);animation:p 1.5s infinite}@keyframes p{50%{opacity:.3}}
+.tabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid var(--line)}
+.tab{background:none;border:0;color:var(--muted);font:inherit;font-weight:600;padding:12px 14px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:var(--fg);border-color:var(--acc)}
+.bar{display:flex;gap:10px;padding:12px 16px;flex-wrap:wrap;align-items:center}
+input{background:var(--card);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:8px 10px;font:inherit;min-width:200px}
+.note{color:var(--muted);font-size:13px}
+.wrap{padding:0 16px 24px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:500;font-size:12px;text-align:right;padding:8px 10px;cursor:pointer;white-space:nowrap}
+td{padding:10px;text-align:right;border-top:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}tr:hover td{background:var(--card)}
+.name{font-weight:600}.up{color:var(--up)}.down{color:var(--down)}.muted{color:var(--muted)}
+.pill{display:inline-block;min-width:70px;text-align:center;padding:3px 8px;border-radius:4px;font-weight:600;color:#fff}
+.pill.up{background:var(--up)}.pill.down{background:var(--down)}.pill.flat{background:var(--line);color:var(--fg)}
+svg{display:block}
+</style></head><body>
+<header><h1>Donut<span>SMP</span> Market</h1>
+<div class="live"><span class="dot"></span><span id="upd"></span></div><button id="key" class="tab" style="margin-left:auto">API key</button></header>
+<div class="tabs"><button class="tab" data-t="rising">Rising prices</button><button class="tab" data-t="orders">Orders &rarr; AH sell</button></div>
+<div class="bar"><input id="q" placeholder="Search items..." autocomplete="off"><span class="note" id="note"></span></div>
+<div class="wrap"><table id="tbl"></table></div>
+<script>
+const API = "https://api.donutsmp.net/v1";
+const S = { get(k){ try { return localStorage.getItem(k); } catch(e) { return null; } }, set(k,v){ try { localStorage.setItem(k,v); } catch(e) {} } };
+const SET = { txPages: 10, listPages: 15, refresh: 60, tax: 0, profit: 25, minSales: 4, hours: 24 };
+let D = { updated: Date.now(), refresh: SET.refresh, items: [] }, status = "Starting…";
+let hist = {}; try { hist = JSON.parse(S.get("dh") || "{}"); } catch(e) {}
+function getKey(force){ let k = S.get("dkey"); if (!k || force) { k = (prompt("Paste your DonutSMP API key (type /api in-game to get one):") || "").trim(); if (k) S.set("dkey", k); } return k; }
+async function page(path, key){
+  const r = await fetch(API + "/" + path, { headers: { Authorization: "Bearer " + key, Accept: "application/json" } });
+  if (r.status === 401 || r.status === 403) throw new Error("key");
+  if (!r.ok) return null;
+  const j = await r.json(); return Array.isArray(j.result) ? j.result : [];
+}
+const itemKey = it => { if (!it || !it.id) return null; const l = it.enchants && it.enchants.enchantments && it.enchants.enchantments.levels; if (l && Object.keys(l).length) return null; return it.id.replace(/^minecraft:/, ""); };
+const unit = e => { const c = (e.item && e.item.count) || 1; return e.price ? e.price / c : null; };
+const med = a => { const s = [...a].sort((x,y)=>x-y), m = s.length >> 1; return !s.length ? null : s.length % 2 ? s[m] : (s[m-1]+s[m])/2; };
+async function update(){
+  const key = getKey(false); if (!key) { status = "Click \"API key\" and paste your key from /api."; render(); return; }
+  try {
+    status = "Updating…"; render();
+    const sold = {}, listed = {};
+    for (let p = 1; p <= SET.txPages; p++) { const r = await page("auction/transactions/" + p, key); if (!r || !r.length) break;
+      for (const e of r) { const k = itemKey(e.item), u = unit(e); if (k && u) (sold[k] = sold[k] || []).push(u); } }
+    for (let p = 1; p <= SET.listPages; p++) { const r = await page("auction/list/" + p, key); if (!r || !r.length) break;
+      for (const e of r) { const k = itemKey(e.item), u = unit(e); if (k && u) (listed[k] = listed[k] || []).push(u); } }
+    const now = Date.now(), cut = now - SET.hours * 3600e3, keep = 1 - SET.tax / 100, items = [];
+    for (const k in sold) { const s = sold[k]; if (s.length < SET.minSales) continue;
+      const h = s.length >> 1, recent = med(s.slice(0, h)), older = med(s.slice(h));
+      hist[k] = (hist[k] || []).filter(p => p[0] >= cut); hist[k].push([now, Math.round(recent*100)/100]);
+      const base = hist[k].length >= 3 ? hist[k][0][1] : older, change = base > 0 ? (recent - base) / base * 100 : 0;
+      const lowest = listed[k] ? Math.min(...listed[k]) : null, sellAt = lowest && lowest*0.99 < recent ? lowest*0.99 : recent;
+      const orderAt = sellAt * keep * (1 - SET.profit / 100);
+      items.push({ id: k, price: recent, change, sales: s.length, lowest, supply: listed[k] ? listed[k].length : 0, sellAt, orderAt, profit: sellAt*keep - orderAt, history: hist[k] });
+    }
+    for (const k in hist) { hist[k] = hist[k].filter(p => p[0] >= cut); if (!hist[k].length) delete hist[k]; }
+    S.set("dh", JSON.stringify(hist));
+    D = { updated: now, refresh: SET.refresh, items }; status = "";
+  } catch (e) {
+    if (e.message === "key") { S.set("dkey", ""); status = "API key rejected. Click \"API key\" and paste a new one."; }
+    else status = "Can't reach the DonutSMP API from this page (" + e.message + "). The browser may be blocking it.";
+  }
+  render();
+}
+const $ = s => document.querySelector(s);
+const money = n => n == null ? "-" : "$" + (Math.abs(n) >= 1e9 ? (n/1e9).toFixed(2)+"B" : Math.abs(n) >= 1e6 ? (n/1e6).toFixed(2)+"M" : Math.abs(n) >= 1e3 ? (n/1e3).toFixed(2)+"K" : (+n).toFixed(2));
+const nice = id => id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function spark(h, up){
+  if (!h || h.length < 2) return '<span class="muted">building…</span>';
+  const w=110, ht=32, ys=h.map(p=>p[1]), mn=Math.min(...ys), mx=Math.max(...ys), r=(mx-mn)||1;
+  const pts=h.map((p,i)=>(i/(h.length-1)*w).toFixed(1)+","+(ht-2-(p[1]-mn)/r*(ht-4)).toFixed(1)).join(" ");
+  return `<svg width="${w}" height="${ht}"><polyline fill="none" stroke="var(--${up?"up":"down"})" stroke-width="1.8" points="${pts}"/></svg>`;
+}
+const pill = c => `<span class="pill ${c>0.05?"up":c<-0.05?"down":"flat"}">${c>0?"+":""}${c.toFixed(1)}%</span>`;
+const TABS = {
+  rising: { note: "Items whose AH sale price is going up. Change is vs. the oldest saved price (or earlier sales on first run).",
+    sort: ["change", -1],
+    cols: [["Item","id"],["Price","price"],["Change","change"],["Chart",null],["Sales","sales"],["On AH","supply"],["Cheapest listed","lowest"]],
+    row: i => `<td class="name">${esc(nice(i.id))}</td><td>${money(i.price)}</td><td>${pill(i.change)}</td><td>${spark(i.history,i.change>=0)}</td><td>${i.sales}</td><td>${i.supply}</td><td>${money(i.lowest)}</td>` },
+  orders: { note: "What items are selling for on the AH right now. Put an /order in at \"Order at\", then /ah sell at \"Sell at\".",
+    sort: ["profit", -1],
+    cols: [["Item","id"],["Selling for (AH)","price"],["Cheapest listed","lowest"],["Order at","orderAt"],["Sell at","sellAt"],["Profit / item","profit"],["Change","change"],["Chart",null],["Sales","sales"]],
+    row: i => `<td class="name">${esc(nice(i.id))}</td><td>${money(i.price)}</td><td>${money(i.lowest)}</td><td class="up">${money(i.orderAt)}</td><td>${money(i.sellAt)}</td><td class="up">+${money(i.profit)}</td><td>${pill(i.change)}</td><td>${spark(i.history,i.change>=0)}</td><td>${i.sales}</td>` }
+};
+let tab = (location.hash.slice(1) in TABS) ? location.hash.slice(1) : "rising", sortBy = {};
+try { $("#q").value = sessionStorage.getItem("q") || ""; } catch(e) {}
+function render(){
+  const T = TABS[tab], [key, dir] = sortBy[tab] || T.sort, q = $("#q").value.toLowerCase();
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  $("#note").textContent = status || T.note;
+  let rows = D.items.filter(i => nice(i.id).toLowerCase().includes(q));
+  if (tab === "rising" && !q) rows = rows.filter(i => i.change > 0);
+  rows.sort((a,b) => (typeof a[key] === "string" ? a[key].localeCompare(b[key]) : ((a[key]??-1e18) - (b[key]??-1e18))) * dir);
+  $("#tbl").innerHTML = "<tr>" + T.cols.map(c => `<th data-k="${c[1]||""}">${c[0]}${c[1]===key?(dir>0?" ▲":" ▼"):""}</th>`).join("") + "</tr>" +
+    (rows.length ? rows.map(i => "<tr>" + T.row(i) + "</tr>").join("") : `<tr><td colspan="${T.cols.length}" class="muted">Nothing yet — waiting for data.</td></tr>`);
+}
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => { tab = b.dataset.t; location.hash = tab; render(); });
+$("#tbl").onclick = e => { const k = e.target.closest("th")?.dataset.k; if (!k) return;
+  const [ck, cd] = sortBy[tab] || TABS[tab].sort; sortBy[tab] = [k, ck === k ? -cd : -1]; render(); };
+$("#q").oninput = () => { try { sessionStorage.setItem("q", $("#q").value); } catch(e) {} render(); };
+$("#key").onclick = () => { getKey(true); update(); };
+const upd = () => { const s = Math.round((Date.now() - D.updated) / 1000); $("#upd").textContent = `LIVE · updated ${s}s ago`; };
+upd(); setInterval(upd, 1000); render();
+update(); setInterval(update, SET.refresh * 1000);
+</script></body></html>
