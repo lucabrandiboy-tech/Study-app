@@ -4,7 +4,7 @@
 
 html, body, #root { height: 100%; }
 body {
-  min-width: 1280px;
+  min-width: 0; /* was 1280px (desktop-only); phones now get their own layout */
   background: linear-gradient(135deg, #0B1026 0%, #1A0F3A 100%) fixed;
   color: #E8ECFF;
   color-scheme: dark;
@@ -24,3 +24,25 @@ body {
 }
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background: #241552; border-radius: 8px; }
+
+/* ---------- Phone layout ---------- */
+@media (max-width: 767px) {
+  html, body { overflow-x: hidden; }
+  /* multi-column grids stack into one column (calendar, keypads and small chip grids keep their columns) */
+  [class*="grid-cols-"]:not(.grid-cols-7):not(.grid-cols-5):not(.keep-cols) { grid-template-columns: minmax(0, 1fr) !important; }
+  /* fixed pixel widths never overflow the screen */
+  [class*="w-["] { max-width: 100%; }
+  .-m-8 { margin: -0.75rem !important; }
+  .p-8 { padding: 1rem !important; }
+  .card { padding: 1rem; }
+  h1, .text-4xl { font-size: 1.6rem !important; line-height: 2rem !important; }
+  .text-6xl, .text-7xl { font-size: 3rem !important; line-height: 1 !important; }
+  /* tap-friendly controls */
+  button, .btn, .btn-ghost, select, input { min-height: 40px; }
+  input[type="checkbox"] { min-height: 0; }
+  /* wide things (sheet music, piano keys) scroll sideways inside their own box */
+  svg, canvas { max-width: 100%; }
+  /* tab bars scroll sideways; button rows wrap instead of running off-screen */
+  .w-fit { max-width: 100%; overflow-x: auto; }
+  main .flex:not(.flex-col):not(.overflow-x-auto):not(.flex-nowrap):not(header) { flex-wrap: wrap; }
+}

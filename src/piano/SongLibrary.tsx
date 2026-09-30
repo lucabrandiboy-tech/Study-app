@@ -1,3 +1,4 @@
+import { ask } from '../lib/embed';
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp, recordSong, recordActivity, addImportedSong, removeImportedSong } from '../lib/store';
@@ -113,7 +114,7 @@ export function SongPlayer() {
                 {row.map((s) => (
                   <div key={s.id} className="relative">
                     <SongCard s={s} stars={done[s.id]?.stars} onOpen={() => { setImported(null); setOpen(s); }} />
-                    {c.id === 'Imported' && <button title="Remove from library" onClick={() => { if (confirm(`Remove "${s.title}" from your library?`)) removeImportedSong(s.id); }} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 border border-[#E5E7EB] text-sm hover:bg-[#FEE2E2]">✕</button>}
+                    {c.id === 'Imported' && <button title="Remove from library" onClick={() => { if (ask(`Remove "${s.title}" from your library?`)) removeImportedSong(s.id); }} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 border border-[#E5E7EB] text-sm hover:bg-[#FEE2E2]">✕</button>}
                   </div>
                 ))}
               </div>

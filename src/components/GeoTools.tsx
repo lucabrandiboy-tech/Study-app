@@ -1,3 +1,4 @@
+import { ask } from '../lib/embed';
 // Geometry side tools: an openable notepad and a TI-84–style calculator.
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -166,7 +167,7 @@ function Notepad() {
   useEffect(() => { try { localStorage.setItem(KEY, text); } catch { /* storage blocked */ } }, [text]);
   return (
     <div className="w-[300px] rounded-2xl bg-[#fffbe6] text-[#1f2937] shadow-[0_10px_30px_rgba(0,0,0,.5)] border border-[#e8dca0] overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-[#fde68a] font-bold text-sm">📝 Scratch Notepad<button className="text-xs font-semibold underline" onClick={() => { if (confirm('Clear the notepad?')) setText(''); }}>Clear</button></div>
+      <div className="flex items-center justify-between px-3 py-2 bg-[#fde68a] font-bold text-sm">📝 Scratch Notepad<button className="text-xs font-semibold underline" onClick={() => { if (ask('Clear the notepad?')) setText(''); }}>Clear</button></div>
       <textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.stopPropagation()} placeholder="Work out problems here… (saves automatically)"
         className="w-full h-[360px] p-3 bg-transparent outline-none resize-none font-mono text-[14px] leading-[24px]"
         style={{ backgroundImage: 'repeating-linear-gradient(transparent, transparent 23px, #e5d9a3 24px)', backgroundAttachment: 'local' }} />
@@ -181,7 +182,7 @@ export function GeoTools() {
   const onGeo = /^\/(study|advanced|plan)/.test(loc.pathname); // every study page
   if (!onGeo) return null;
   return (
-    <div className="fixed left-[250px] bottom-4 z-40 flex items-end gap-3 pointer-events-none">
+    <div className="fixed left-2 md:left-[250px] bottom-2 md:bottom-4 z-40 flex flex-wrap-reverse md:flex-nowrap items-end gap-2 md:gap-3 pointer-events-none max-w-[calc(100vw-5rem)]">
       <div className="flex flex-col gap-2 pointer-events-auto">
         <button onClick={() => setOpen((o) => ({ ...o, notes: !o.notes }))} className={`w-12 h-12 rounded-full text-2xl border-2 shadow-lg ${open.notes ? 'bg-[#fde68a] border-[#f59e0b]' : 'bg-card2 border-edge/60'}`} title="Notepad">📝</button>
         <button onClick={() => setOpen((o) => ({ ...o, calc: !o.calc }))} className={`w-12 h-12 rounded-full text-2xl border-2 shadow-lg ${open.calc ? 'bg-[#4a90d9] border-[#93c5fd]' : 'bg-card2 border-edge/60'}`} title="TI-84 calculator">🧮</button>

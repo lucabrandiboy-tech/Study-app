@@ -1,7 +1,7 @@
 import { useApp } from './lib/store';
 import { useEffect } from 'react';
 import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Sidebar, Celebrations } from './components/Shell';
+import { MobileTopBar, Sidebar, Celebrations } from './components/Shell';
 import { ChatButton, ChatPanel } from './components/ChatPanel';
 import { useUi } from './lib/store';
 import { Home, Progress, Settings } from './pages/pages';
@@ -31,7 +31,8 @@ export default function App() {
     <Router>
       <div className="flex min-h-screen">
         <Sidebar />
-        <main className={`flex-1 p-8 min-w-0 transition-[margin] ${chatOpen ? 'mr-[420px]' : ''}`}>
+        <main className={`flex-1 p-3 pb-28 md:p-8 min-w-0 transition-[margin] ${chatOpen ? 'md:mr-[420px]' : ''}`}>
+          <MobileTopBar />
           <div className="max-w-[1400px] mx-auto">
             <Routes>
               <Route path="/" element={<Home />} />
