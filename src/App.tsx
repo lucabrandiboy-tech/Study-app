@@ -15,6 +15,7 @@ import { installComputerKeyboard, connectMidi, setMidiAppSound } from './piano/i
 import { initFileSave } from './lib/filesave';
 import { JazzController } from './components/Jazz';
 import { GeoTools } from './components/GeoTools';
+import { Reminders } from './components/Reminders';
 import { APlanPage } from './study/APlan';
 import { HomeworkCalendar } from './study/Calendar';
 
@@ -62,6 +63,7 @@ export default function App() {
       </div>
       <JazzController />
       <GeoTools />
+      <Reminders />
       <ChatButton />
       <ChatPanel />
       <Celebrations />
