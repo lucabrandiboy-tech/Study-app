@@ -2,21 +2,36 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Minecraft Chat Macro</title>
 <style>
-:root{--bg:#f4f4f5;--card:#fff;--fg:#18181b;--muted:#52525b;--acc:#16a34a}
-@media (prefers-color-scheme:dark){:root{--bg:#18181b;--card:#27272a;--fg:#fafafa;--muted:#a1a1aa}}
+:root{--bg:#f4f4f5;--card:#fff;--fg:#18181b;--muted:#52525b;--acc:#15803d}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#18181b;--card:#27272a;--fg:#fafafa;--muted:#a1a1aa}}
+:root[data-theme="dark"]{--bg:#18181b;--card:#27272a;--fg:#fafafa;--muted:#a1a1aa}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;padding:16px}
-.card{max-width:560px;margin:40px auto;background:var(--card);border-radius:12px;padding:24px}
-h1{margin:0 0 4px;font-size:22px} p,li{color:var(--muted)}
-button{display:block;width:100%;margin:12px 0;padding:14px;border:0;border-radius:8px;background:var(--acc);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
-</style></head><body><div class="card">
+.card{max-width:560px;margin:32px auto;background:var(--card);border-radius:12px;padding:24px}
+h1{margin:0 0 4px;font-size:22px} p,li{color:var(--muted)} #msg{min-height:1.5em}
+button{width:100%;margin:12px 0;padding:14px;border:0;border-radius:8px;background:var(--acc);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+</style>
+</head><body>
+<div class="card">
 <h1>Minecraft Chat Macro</h1>
-<p>Middle mouse click in Minecraft &rarr; T, paste, Enter, scroll wheel up.</p>
-<button onclick="dl()">Download macro (2 files)</button>
-<ol><li>Save both files in the same folder.</li><li>Double-click <b>start_macro.bat</b> and leave the black window open.</li>
-<li>Copy your text, go in-game, click the middle mouse button.</li><li>Press F9 to stop.</li></ol>
+<p>Windows + Minecraft Java. Middle mouse click &rarr; T, paste, Enter, scroll wheel up.</p>
+<button id="dl" disabled>Download macro (.zip)</button>
+<p id="msg">Loading…</p>
+<ol><li>Right-click the zip &rarr; <b>Extract All</b>.</li>
+<li>Open the folder, double-click <b>start_macro.bat</b>, leave the black window open.</li>
+<li>Copy your text, go in-game, click the middle mouse button.</li>
+<li>Press F9 or close the black window to stop.</li></ol>
 </div>
 <script>
-const files={"chat_paste.ps1":"# Minecraft chat macro - PowerShell (built into Windows, nothing to install)\n# Press middle mouse (wheel click) in Minecraft: T (open chat) -> paste -> Enter (send) -> scroll wheel up\n# Press F9 (or close this window) to stop.\n\nAdd-Type -AssemblyName System.Windows.Forms\nAdd-Type @\"\nusing System;\nusing System.Runtime.InteropServices;\npublic class K {\n    [DllImport(\"user32.dll\")] public static extern short GetAsyncKeyState(int vKey);\n    [DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow();\n    [DllImport(\"user32.dll\")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);\n    [DllImport(\"user32.dll\")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);\n    [DllImport(\"user32.dll\")] public static extern uint MapVirtualKey(uint code, uint mapType);\n    [DllImport(\"user32.dll\")] public static extern uint SendInput(uint n, INPUT[] inputs, int size);\n    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr extra; }\n    [StructLayout(LayoutKind.Explicit, Size = 40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }\n    public static void Down(byte vk) { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 0, UIntPtr.Zero); }\n    public static void Up(byte vk)   { keybd_event(vk, (byte)MapVirtualKey(vk, 0), 2, UIntPtr.Zero); }\n    // Types text straight into the chat box (works even if Ctrl+V doesn't)\n    public static void TypeText(string text) {\n        foreach (char c in text) {\n            if (c == '\\r' || c == '\\n') continue;\n            INPUT[] ins = new INPUT[2];\n            ins[0].type = 1; ins[0].ki.wScan = c; ins[0].ki.dwFlags = 4;       // KEYEVENTF_UNICODE\n            ins[1].type = 1; ins[1].ki.wScan = c; ins[1].ki.dwFlags = 4 | 2;   // + KEYUP\n            SendInput(2, ins, Marshal.SizeOf(typeof(INPUT)));\n        }\n    }\n    [DllImport(\"user32.dll\")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);\n    public static void ScrollUp() { mouse_event(0x0800, 0, 0, 120, UIntPtr.Zero); }   // mouse wheel up one notch\n    public static void Tap(byte vk)  { Down(vk); System.Threading.Thread.Sleep(1); Up(vk); }\n}\n\"@\n\nfunction Test-MinecraftFocused {\n    $procId = [uint32]0\n    [void][K]::GetWindowThreadProcessId([K]::GetForegroundWindow(), [ref]$procId)\n    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue\n    return $p -and ($p.ProcessName -eq 'javaw' -or $p.ProcessName -eq 'java')\n}\n\nWrite-Host \"Macro running. Press middle mouse (wheel click) in Minecraft. Press F9 to stop.\"\n$wasDown = $false\nwhile ($true) {\n    if ([K]::GetAsyncKeyState(0x78) -band 0x8000) { break }   # F9 = quit\n    $isDown = ([K]::GetAsyncKeyState(0x04) -band 0x8000) -ne 0  # middle mouse button\n    if ($isDown -and -not $wasDown -and (Test-MinecraftFocused)) {\n        $text = Get-Clipboard -Raw     # read clipboard first (saves time)\n        Start-Sleep -Milliseconds 3\n        [K]::Tap(0x54)                 # T  - open chat\n        Start-Sleep -Milliseconds 6    # wait for chat box (raise to 50 if paste gets lost)\n        if ($text) { [K]::TypeText($text) }   # paste clipboard text\n        Start-Sleep -Milliseconds 2\n        [K]::Tap(0x0D)                 # Enter - send\n        Start-Sleep -Milliseconds 3    # let chat close so the scroll reaches the hotbar\n        [K]::ScrollUp()                # scroll wheel up\n    }\n    $wasDown = $isDown\n    Start-Sleep -Milliseconds 15\n}\nWrite-Host \"Macro stopped.\"\n","start_macro.bat":"@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0chat_paste.ps1\"\r\npause\r\n"};
-function save(name,text){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([text],{type:"text/plain"}));a.download=name;document.body.appendChild(a);a.click();a.remove();}
-function dl(){save("chat_paste.ps1",files["chat_paste.ps1"]);setTimeout(()=>save("start_macro.bat",files["start_macro.bat"]),400);}
-</script></body></html>
+const ZIP="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";
+const btn=document.getElementById("dl"),msg=document.getElementById("msg");
+btn.disabled=false;msg.textContent="";
+btn.onclick=()=>{
+  const bytes=Uint8Array.from(atob(ZIP),c=>c.charCodeAt(0));
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([bytes],{type:"application/zip"}));
+  a.download="minecraft-macro.zip";document.body.appendChild(a);a.click();a.remove();
+  msg.textContent="Downloaded! Check your Downloads folder.";
+};
+</script>
+</body></html>
