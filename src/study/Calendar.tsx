@@ -22,6 +22,17 @@ export function HomeworkCalendar() {
   const [sel, setSel] = useState(today);
   const [title, setTitle] = useState('');
   const [cls, setCls] = useState('');
+  const [qTitle, setQTitle] = useState('');
+  const [qCls, setQCls] = useState('');
+  const [qDue, setQDue] = useState(() => addDays(dayKey(), 1));
+  const [flash, setFlash] = useState<string | null>(null);
+  const quickAdd = () => {
+    if (!qTitle.trim() || !qDue) return;
+    addHomework({ title: qTitle.trim(), cls: qCls.trim() || 'General', due: qDue });
+    setFlash(`✅ Added "${qTitle.trim()}" — due ${parseDay(qDue).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}`);
+    setSel(qDue); setMonth(qDue.slice(0, 7)); setQTitle('');
+    setTimeout(() => setFlash(null), 3000);
+  };
   const classes = [...new Set([...grades.map((g) => g.name), ...homework.map((h) => h.cls), ...subjects.filter((s) => !s.advanced).map((s) => s.name)])].filter(Boolean);
 
   const first = parseDay(`${month}-01`);
@@ -41,6 +52,23 @@ export function HomeworkCalendar() {
   return (
     <div className="space-y-5">
       <PageHeader title="📅 Homework Calendar" sub="Add every assignment the day you get it. Rule: homework must be finished at least 1 day before it's due — or you don't get that day's streak." />
+
+      <div className="card border-accent/70">
+        <div className="font-bold mb-2">➕ Add homework</div>
+        <div className="grid grid-cols-[2fr_1fr_auto_auto] gap-2 items-end">
+          <label className="text-sm"><span className="muted">Assignment</span><input className="input w-full" placeholder="e.g. Math worksheet p. 42" value={qTitle} onChange={(e) => setQTitle(e.target.value)} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') quickAdd(); }} /></label>
+          <label className="text-sm"><span className="muted">Class</span><input className="input w-full" list="hw-classes" placeholder="e.g. Science" value={qCls} onChange={(e) => setQCls(e.target.value)} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') quickAdd(); }} /></label>
+          <label className="text-sm"><span className="muted">Due date</span><input type="date" className="input" value={qDue} onChange={(e) => setQDue(e.target.value)} /></label>
+          <button className="btn" onClick={quickAdd} disabled={!qTitle.trim() || !qDue}>+ Add to calendar</button>
+        </div>
+        <div className="flex gap-2 mt-2 text-xs">
+          <span className="muted">Due:</span>
+          {[['Tomorrow', 1], ['In 2 days', 2], ['In 3 days', 3], ['Next week', 7]].map(([l, n]) => (
+            <button key={l as string} className={`px-2 py-0.5 rounded-full border ${qDue === addDays(today, n as number) ? 'bg-accent border-accent' : 'border-edge/40 hover:border-edge'}`} onClick={() => setQDue(addDays(today, n as number))}>{l}</button>
+          ))}
+          {flash && <span className="text-good font-bold ml-auto">{flash}</span>}
+        </div>
+      </div>
 
       <div className={`card flex items-center gap-4 ${blocking.length ? 'border-bad/70' : 'border-good/60'}`}>
         <div className="text-4xl">{blocking.length ? '⏳' : '🔥'}</div>
@@ -70,7 +98,7 @@ export function HomeworkCalendar() {
               const inMonth = d.slice(0, 7) === month;
               const late = hw.some((h) => !h.done && h.due < today);
               return (
-                <button key={d} onClick={() => setSel(d)} className={`h-24 rounded-lg border p-1 text-left align-top flex flex-col overflow-hidden transition ${sel === d ? 'border-edge ring-2 ring-edge/50' : 'border-edge/20 hover:border-edge/60'} ${inMonth ? 'bg-navy' : 'bg-navy/30 opacity-50'} ${late ? 'border-bad/80' : ''}`}>
+                <button key={d} onClick={() => { setSel(d); setQDue(d); }} title="Click to pick this day as the due date" className={`h-24 rounded-lg border p-1 text-left align-top flex flex-col overflow-hidden transition ${sel === d ? 'border-edge ring-2 ring-edge/50' : 'border-edge/20 hover:border-edge/60'} ${inMonth ? 'bg-navy' : 'bg-navy/30 opacity-50'} ${late ? 'border-bad/80' : ''}`}>
                   <div className={`text-xs font-bold ${d === today ? 'bg-accent text-white rounded-full w-6 h-6 flex items-center justify-center' : ''}`}>{parseDay(d).getDate()}</div>
                   <div className="space-y-0.5 mt-0.5 w-full">
                     {ts.map((t) => <div key={t.id} className="text-[10px] truncate rounded px-1 bg-bad/30 text-white">🧪 {t.title}</div>)}
