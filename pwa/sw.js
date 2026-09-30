@@ -11,6 +11,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || !req.url.startsWith('http')) return;
+  // Search look-ups (Wikipedia text and pictures) always come fresh from the internet and aren't stored.
+  if (/^https:\/\/[^/]+\.(wikipedia|wikimedia)\.org\//.test(req.url)) return;
   // The app page itself: use the newest version when online, the saved copy when offline.
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put('./index.html', copy)); return res; }).catch(() => caches.match('./index.html')));

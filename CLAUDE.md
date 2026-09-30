@@ -1,6 +1,6 @@
 # Study + Piano
 
-A study and piano-practice app for an 8th grader: full courses for each subject, a homework calendar, an A+ Plan, and a piano course with a 1,000+ song library. Dark UI. It runs in the browser, on phones and computers, with no API key needed.
+A study and piano-practice app for an 8th grader: full courses for each subject, a homework calendar, an A+ Plan, a search bar (app content plus Wikipedia look-ups read inside the app), and a piano course with a 1,000+ song library. Dark UI. It runs in the browser, on phones and computers, with no API key needed.
 
 ## Stack
 React 18 + Vite + TypeScript (strict, `noUnusedLocals`), Tailwind 3, react-router (HashRouter in the single-file build), Tone.js (piano sound + generated smooth-jazz menu music), OpenSheetMusicDisplay (sheet music), @tonejs/midi, Recharts, qrcode-generator.
@@ -8,7 +8,7 @@ React 18 + Vite + TypeScript (strict, `noUnusedLocals`), Tailwind 3, react-route
 ## Commands
 - `npm run dev:web`: dev server (port 5173)
 - `npx tsc -b`: typecheck (run before every commit)
-- `npm run check`: validates every study question generator and every song's bar lengths (run before every commit)
+- `npm run check`: validates every study question generator, every song's bar lengths, and a few search results (run before every commit)
 - `npm run build:single`: one self-contained HTML file in `dist-single/index.html`. Copy it to `study-piano-app.html` (gitignored) to hand to the user.
 - `npm run build:pwa`: installable phone app in `dist-pwa/` (manifest, icons, offline service worker)
 
@@ -16,6 +16,7 @@ React 18 + Vite + TypeScript (strict, `noUnusedLocals`), Tailwind 3, react-route
 - `src/lib/store.ts`: all app state (localStorage, `useSyncExternalStore`). Includes settings, topics, streak, homework, grades, tests, spaced review, piano progress. `normalize()` fills new fields on load, so add defaults to `fresh()`.
 - `src/study/`: subjects and topics. `subjects.ts` builds each course from units; `bank.ts` (`bankTopic`) turns question banks into generators; `QuestionView.tsx` renders questions; `APlan.tsx` (daily review, tests, grades); `Calendar.tsx` (homework; unfinished homework due tomorrow or earlier blocks that day's streak).
 - `src/piano/`: `course.ts` (units and lessons), `songs.ts` and `library/*` (song library; `make.ts` holds the compact song format, `popGen.ts` generates the original pop songs, `preAdvanced.ts` holds the hand-written pieces), `engine.ts` (play modes), `SimplyPlayer.tsx` (full-screen player), `importer.ts` (MusicXML/.mxl/MIDI import), `input.ts` (MIDI keyboard + computer keys).
+- `src/pages/Search.tsx`: Search page (`/search`, sidebar box, 🔍 on phones, Ctrl+K). Results open in a preview on the page instead of navigating away. `src/lib/search.ts` indexes the app's content and the student's own homework/notes/decks (local only); `src/lib/wiki.ts` is the "Look it up" part: Wikipedia's public API (no key, `origin=*` CORS), article text shown inside the app. The service worker never caches Wikipedia requests.
 - `src/lib/localTutor.ts`: offline rule-based Study Buddy (teaches from lesson data, never gives homework answers).
 - `src/lib/cloud.ts`: cloud save when the app runs as a claude.ai artifact (per-user private `db` storage, chunked, newest copy wins). `src/lib/filesave.ts`: save files, downloads, daily auto-backup.
 - `src/components/`: Shell (sidebar + phone top bar/drawer), GeoTools (notepad + TI-84 style calculator on study pages), Reminders (popup on open), PhoneSetup (install QR code).

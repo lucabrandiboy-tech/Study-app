@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApp, recordMistake, recordAnswer, recordActivity, setTopicDifficulty, topicStats, DIFF_NAMES, Difficulty, setNote, celebrate, openChat } from '../lib/store';
 import { useActiveMinutes, usePage } from '../lib/hooks';
 import { getSubjects, findTopic } from './subjects';
@@ -187,7 +187,8 @@ export function TopicPage() {
   const found = findTopic(subjects, topicId ?? '');
   const stats = useApp((s) => s.topics[topicId ?? '']);
   const notes = useApp((s) => s.notes[`${subjectId}/${topicId}`] ?? '');
-  const [tab, setTab] = useState<TopicTab>('lesson');
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<TopicTab>(() => (params.get('tab') === 'notes' ? 'notes' : 'lesson')); // ?tab=notes (from Search)
   const [q, setQ] = useState<Question | null>(null);
   const [answered, setAnswered] = useState(false);
   const [sessionCount, setSessionCount] = useState(0);

@@ -19,6 +19,7 @@ import { GeoTools } from './components/GeoTools';
 import { Reminders } from './components/Reminders';
 import { APlanPage } from './study/APlan';
 import { HomeworkCalendar } from './study/Calendar';
+import { SearchPage, SearchHotkey } from './pages/Search';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
@@ -37,6 +38,7 @@ export default function App() {
           <div className="max-w-[1400px] mx-auto">
             <Routes>
               <Route path="/" element={<Home />} />
+              <Route path="/search" element={<SearchPage />} />
               <Route path="/study" element={<StudyHome />} />
               <Route path="/plan" element={<APlanPage />} />
               <Route path="/calendar" element={<HomeworkCalendar />} />
@@ -63,6 +65,7 @@ export default function App() {
           </div>
         </main>
       </div>
+      <SearchHotkey />
       <JazzController />
       <GeoTools />
       <Reminders />

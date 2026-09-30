@@ -3,6 +3,8 @@ import { getSubjects } from '../src/study/subjects';
 import { COURSE, lessonPiece } from '../src/piano/course';
 import { songLibrary } from '../src/piano/songs';
 import { measureLen, toMusicXML } from '../src/piano/notation';
+import { staticIndex, runSearch, norm } from '../src/lib/search';
+import { parseExtract, stripHtml } from '../src/lib/wiki';
 
 let problems = 0;
 const fail = (m: string) => { problems++; console.log('✗', m); };
@@ -56,5 +58,20 @@ for (const p of pieces) {
   } catch (e) { fail(`${p.id} threw ${(e as Error).message}`); }
 }
 for (const s of songLibrary()) { try { s.piece(); } catch (e) { fail(`song ${s.id}: ${(e as Error).message}`); } }
+
+// Search: unique result ids, sensible top results, and the Wikipedia text cleanup.
+for (const lang of ['spanish', 'french'] as const) {
+  const seen = new Set<string>();
+  for (const it of staticIndex(getSubjects(lang))) { if (seen.has(it.id)) fail(`search: duplicate id ${it.id}`); seen.add(it.id); }
+}
+const index = staticIndex(getSubjects('spanish'));
+for (const [q, want] of [['pythagorean theorem', 'Pythagorean Theorem'], ['moon', 'Earth, Moon & Space'], ['fur elise', 'Für Elise'], ['calendar', 'Homework Calendar'], ['esta', 'estar']]) {
+  const got = runSearch(index, q)[0]?.title;
+  if (got !== want) fail(`search: "${q}" should find "${want}" first, got "${got}"`);
+}
+if (norm('Für Élise 𝄞!') !== 'fur elise    ') fail(`search: norm() gave "${norm('Für Élise 𝄞!')}"`);
+if (stripHtml('a <span class="searchmatch">cell</span> &quot;x&quot; &amp; &#039;y&#039;') !== 'a cell "x" & \'y\'') fail('wiki: stripHtml');
+const secs = parseExtract('Intro text {\\displaystyle a^{2}+b^{2}}.\n\n== History ==\nOld times.\n=== Empty ===\n== References ==\nRef.\n=== More refs ===\nRef.\n== Life ==\nText.');
+if (JSON.stringify(secs.map((x) => [x.heading, x.paras])) !== JSON.stringify([['', ['Intro text.']], ['History', ['Old times.']], ['Life', ['Text.']]])) fail(`wiki: parseExtract gave ${JSON.stringify(secs)}`);
 console.log(problems ? `${problems} problem(s)` : `All good: ${pieces.length} pieces (${lib.length} library songs), all topic generators OK.`);
 process.exit(problems ? 1 : 0);

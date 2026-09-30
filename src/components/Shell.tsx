@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import { useApp, useUi, dismissCelebration, liveStreak, levelInfo } from '../lib/store';
 import { beep } from '../piano/audio';
 import { Flame, ProgressBar } from './ui';
 import { SaveBadge } from './SaveFile';
 import { JazzToggle } from './Jazz';
+import { SidebarSearch } from '../pages/Search';
 
 const NAV = [
+  { to: '/search', icon: '🔍', label: 'Search', phone: true },
   { to: '/', icon: '🏠', label: 'Home', end: true },
   { to: '/plan', icon: '🎯', label: 'A+ Plan' },
   { to: '/calendar', icon: '📅', label: 'Homework', sub: true },
@@ -27,9 +29,10 @@ export function Sidebar({ drawer, onNavigate }: { drawer?: boolean; onNavigate?:
   const lv = levelInfo(s.xp);
   return (
     <nav className={drawer ? 'w-72 max-w-[85vw] h-full bg-navy border-r border-edge/25 flex flex-col p-4 overflow-y-auto' : 'hidden md:flex w-60 shrink-0 h-screen sticky top-0 bg-navy/80 border-r border-edge/25 flex-col p-4 overflow-y-auto'}>
-      <div className="text-xl font-extrabold mb-6 flex items-center gap-2"><span className="text-2xl">✨</span> Study<span className="text-accent">+</span>Piano</div>
+      <div className={`text-xl font-extrabold flex items-center gap-2 ${drawer ? 'mb-6' : 'mb-4'}`}><span className="text-2xl">✨</span> Study<span className="text-accent">+</span>Piano</div>
+      {!drawer && <SidebarSearch />}
       <div className="space-y-1 flex-1">
-        {NAV.map((n) => (
+        {NAV.filter((n) => drawer || !n.phone).map((n) => (
           <NavLink key={n.to} to={n.to} end={n.end} onClick={onNavigate}
             className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-xl font-semibold transition ${n.sub ? 'ml-4 text-sm py-1.5' : ''} ${isActive ? 'bg-accent/25 text-ink border border-edge/60 shadow-[0_0_12px_rgba(127,211,255,.25)]' : 'text-muted hover:text-ink hover:bg-white/5 border border-transparent'}`}>
             <span className="text-lg">{n.icon}</span>{n.label}
@@ -82,6 +85,7 @@ export function MobileTopBar() {
       <header className="md:hidden sticky top-0 z-30 -mx-3 -mt-3 mb-3 flex items-center gap-3 px-3 py-2 bg-navy/95 backdrop-blur border-b border-edge/25">
         <button className="text-2xl w-11 h-11 rounded-xl border border-edge/40 flex items-center justify-center" onClick={() => setOpen(true)} aria-label="Open menu">☰</button>
         <div className="font-extrabold flex-1">✨ Study<span className="text-accent">+</span>Piano</div>
+        <Link to="/search" className="text-xl w-11 h-11 rounded-xl border border-edge/40 flex items-center justify-center" aria-label="Search">🔍</Link>
         <div className="flex items-center gap-1 font-extrabold text-streak"><Flame n={streak} size={22} />{streak}</div>
       </header>
       {open && (
