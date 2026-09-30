@@ -1,7 +1,7 @@
 // Reminders popup shown every time the app opens: homework, tests, reviews and streak status.
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getState, homeworkBlocking, liveStreak } from '../lib/store';
+import { getState, homeworkBlocking, liveStreak, useApp } from '../lib/store';
 import { addDays, dayKey, daysBetween } from '../lib/date';
 
 type Item = { icon: string; text: string; tone: 'bad' | 'warn' | 'ok'; to: string };
@@ -37,7 +37,8 @@ function buildReminders(): Item[] {
 const TONE = { bad: 'border-bad/70 bg-bad/10', warn: 'border-streak/60 bg-streak/10', ok: 'border-edge/40 bg-navy' };
 
 export function Reminders() {
-  const [items] = useState(buildReminders);
+  useApp((s) => s); // recompute when progress changes (e.g. after the cloud save loads)
+  const items = buildReminders();
   const [open, setOpen] = useState(() => { try { return !sessionStorage.getItem('reminders-shown'); } catch { return true; } });
   const nav = useNavigate();
   const close = () => { setOpen(false); try { sessionStorage.setItem('reminders-shown', '1'); } catch { /* storage blocked */ } };

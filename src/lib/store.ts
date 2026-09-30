@@ -41,7 +41,7 @@ export interface AppState {
     volume: number; metronome: 'click' | 'wood' | 'beep';
     language: 'spanish' | 'french';
     name: string;
-    jazz: boolean; jazzVolume: number; midiAppSound: boolean;
+    jazz: boolean; jazzVolume: number; midiAppSound: boolean; autoBackup: boolean;
   };
   notes: Record<string, string>;
   decks: Deck[];
@@ -69,7 +69,7 @@ const fresh = (): AppState => ({
   topics: {},
   quizzes: [],
   piano: { lessons: {}, unitTests: {}, unlockedUnit: 1, placementDone: false, songs: {}, noteGameNPM: [] },
-  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5, midiAppSound: true },
+  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5, midiAppSound: true, autoBackup: true },
   notes: {},
   decks: [],
   recordings: [],
@@ -110,9 +110,19 @@ interface UiState { celebrations: Celebration[]; context: PageContext; chatOpen:
 let ui: UiState = { celebrations: [], context: { label: 'Home', subject: 'general' }, chatOpen: false, chatDraft: null };
 const uiListeners = new Set<() => void>();
 
-function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* storage full or blocked */ }
+function persist(changed = true) {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); if (changed) localStorage.setItem(KEY + ':t', String(Date.now())); } catch { /* storage full or blocked */ }
 }
+/** When progress on this device last changed (ms), used to decide whether the cloud copy is newer. */
+export function lastChangeAt(): number { try { return Number(localStorage.getItem(KEY + ':t') ?? 0) || 0; } catch { return 0; } }
+export function setLastChangeAt(t: number) { try { localStorage.setItem(KEY + ':t', String(t)); } catch { /* blocked */ } }
+/** Keep a copy of this device's progress before it gets replaced by a cloud copy (undo safety net). */
+export function stashPrevious() { try { localStorage.setItem(KEY + ':previous', JSON.stringify(state)); } catch { /* blocked */ } }
+export function hasPrevious() { try { return !!localStorage.getItem(KEY + ':previous'); } catch { return false; } }
+export function restorePrevious() { try { const p = localStorage.getItem(KEY + ':previous'); if (p) { replaceState(JSON.parse(p)); localStorage.removeItem(KEY + ':previous'); } } catch { /* ignore */ } }
+// Progress is written to browser storage on every change; this also flushes when the app is closed or hidden.
+window.addEventListener('pagehide', () => persist(false));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') persist(false); });
 function emit() { persist(); listeners.forEach((l) => l()); }
 function update(fn: (s: AppState) => AppState) { state = fn(state); emit(); }
 

@@ -1,4 +1,4 @@
-import { useApp } from './lib/store';
+import { useApp, getState } from './lib/store';
 import { useEffect } from 'react';
 import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { MobileTopBar, Sidebar, Celebrations } from './components/Shell';
@@ -12,7 +12,8 @@ import { SongPlayer } from './piano/SongLibrary';
 import { PracticeGames } from './piano/games';
 import { SheetLibrary } from './piano/SheetLibrary';
 import { installComputerKeyboard, connectMidi, setMidiAppSound } from './piano/input';
-import { initFileSave } from './lib/filesave';
+import { initFileSave, dailyAutoBackup } from './lib/filesave';
+import { initCloud } from './lib/cloud';
 import { JazzController } from './components/Jazz';
 import { GeoTools } from './components/GeoTools';
 import { Reminders } from './components/Reminders';
@@ -24,7 +25,7 @@ const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 export default function App() {
   const chatOpen = useUi((u) => u.chatOpen);
   useEffect(() => installComputerKeyboard(), []);
-  useEffect(() => { void connectMidi(); void initFileSave(); }, []);
+  useEffect(() => { void connectMidi(); void initFileSave(); void initCloud(); dailyAutoBackup(getState().settings.autoBackup); }, []);
   const midiAppSound = useApp((s) => s.settings.midiAppSound);
   useEffect(() => setMidiAppSound(midiAppSound), [midiAppSound]);
   return (

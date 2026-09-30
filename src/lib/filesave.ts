@@ -17,6 +17,7 @@ type PermHandle = FileSystemFileHandle & {
 };
 const w = window as unknown as { showSaveFilePicker?: Picker; showOpenFilePicker?: Picker };
 import { embedded } from './embed';
+import { downloadViaViewer } from './cloud';
 export const fileSaveSupported = typeof w.showSaveFilePicker === 'function' && !embedded;
 
 let info: Info = { status: fileSaveSupported ? 'none' : 'unsupported', fileName: null, lastSaved: null, error: null };
@@ -63,7 +64,11 @@ subscribe(() => {
   clearTimeout(timer);
   timer = setTimeout(writeNow, 1200);
 });
-window.addEventListener('beforeunload', () => { if (timer && handle) void writeNow(); });
+// Write the save file immediately when the app is closed or hidden.
+const flush = () => { if (timer && handle && info.status !== 'needs-permission') { clearTimeout(timer); timer = undefined; void writeNow(); } };
+window.addEventListener('beforeunload', flush);
+window.addEventListener('pagehide', flush);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
 
 async function readHandle(h: FileSystemFileHandle) {
   const text = await (await h.getFile()).text();
@@ -134,13 +139,35 @@ export async function initFileSave() {
 }
 
 // ---- manual backup (works in every browser) ----
-export function exportBackup() {
+export async function exportBackup(): Promise<string | null> {
+  const name = `study-piano-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  if (embedded) return downloadViaViewer(name, snapshot());
   const blob = new Blob([snapshot()], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `study-piano-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return '✓ Backup file downloaded.';
+}
+
+/**
+ * Downloaded app file only: if no auto-save file is connected, drop a dated backup file into
+ * Downloads once a day, so progress survives even if the browser's storage is cleared.
+ */
+export function dailyAutoBackup(enabled: boolean) {
+  if (embedded || !enabled) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    if (localStorage.getItem('study-piano-last-auto-backup') === today) return;
+    const st = getState();
+    if (!st.xp && !Object.keys(st.topics).length && !st.homework.length) return; // nothing to back up yet
+    setTimeout(() => {
+      if (info.status === 'saved' || info.status === 'saving') return; // a save file already has everything
+      void exportBackup();
+      localStorage.setItem('study-piano-last-auto-backup', today);
+    }, 4000);
+  } catch { /* storage blocked */ }
 }
 export async function importBackup(file: File) {
   replaceState(JSON.parse(await file.text()));
