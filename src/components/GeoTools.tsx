@@ -178,7 +178,7 @@ function Notepad() {
 export function GeoTools() {
   const loc = useLocation();
   const [open, setOpen] = useState<{ calc: boolean; notes: boolean }>({ calc: false, notes: false });
-  const onGeo = /geometry|geo-/.test(loc.pathname + loc.search);
+  const onGeo = /^\/(study|advanced|plan)/.test(loc.pathname); // every study page
   if (!onGeo) return null;
   return (
     <div className="fixed left-[250px] bottom-4 z-40 flex items-end gap-3 pointer-events-none">

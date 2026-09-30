@@ -50,7 +50,10 @@ export interface AppState {
   lastPiano: { path: string; label: string } | null;
   chats: Record<string, ChatMsg[]>;
   mistakes: Mistake[];
-  importedSongs: ImportedSong[]; // songs the student imported (MusicXML / MIDI)
+  importedSongs: ImportedSong[];
+  grades: GradeEntry[]; // the student's real school classes + current grades
+  tests: UpcomingTest[]; // upcoming school tests / quizzes
+  review: Record<string, { box: number; due: string }>; // spaced-repetition schedule per topic // songs the student imported (MusicXML / MIDI)
   studyUnits: Record<string, number>; // best unit-test score (out of 10), key "subject:unitIndex"
 }
 
@@ -75,6 +78,9 @@ const fresh = (): AppState => ({
   mistakes: [],
   studyUnits: {},
   importedSongs: [],
+  grades: [],
+  tests: [],
+  review: {},
 });
 
 /** Fill in any fields missing from older saves. */
@@ -231,6 +237,8 @@ export const topicStats = (id: string): TopicStats => state.topics[id] ?? { atte
 /** Returns true if this answer just mastered the current difficulty. */
 export function recordAnswer(topicId: string, correct: boolean, allGeometryIds: string[]): boolean {
   let justMastered = false;
+  // Every topic you practice joins the spaced-review schedule; a miss brings it back tomorrow.
+  if (!correct || !state.review[topicId]) update((s) => ({ ...s, review: { ...s.review, [topicId]: { box: 0, due: addDays(dayKey(), 1) } } }));
   update((s0) => {
     const t = { ...(s0.topics[topicId] ?? topicStats(topicId)) };
     t.attempts++;
@@ -318,6 +326,19 @@ export function setLast(kind: 'study' | 'piano', path: string, label: string) {
 export function setChat(subject: string, msgs: ChatMsg[]) { update((s) => ({ ...s, chats: { ...s.chats, [subject]: msgs.slice(-80) } })); }
 export function recordMistake(m: Omit<Mistake, 'id' | 'date'>) {
   update((s) => ({ ...s, mistakes: [{ ...m, id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date: dayKey() }, ...s.mistakes].slice(0, 300) }));
+}
+export interface GradeEntry { id: string; name: string; subjectId: string; grade: number | null }
+export interface UpcomingTest { id: string; subjectId: string; title: string; date: string; topicIds: string[] }
+export function setGrades(grades: GradeEntry[]) { update((s) => ({ ...s, grades })); }
+export function setTests(tests: UpcomingTest[]) { update((s) => ({ ...s, tests })); }
+/** Leitner spaced repetition: right answer moves the topic to a longer gap (1,2,4,8,16 days); wrong resets it to tomorrow. */
+const BOX_DAYS = [1, 2, 4, 8, 16, 30];
+export function recordReview(topicId: string, correct: boolean) {
+  update((s) => {
+    const cur = s.review[topicId]?.box ?? 0;
+    const box = correct ? Math.min(BOX_DAYS.length - 1, cur + 1) : 0;
+    return { ...s, review: { ...s.review, [topicId]: { box, due: addDays(dayKey(), BOX_DAYS[box]) } } };
+  });
 }
 export interface ImportedSong { id: string; title: string; composer: string; level: 'Beginner' | 'Intermediate' | 'Pre-Advanced' | 'Advanced'; added: string; piece: import('../piano/notation').Piece }
 export function addImportedSong(song: ImportedSong) { update((s) => ({ ...s, importedSongs: [song, ...s.importedSongs.filter((x) => x.id !== song.id)].slice(0, 40) })); }

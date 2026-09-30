@@ -15,6 +15,7 @@ import { installComputerKeyboard, connectMidi, setMidiAppSound } from './piano/i
 import { initFileSave } from './lib/filesave';
 import { JazzController } from './components/Jazz';
 import { GeoTools } from './components/GeoTools';
+import { APlanPage } from './study/APlan';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
@@ -33,6 +34,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/study" element={<StudyHome />} />
+              <Route path="/plan" element={<APlanPage />} />
               <Route path="/advanced" element={<AdvancedHome />} />
               <Route path="/study/mistakes" element={<MistakesPage />} />
               <Route path="/study/flashcards" element={<FlashcardsPage />} />

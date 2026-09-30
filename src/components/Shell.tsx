@@ -8,6 +8,7 @@ import { JazzToggle } from './Jazz';
 
 const NAV = [
   { to: '/', icon: '🏠', label: 'Home', end: true },
+  { to: '/plan', icon: '🎯', label: 'A+ Plan' },
   { to: '/study', icon: '📚', label: 'Study Zone' },
   { to: '/advanced', icon: '🚀', label: 'Super Advanced', sub: true },
   { to: '/piano', icon: '🎹', label: 'Piano Course' },
