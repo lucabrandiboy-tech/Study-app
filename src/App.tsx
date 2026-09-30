@@ -16,6 +16,7 @@ import { initFileSave } from './lib/filesave';
 import { JazzController } from './components/Jazz';
 import { GeoTools } from './components/GeoTools';
 import { APlanPage } from './study/APlan';
+import { HomeworkCalendar } from './study/Calendar';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
@@ -35,6 +36,7 @@ export default function App() {
               <Route path="/" element={<Home />} />
               <Route path="/study" element={<StudyHome />} />
               <Route path="/plan" element={<APlanPage />} />
+              <Route path="/calendar" element={<HomeworkCalendar />} />
               <Route path="/advanced" element={<AdvancedHome />} />
               <Route path="/study/mistakes" element={<MistakesPage />} />
               <Route path="/study/flashcards" element={<FlashcardsPage />} />

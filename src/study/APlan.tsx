@@ -1,6 +1,6 @@
 // 🎯 A+ Plan — the "get straight A's" hub: daily spaced review, test countdown + study plan, grade tracker.
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useApp, getState, recordAnswer, recordReview, recordMistake, recordActivity, addXp, setGrades, setTests, type GradeEntry, type UpcomingTest, type Difficulty } from '../lib/store';
 import { addDays, dayKey, daysBetween, parseDay } from '../lib/date';
 import { usePage } from '../lib/hooks';
@@ -73,6 +73,7 @@ function QuizRunner({ pool, n, title, onExit }: { pool: PoolItem[]; n: number; t
 
 export function APlanPage() {
   usePage({ label: 'A+ Plan', subject: 'general' });
+  const nav = useNavigate();
   const subjects = useSubjects();
   const grades = useApp((s) => s.grades);
   const tests = useApp((s) => s.tests);
@@ -102,7 +103,9 @@ export function APlanPage() {
 
   if (running) return <div className="max-w-[900px]"><PageHeader title="🎯 A+ Plan" /><QuizRunner {...running} onExit={() => setRunning(null)} /></div>;
 
+  const blockingHw = getState().homework.filter((h) => !h.done && h.due <= addDays(today, 1));
   const missions = [
+    ...(blockingHw.length ? [{ done: false, text: `📚 Finish ${blockingHw.length} homework assignment${blockingHw.length > 1 ? 's' : ''} due by tomorrow — your streak is on hold until you do`, action: () => nav('/calendar') }] : []),
     { done: false, text: dueCount ? `Daily Review — ${dueCount} topic${dueCount > 1 ? 's' : ''} due today (10 questions, ~8 min)` : 'Daily Review — 10 mixed questions (~8 min)', action: startReview },
     ...upcoming.slice(0, 2).map((t) => ({ done: false, text: `Prep for ${t.title} (${subjName(t.subjectId)}) — ${daysBetween(today, t.date) === 0 ? 'TODAY' : `in ${daysBetween(today, t.date)} day${daysBetween(today, t.date) > 1 ? 's' : ''}`}`, action: () => startTest(t) })),
     ...grades.filter((g) => g.grade !== null && g.grade < 90 && g.subjectId).slice(0, 2).map((g) => ({ done: false, text: `Boost ${g.name} (${g.grade}%) — practice its weakest topic`, action: () => { const sub = subjects.find((s) => s.id === g.subjectId); if (sub) setRunning({ pool: reviewPool(subjects, [sub.id]).length ? reviewPool(subjects, [sub.id]) : sub.topics.map((topic) => ({ topic, subject: sub })), n: 10, title: `📈 Boost ${g.name}` }); } })),

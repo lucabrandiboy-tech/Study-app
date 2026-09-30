@@ -51,6 +51,7 @@ export interface AppState {
   chats: Record<string, ChatMsg[]>;
   mistakes: Mistake[];
   importedSongs: ImportedSong[];
+  homework: Homework[]; // homework calendar
   grades: GradeEntry[]; // the student's real school classes + current grades
   tests: UpcomingTest[]; // upcoming school tests / quizzes
   review: Record<string, { box: number; due: string }>; // spaced-repetition schedule per topic // songs the student imported (MusicXML / MIDI)
@@ -78,6 +79,7 @@ const fresh = (): AppState => ({
   mistakes: [],
   studyUnits: {},
   importedSongs: [],
+  homework: [],
   grades: [],
   tests: [],
   review: {},
@@ -175,6 +177,44 @@ function addXpIn(s: AppState, n: number): AppState {
 }
 export function addXp(n: number) { if (n > 0) update((s) => addXpIn(s, n)); }
 
+/** Homework that must be finished before today's streak counts: anything due tomorrow or earlier that isn't done. */
+export function homeworkBlocking(s: AppState = state) {
+  const cutoff = addDays(dayKey(), 1);
+  return s.homework.filter((h) => !h.done && h.due <= cutoff);
+}
+let blockedNotice = '';
+function creditStreakIn(s0: AppState): AppState {
+  let s = s0;
+  const today = dayKey();
+  const st = { ...s.streak, frozenDays: [...s.streak.frozenDays] };
+  const gap = st.last ? daysBetween(st.last, today) : Infinity;
+  if (gap === 1) st.current += 1;
+  else if (gap !== Infinity && gap - 1 <= st.freezes) {
+    for (let i = 1; i < gap; i++) st.frozenDays.push(addDays(st.last!, i));
+    st.freezes -= gap - 1;
+    st.current += 1;
+    setTimeout(() => celebrate('Streak freeze used!', '🧊', `Your streak was protected for ${gap - 1} missed day${gap > 2 ? 's' : ''}.`), 50);
+  } else st.current = 1;
+  st.last = today;
+  st.best = Math.max(st.best, st.current);
+  let bonus = 0;
+  if (st.current % 7 === 0 && st.freezes < 2) {
+    st.freezes += 1;
+    setTimeout(() => celebrate('Streak freeze earned!', '🧊', 'You earned a freeze for your 7-day run (max 2).'), 80);
+  }
+  if (st.current === 7) bonus = 50;
+  if (st.current === 30) bonus = 200;
+  if (st.current === 100) bonus = 500;
+  else if (st.current % 10 === 0) bonus = Math.max(bonus, 25);
+  setTimeout(() => celebrate(`${st.current}-day streak!`, '🔥', bonus ? `+${bonus} bonus XP` : 'You practiced today. Nice!'), 20);
+  s = { ...s, streak: st };
+  if (bonus) s = addXpIn(s, bonus);
+  if (st.current >= 7) s = awardBadgeIn(s, 'streak-7');
+  if (st.current >= 30) s = awardBadgeIn(s, 'streak-30');
+  if (st.current >= 100) s = awardBadgeIn(s, 'streak-100');
+  return s;
+}
+
 /** Records a completed study session or piano lesson; updates streak, freezes, and milestone badges. */
 export function recordActivity(kind: 'study' | 'piano') {
   update((s0) => {
@@ -183,34 +223,12 @@ export function recordActivity(kind: 'study' | 'piano') {
     const d = s.days[today] ?? emptyDay();
     s = { ...s, days: { ...s.days, [today]: { ...d, [kind]: d[kind] + 1 } } };
     s = awardBadgeIn(s, 'first-lesson');
-    const st = { ...s.streak, frozenDays: [...s.streak.frozenDays] };
-    if (st.last === today) return { ...s, streak: st };
-    const gap = st.last ? daysBetween(st.last, today) : Infinity;
-    if (gap === 1) st.current += 1;
-    else if (gap !== Infinity && gap - 1 <= st.freezes) {
-      for (let i = 1; i < gap; i++) st.frozenDays.push(addDays(st.last!, i));
-      st.freezes -= gap - 1;
-      st.current += 1;
-      setTimeout(() => celebrate('Streak freeze used!', '🧊', `Your streak was protected for ${gap - 1} missed day${gap > 2 ? 's' : ''}.`), 50);
-    } else st.current = 1;
-    st.last = today;
-    st.best = Math.max(st.best, st.current);
-    let bonus = 0;
-    if (st.current % 7 === 0 && st.freezes < 2) {
-      st.freezes += 1;
-      setTimeout(() => celebrate('Streak freeze earned!', '🧊', 'You earned a freeze for your 7-day run (max 2).'), 80);
+    if (s.streak.last === today) return s;
+    if (homeworkBlocking(s).length) {
+      if (blockedNotice !== today) { blockedNotice = today; setTimeout(() => celebrate('Streak on hold 📚', '⏳', 'Finish the homework due tomorrow (or overdue) to earn today\'s streak.'), 20); }
+      return s;
     }
-    if (st.current === 7) bonus = 50;
-    if (st.current === 30) bonus = 200;
-    if (st.current === 100) bonus = 500;
-    else if (st.current % 10 === 0) bonus = Math.max(bonus, 25);
-    setTimeout(() => celebrate(`${st.current}-day streak!`, '🔥', bonus ? `+${bonus} bonus XP` : 'You practiced today. Nice!'), 20);
-    s = { ...s, streak: st };
-    if (bonus) s = addXpIn(s, bonus);
-    if (st.current >= 7) s = awardBadgeIn(s, 'streak-7');
-    if (st.current >= 30) s = awardBadgeIn(s, 'streak-30');
-    if (st.current >= 100) s = awardBadgeIn(s, 'streak-100');
-    return s;
+    return creditStreakIn(s);
   });
 }
 
@@ -326,6 +344,20 @@ export function setLast(kind: 'study' | 'piano', path: string, label: string) {
 export function setChat(subject: string, msgs: ChatMsg[]) { update((s) => ({ ...s, chats: { ...s.chats, [subject]: msgs.slice(-80) } })); }
 export function recordMistake(m: Omit<Mistake, 'id' | 'date'>) {
   update((s) => ({ ...s, mistakes: [{ ...m, id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, date: dayKey() }, ...s.mistakes].slice(0, 300) }));
+}
+export interface Homework { id: string; title: string; cls: string; due: string; done: boolean; notes?: string }
+export function addHomework(h: Omit<Homework, 'id' | 'done'>) { update((s) => ({ ...s, homework: [...s.homework, { ...h, id: `hw-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`, done: false }] })); }
+export function removeHomework(id: string) { update((s) => ({ ...s, homework: s.homework.filter((h) => h.id !== id) })); }
+/** Check homework on/off. Finishing the last blocking assignment unlocks today's streak if you already studied or practiced today. */
+export function toggleHomework(id: string) {
+  update((s0) => {
+    let s: AppState = { ...s0, homework: s0.homework.map((h) => (h.id === id ? { ...h, done: !h.done } : h)) };
+    const now = s.homework.find((h) => h.id === id);
+    if (now?.done) s = addXpIn(s, 5);
+    const d = s.days[dayKey()];
+    if (now?.done && d && (d.study > 0 || d.piano > 0) && s.streak.last !== dayKey() && !homeworkBlocking(s).length) s = creditStreakIn(s);
+    return s;
+  });
 }
 export interface GradeEntry { id: string; name: string; subjectId: string; grade: number | null }
 export interface UpcomingTest { id: string; subjectId: string; title: string; date: string; topicIds: string[] }
