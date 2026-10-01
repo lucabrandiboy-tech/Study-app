@@ -5,6 +5,7 @@ import { songLibrary } from '../src/piano/songs';
 import { measureLen, toMusicXML } from '../src/piano/notation';
 import { staticIndex, runSearch, norm } from '../src/lib/search';
 import { parseExtract, stripHtml, parseCommons, parseLeadImages, unsafeText } from '../src/lib/wiki';
+import { parseOpenverse, parseNasa, parseArt, parseWiktionary, parseBooks, interleave } from '../src/lib/sources';
 
 let problems = 0;
 const fail = (m: string) => { problems++; console.log('✗', m); };
@@ -74,8 +75,22 @@ if (stripHtml('a <span class="searchmatch">cell</span> &quot;x&quot; &amp; &#039
 const secs = parseExtract('Intro text {\\displaystyle a^{2}+b^{2}}.\n\n== History ==\nOld times.\n=== Empty ===\n== References ==\nRef.\n=== More refs ===\nRef.\n== Life ==\nText.');
 if (JSON.stringify(secs.map((x) => [x.heading, x.paras])) !== JSON.stringify([['', ['Intro text.']], ['History', ['Old times.']], ['Life', ['Text.']]])) fail(`wiki: parseExtract gave ${JSON.stringify(secs)}`);
 // Picture search: safety filter and result parsing (sample API replies; no network needed).
-for (const bad of ['nude beach', 'Sexual_content', 'Category:Nudity in art', 'naked', 'corpse']) if (!unsafeText(bad)) fail(`pictures: "${bad}" should be filtered`);
-for (const ok of ['Sussex', 'photosynthesis', 'Civil War soldiers', 'Essex county', 'breast cancer awareness ribbon']) if (unsafeText(ok)) fail(`pictures: "${ok}" should not be filtered`);
+for (const bad of ['nude beach', 'sex', 'Category:Nudity in art', 'naked', 'porn', 'beheading']) if (!unsafeText(bad)) fail(`pictures: "${bad}" should be filtered`);
+for (const ok of ['Sussex', 'photosynthesis', 'Civil War soldiers', 'Essex county', 'breast cancer awareness ribbon', 'sexual reproduction', 'Asexual reproduction', 'sex chromosomes', 'autopsy', 'lynching', 'corpse flower']) if (unsafeText(ok)) fail(`pictures: "${ok}" should not be filtered`);
+{
+  const ov = parseOpenverse({ results: [{ id: '1', title: 'Red fox', thumbnail: 't1', creator: 'Bo', license: 'by', license_version: '2.0' }, { id: '2', title: 'Nude study', thumbnail: 't2' }] }, true);
+  if (ov.length !== 1 || ov[0].credit !== 'Bo · CC BY 2.0') fail(`sources: parseOpenverse gave ${JSON.stringify(ov)}`);
+  if (parseOpenverse({ results: [{ id: '2', title: 'Nude study', thumbnail: 't2' }] }, false).length !== 1) fail('sources: filter off should show everything');
+  const na = parseNasa({ collection: { items: [{ data: [{ nasa_id: 'a1', title: 'Moon', description: 'The Moon' }], links: [{ href: 'https://images-assets.nasa.gov/image/a1/a1~thumb.jpg', rel: 'preview' }] }] } }, true);
+  if (na[0]?.large !== 'https://images-assets.nasa.gov/image/a1/a1~medium.jpg') fail(`sources: parseNasa gave ${JSON.stringify(na)}`);
+  const art = parseArt({ config: { iiif_url: 'https://x/iiif' }, data: [{ id: 5, title: 'Water Lilies', image_id: 'abc', artist_display: 'Monet' }, { id: 6, title: 'No image', image_id: null }] }, true);
+  if (art.length !== 1 || art[0].thumb !== 'https://x/iiif/abc/full/400,/0/default.jpg') fail(`sources: parseArt gave ${JSON.stringify(art)}`);
+  const def = parseWiktionary('leaf', { en: [{ partOfSpeech: 'Noun', definitions: [{ definition: 'The <a href="x">green</a> part of a plant.' }] }], fr: [] });
+  if (def?.parts[0].defs[0] !== 'The green part of a plant.') fail(`sources: parseWiktionary gave ${JSON.stringify(def)}`);
+  const bk = parseBooks({ docs: [{ key: '/works/1', title: 'Hatchet', author_name: ['Gary Paulsen'], first_publish_year: 1987, cover_i: 9 }] }, true);
+  if (bk[0]?.cover !== 'https://covers.openlibrary.org/b/id/9-M.jpg') fail(`sources: parseBooks gave ${JSON.stringify(bk)}`);
+  if (interleave([[1, 2, 3], [4], [5, 6]]).join() !== '1,4,5,2,6,3') fail('sources: interleave');
+}
 const commons = parseCommons({ query: { pages: [
   { title: 'File:Leaf_2.jpg', index: 2, categories: [{ title: 'Category:Leaves' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/b.jpg', extmetadata: { ImageDescription: { value: 'A <b>green</b> leaf' }, Artist: { value: '<a href="x">Ann</a>' }, LicenseShortName: { value: 'CC BY-SA 4.0' } } }] },
   { title: 'File:Leaf_1.jpg', index: 1, categories: [{ title: 'Category:Plants' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/a.jpg' }] },

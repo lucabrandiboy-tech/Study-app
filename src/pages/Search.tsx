@@ -9,6 +9,8 @@ import { songLibrary } from '../piano/songs';
 import { staticIndex, userIndex, runSearch, snippet, matchRanges, queryTerms, KIND_GROUP, KIND_LABEL, type SearchItem, type Kind } from '../lib/search';
 import { wikiSearch, wikiArticle, wikiRelated, imageSearch, imageDetails, imageName, WIKI_NAME, type WikiSite, type WikiHit, type WikiArticle, type WikiImage, type ImageDetails } from '../lib/wiki';
 import { PageHeader, Rich, Stars } from '../components/ui';
+import { morePictures, interleave, define, findBooks, type Definition, type Book } from '../lib/sources';
+const picName = (img: WikiImage) => img.sourceTitle || imageName(img.file);
 
 const INPUT_ID = 'search-input';
 const isPhone = () => window.matchMedia('(max-width: 767px)').matches;
@@ -203,9 +205,9 @@ function ImageGrid({ items, active, onPick }: { items: WikiImage[]; active?: str
   return (
     <div className="keep-cols grid grid-cols-3 sm:grid-cols-4 gap-2">
       {items.map((img) => (
-        <button key={img.file} onClick={() => onPick(img)} title={imageName(img.file)}
+        <button key={img.file} onClick={() => onPick(img)} title={picName(img)}
           className={`aspect-square rounded-lg overflow-hidden bg-navy border transition ${active === img.file ? 'border-edge ring-2 ring-edge' : 'border-edge/20 hover:border-edge/70'}`}>
-          <img src={img.thumb} alt={img.caption || imageName(img.file)} loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover"
+          <img src={img.thumb} alt={img.caption || picName(img)} loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover"
             onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }} />
         </button>
       ))}
@@ -219,6 +221,7 @@ function ImageViewer({ img, onArticle }: { img: WikiImage; onArticle: (title: st
   useEffect(() => {
     const ac = new AbortController();
     setD(null);
+    if (!img.host) return; // other sources already gave the big copy and credit
     imageDetails(img, ac.signal).then(setD).catch(() => { /* keep the small copy */ });
     return () => ac.abort();
   }, [img]);
@@ -229,14 +232,15 @@ function ImageViewer({ img, onArticle }: { img: WikiImage; onArticle: (title: st
       <div className="flex items-start gap-3 mb-3">
         <div className="text-4xl leading-none">🖼️</div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs muted">{img.article ? `Picture from the Wikipedia article "${img.article}"` : 'Picture from Wikimedia Commons'}</div>
-          <h2 className="h2 break-words">{imageName(img.file)}</h2>
+          <div className="text-xs muted">{img.article ? `Picture from the Wikipedia article "${img.article}"` : `Picture from ${img.source ?? 'Wikimedia Commons'}`}</div>
+          <h2 className="h2 break-words">{picName(img)}</h2>
         </div>
       </div>
       <div className="rounded-xl overflow-hidden bg-navy border border-edge/30 flex items-center justify-center min-h-40">
-        <img src={d?.large ?? img.thumb} alt={caption || imageName(img.file)} referrerPolicy="no-referrer" className="max-h-[60vh] max-w-full object-contain" />
+        <img src={d?.large ?? img.large ?? img.thumb} alt={caption || picName(img)} referrerPolicy="no-referrer" className="max-h-[60vh] max-w-full object-contain"
+          onError={(e) => { if (e.currentTarget.src !== img.thumb) e.currentTarget.src = img.thumb; }} />
       </div>
-      {caption && caption !== img.article && <p className="mt-3 leading-relaxed">{caption.length > 600 ? `${caption.slice(0, 600)}…` : caption}</p>}
+      {caption && caption !== img.article && caption !== picName(img) && <p className="mt-3 leading-relaxed">{caption.length > 600 ? `${caption.slice(0, 600)}…` : caption}</p>}
       {credit && <p className="text-xs muted mt-2">📷 {credit}</p>}
       {img.article && <button className="btn mt-3" onClick={() => onArticle(img.article!)}>📖 Read about {img.article}</button>}
       <p className="text-xs muted mt-4">These are free pictures shared by their makers. If you use one in a school project, give credit like the line above. Pictures are filtered for school, but if you ever see something that isn't okay, tell a parent or teacher.</p>
@@ -244,8 +248,41 @@ function ImageViewer({ img, onArticle }: { img: WikiImage; onArticle: (title: st
   );
 }
 
+function BookView({ book }: { book: Book }) {
+  return (
+    <div>
+      <div className="text-xs muted mb-1">Book · from Open Library</div>
+      <div className="flex gap-4 items-start">
+        {book.cover ? <img src={book.coverLarge ?? book.cover} alt="" referrerPolicy="no-referrer" className="w-28 md:w-36 rounded-lg border border-edge/30 bg-white shrink-0" /> : <div className="text-6xl">📕</div>}
+        <div className="min-w-0">
+          <h2 className="h2">{book.title}</h2>
+          <div className="mt-1">by {book.author}</div>
+          <div className="text-sm muted mt-1">{[book.year && `First published ${book.year}`, book.pages && `about ${book.pages} pages`].filter(Boolean).join(' · ')}</div>
+        </div>
+      </div>
+      {book.firstSentence && <p className="mt-4 italic">"{book.firstSentence}"</p>}
+      {!!book.subjects.length && <div className="mt-4 flex flex-wrap gap-1.5">{book.subjects.map((s) => <span key={s} className="chip">{s}</span>)}</div>}
+      <p className="text-xs muted mt-4">Look for it at your school or public library.</p>
+    </div>
+  );
+}
+
+function DictionaryCard({ d }: { d: Definition }) {
+  return (
+    <div className="rounded-xl bg-navy border border-edge/40 px-3 py-2.5 mb-2">
+      <div className="font-bold">📗 {d.word} <span className="text-xs muted font-normal">· dictionary (Wiktionary)</span></div>
+      {d.parts.map((p, i) => (
+        <div key={i} className="mt-1.5 text-sm">
+          <span className="italic muted">{p.pos}</span>
+          <ol className="list-decimal ml-5">{p.defs.map((x, j) => <li key={j}>{x}</li>)}</ol>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type Tab = 'all' | 'study' | 'piano' | 'yours' | 'images' | 'web';
-type Sel = { kind: 'app'; item: SearchItem } | { kind: 'web'; title: string } | { kind: 'image'; img: WikiImage } | null;
+type Sel = { kind: 'app'; item: SearchItem } | { kind: 'web'; title: string } | { kind: 'image'; img: WikiImage } | { kind: 'book'; book: Book } | null;
 interface Web { q: string; hits: WikiHit[]; suggestion?: string; loading: boolean; err?: string }
 interface Pics { q: string; items: WikiImage[]; loading: boolean; err?: string; blocked?: boolean }
 let lastSite: WikiSite = 'simple';
@@ -264,6 +301,8 @@ export function SearchPage() {
   const [web, setWeb] = useState<Web>({ q: '', hits: [], loading: false });
   const [pics, setPics] = useState<Pics>({ q: '', items: [], loading: false });
   const picFilter = useApp((s) => s.settings.picFilter);
+  const [dict, setDict] = useState<Definition | null>(null);
+  const [books, setBooks] = useState<Book[]>([]);
   const previewBox = useRef<HTMLDivElement>(null);
   usePage({ label: 'Search', subject: 'general' });
 
@@ -309,10 +348,28 @@ export function SearchPage() {
     setPics((p) => ({ ...p, loading: true, err: undefined }));
     const ac = new AbortController();
     const id = setTimeout(() => {
-      imageSearch(q, site, ac.signal, picFilter).then((r) => setPics({ q, ...r, loading: false })).catch((e) => { if (!ac.signal.aborted) setPics({ q, items: [], loading: false, err: netMessage(e) }); });
+      Promise.all([imageSearch(q, site, ac.signal, picFilter).catch((e) => { if (ac.signal.aborted) throw e; return { items: [] as WikiImage[], blocked: false, err: e as unknown }; }), morePictures(q, picFilter, ac.signal)])
+        .then(([w, more]) => {
+          const items = interleave([w.items, ...more]);
+          if (!items.length && 'err' in w) throw w.err;
+          setPics({ q, items, blocked: w.blocked, loading: false });
+        }).catch((e) => { if (!ac.signal.aborted) setPics({ q, items: [], loading: false, err: netMessage(e) }); });
     }, 450);
     return () => { clearTimeout(id); ac.abort(); };
   }, [text, site, picFilter]);
+
+  // Dictionary and books
+  useEffect(() => {
+    const q = text.trim();
+    setDict(null); setBooks([]);
+    if (q.length < 2 || !navigator.onLine) return;
+    const ac = new AbortController();
+    const id = setTimeout(() => {
+      define(q, ac.signal).then(setDict).catch(() => { /* optional */ });
+      findBooks(q, picFilter, ac.signal).then(setBooks).catch(() => { /* optional */ });
+    }, 450);
+    return () => { clearTimeout(id); ac.abort(); };
+  }, [text, picFilter]);
 
   const appTab = tab !== 'web' && tab !== 'images';
   const shown = tab === 'all' ? hits.slice(0, 8 + more) : !appTab ? [] : hits.filter((h) => KIND_GROUP[h.kind] === tab).slice(0, 40 + more);
@@ -323,14 +380,14 @@ export function SearchPage() {
     else if ((tab === 'all' || tab === 'web') && web.hits[0]) setSel({ kind: 'web', title: web.hits[0].title });
   };
 
-  const chips: [Tab, string, number | null][] = [['all', 'All', null], ['study', '📚 Study', count('study')], ['piano', '🎹 Piano & songs', count('piano')], ['yours', '🗂️ Your stuff', count('yours')], ['images', '🖼️ Pictures', pics.q ? pics.items.length : null], ['web', '🌐 Look it up', web.q ? web.hits.length : null]];
+  const chips: [Tab, string, number | null][] = [['all', 'All', null], ['study', '📚 Study', count('study')], ['piano', '🎹 Piano & songs', count('piano')], ['yours', '🗂️ Your stuff', count('yours')], ['images', '🖼️ Pictures', pics.q ? pics.items.length : null], ['web', '🌐 Look it up', web.q ? web.hits.length + books.length + (dict ? 1 : 0) : null]];
   const picsSection = (
     <div className="p-1">
       <div className="flex items-center justify-between gap-2 px-1 mb-1">
         <div className="font-bold">🖼️ Pictures</div>
         {tab === 'all' && pics.items.length > 8 && <button className="text-sm font-bold text-edge hover:underline" onClick={() => setTab('images')}>See all {pics.items.length} →</button>}
       </div>
-      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia and Wikimedia Commons. Tap one to see it big, right here.{!picFilter && ' Picture filter is off.'}</div>
+      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia, Wikimedia Commons, Openverse, NASA and the Art Institute of Chicago. Tap one to see it big, right here.{!picFilter && ' Picture filter is off.'}</div>
       {pics.loading && <div className="muted text-sm px-1 animate-pulse">Finding pictures…</div>}
       {!pics.loading && pics.err && <div className="text-sm text-bad px-1">{pics.err}</div>}
       {!pics.loading && pics.blocked && <div className="muted text-sm px-1">Pictures are turned off for this search.</div>}
@@ -348,7 +405,8 @@ export function SearchPage() {
           {(['simple', 'en'] as const).map((s) => <button key={s} onClick={() => setSite(s)} className={`px-2 py-1 rounded-md font-semibold ${site === s ? 'bg-accent text-white' : 'muted hover:text-ink'}`}>{s === 'simple' ? 'Simple English' : 'Full Wikipedia'}</button>)}
         </div>
       </div>
-      <div className="text-xs muted px-1 mb-2">Articles from {WIKI_NAME[site]} open here in the app. No website opens.</div>
+      <div className="text-xs muted px-1 mb-2">Articles from {WIKI_NAME[site]}, the dictionary and books all open here in the app. No website opens.</div>
+      {dict && <DictionaryCard d={dict} />}
       {web.loading && <div className="muted text-sm px-1 animate-pulse">Looking it up…</div>}
       {!web.loading && web.err && <div className="text-sm text-bad px-1">{web.err}</div>}
       {!web.loading && !web.err && web.suggestion && <div className="text-sm px-1 mb-1">Did you mean <button className="text-edge font-bold hover:underline" onClick={() => setText(web.suggestion!)}>{web.suggestion}</button>?</div>}
@@ -356,6 +414,11 @@ export function SearchPage() {
       {!web.loading && web.hits.map((h) => (
         <Row key={h.title} icon="📖" title={h.title} sub={WIKI_NAME[site]} text={h.snippet} label="Article" terms={terms}
           active={sel?.kind === 'web' && sel.title === h.title} onClick={() => setSel({ kind: 'web', title: h.title })} />
+      ))}
+      {!!books.length && <div className="font-bold px-1 mt-3 mb-1">📚 Books</div>}
+      {books.map((b) => (
+        <Row key={b.key} icon="📕" title={b.title} sub={`${b.author}${b.year ? ` · ${b.year}` : ''}`} label="Book" terms={terms}
+          active={sel?.kind === 'book' && sel.book.key === b.key} onClick={() => setSel({ kind: 'book', book: b })} />
       ))}
     </div>
   );
@@ -378,7 +441,8 @@ export function SearchPage() {
             <li>📚 Every lesson, vocab word and formula in your courses</li>
             <li>🎹 Piano lessons and all {songCount.toLocaleString()} songs</li>
             <li>🗂️ Your homework, tests, notes and flashcard decks</li>
-            <li>🖼️ Pictures of almost anything, from Wikipedia and Wikimedia Commons</li>
+            <li>🖼️ Pictures of almost anything: Wikipedia, Wikimedia Commons, Openverse, NASA and the Art Institute of Chicago</li>
+            <li>📗 Word meanings from the dictionary, and 📚 books from Open Library</li>
             <li>🌐 Anything else, looked up on Wikipedia and shown right here. No website opens and there's no API key.</li>
           </ul>
           <div className="text-sm muted mb-2">Try:</div>
@@ -420,6 +484,7 @@ export function SearchPage() {
                 {!sel && <div className="muted text-center py-16">Pick a result to see it here.</div>}
                 {sel?.kind === 'app' && <Preview item={sel.item} terms={terms} />}
                 {sel?.kind === 'web' && <WikiReader title={sel.title} site={site} terms={terms} onOpen={(t) => setSel({ kind: 'web', title: t })} />}
+                {sel?.kind === 'book' && <BookView book={sel.book} />}
                 {sel?.kind === 'image' && <ImageViewer img={sel.img} onArticle={(t) => setSel({ kind: 'web', title: t })} />}
               </div>
             </div>

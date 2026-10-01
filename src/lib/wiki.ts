@@ -105,8 +105,11 @@ export function parseExtract(text: string): WikiSection[] {
 
 export interface WikiImage {
   file: string; // file name without "File:", e.g. "Leaf 1 web.jpg"
-  host: string; // which API to ask for the big version and the credit
+  host: string; // which Wikimedia API to ask for the big version and the credit ('' for other sources)
   thumb: string;
+  large?: string; // big copy, when the source gives it directly
+  source?: string; // where it's from, e.g. "NASA"
+  sourceTitle?: string; // the picture's title at that source
   caption: string;
   credit: string;
   article?: string; // the Wikipedia article this is the main picture of
@@ -115,8 +118,10 @@ export interface ImageDetails { large: string; caption: string; credit: string }
 
 // Commons has no safe-search switch, so pictures whose search words, name, description or categories mention
 // adult or gory subjects are left out. This catches what Commons labels; it can't promise to catch everything.
-const UNSAFE = /\b(nud(e|es|ity|ism|ist|ists)|naked|sex|sexual|sexuality|sexy|erotic\w*|porn\w*|genital\w*|penis(es)?|vagina\w*|vulva\w*|testic\w*|nipples?|topless|lingerie|fetish\w*|bdsm|bondage|masturbat\w*|intercourse|orgasm\w*|hentai|xxx|corpses?|cadavers?|autops\w*|gore|gory|beheading|decapitat\w*|lynching)\b/i;
-export const unsafeText = (s: string) => UNSAFE.test(s.replace(/_/g, ' '));
+// School topics (biology, health, history) are fine; only nudity, sexual content and extreme gore are filtered.
+const UNSAFE = /\b(nud(e|es|ity|ism|ist|ists)|naked|sex|sexy|erotic\w*|porn\w*|genitals?|genitalia|penis(es)?|vaginas?|vulvas?|nipples?|topless|lingerie|fetish\w*|bdsm|bondage|masturbat\w*|intercourse|orgasm\w*|hentai|xxx|nsfw|gore|gory|beheading|decapitat\w*)\b/i;
+const SCHOOL = /\b(a?sexual(ly)? (reproduction|selection|dimorphism|cells?)|sex(-| )(chromosomes?|cells?|linked|determination|organs?)|sex education)\b/gi;
+export const unsafeText = (s: string) => UNSAFE.test(s.replace(/_/g, ' ').replace(SCHOOL, ' '));
 
 export const imageName = (file: string) => file.replace(/^File:/i, '').replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' ');
 const sameFile = (a: string) => a.replace(/^File:/i, '').replace(/_/g, ' ').toLowerCase();
