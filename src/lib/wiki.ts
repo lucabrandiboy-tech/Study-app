@@ -8,8 +8,10 @@ export interface WikiSection { heading: string; level: number; paras: string[] }
 export interface WikiArticle { title: string; image?: string; sections: WikiSection[] }
 
 // origin=* makes Wikipedia answer cross-site requests without credentials (CORS), so this works from any page, even a downloaded file.
-const api = (site: WikiSite, params: Record<string, string>) =>
-  `https://${site}.wikipedia.org/w/api.php?${new URLSearchParams({ ...params, format: 'json', formatversion: '2', origin: '*' })}`;
+const apiAt = (host: string, params: Record<string, string>) =>
+  `https://${host}/w/api.php?${new URLSearchParams({ ...params, format: 'json', formatversion: '2', origin: '*' })}`;
+const api = (site: WikiSite, params: Record<string, string>) => apiAt(`${site}.wikipedia.org`, params);
+const COMMONS = 'commons.wikimedia.org';
 
 const cache = new Map<string, unknown>();
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
@@ -96,4 +98,73 @@ export function parseExtract(text: string): WikiSection[] {
     return false;
   };
   return sections.filter((_, i) => hasText(i));
+}
+
+// ---------------------------------------------------------------- Pictures
+// Wikimedia Commons (100+ million free pictures) and the main picture of matching Wikipedia articles. No key needed.
+
+export interface WikiImage {
+  file: string; // file name without "File:", e.g. "Leaf 1 web.jpg"
+  host: string; // which API to ask for the big version and the credit
+  thumb: string;
+  caption: string;
+  credit: string;
+  article?: string; // the Wikipedia article this is the main picture of
+}
+export interface ImageDetails { large: string; caption: string; credit: string }
+
+// Commons has no safe-search switch, so pictures whose search words, name, description or categories mention
+// adult or gory subjects are left out. This catches what Commons labels; it can't promise to catch everything.
+const UNSAFE = /\b(nud(e|es|ity|ism|ist|ists)|naked|sex|sexual|sexuality|sexy|erotic\w*|porn\w*|genital\w*|penis(es)?|vagina\w*|vulva\w*|testic\w*|nipples?|topless|lingerie|fetish\w*|bdsm|bondage|masturbat\w*|intercourse|orgasm\w*|hentai|xxx|corpses?|cadavers?|autops\w*|gore|gory|beheading|decapitat\w*|lynching)\b/i;
+export const unsafeText = (s: string) => UNSAFE.test(s.replace(/_/g, ' '));
+
+export const imageName = (file: string) => file.replace(/^File:/i, '').replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' ');
+const sameFile = (a: string) => a.replace(/^File:/i, '').replace(/_/g, ' ').toLowerCase();
+
+type Meta = Record<string, { value?: unknown } | undefined>;
+const metaText = (m: Meta | undefined, k: string) => stripHtml(String(m?.[k]?.value ?? '')).replace(/\s+/g, ' ').trim();
+const creditOf = (m: Meta | undefined) => [metaText(m, 'Artist'), metaText(m, 'LicenseShortName')].filter(Boolean).join(' · ');
+const META_FIELDS = 'ImageDescription|ObjectName|Artist|LicenseShortName';
+
+type CommonsJson = { query?: { pages?: { title: string; index?: number; categories?: { title: string }[]; imageinfo?: { thumburl?: string; extmetadata?: Meta }[] }[] } };
+/** Picture results from a Commons file search, minus anything flagged by the safety filter. */
+export function parseCommons(j: CommonsJson): WikiImage[] {
+  return (j.query?.pages ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).flatMap((p) => {
+    const info = p.imageinfo?.[0];
+    if (!info?.thumburl || !p.categories) return []; // no categories returned: can't check it, so skip it
+    const caption = metaText(info.extmetadata, 'ImageDescription') || metaText(info.extmetadata, 'ObjectName');
+    if (unsafeText([p.title, caption, ...p.categories.map((c) => c.title)].join(' | '))) return [];
+    return [{ file: p.title.replace(/^File:/i, ''), host: COMMONS, thumb: info.thumburl, caption, credit: creditOf(info.extmetadata) }];
+  });
+}
+
+type LeadJson = { query?: { pages?: { title: string; index?: number; pageimage?: string; thumbnail?: { source: string } }[] } };
+/** The main picture of each Wikipedia article that matches the search. */
+export function parseLeadImages(j: LeadJson, site: WikiSite): WikiImage[] {
+  return (j.query?.pages ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).flatMap((p) => {
+    if (!p.thumbnail?.source || !p.pageimage || unsafeText(`${p.title} | ${p.pageimage}`)) return [];
+    return [{ file: p.pageimage, host: `${site}.wikipedia.org`, thumb: p.thumbnail.source, caption: p.title, credit: '', article: p.title }];
+  });
+}
+
+/** Pictures for a search: article pictures first (most on-topic), then Commons. `blocked` when the search words themselves are filtered. */
+export async function imageSearch(q: string, site: WikiSite, signal?: AbortSignal): Promise<{ items: WikiImage[]; blocked: boolean }> {
+  if (unsafeText(q)) return { items: [], blocked: true };
+  const [lead, commons] = await Promise.allSettled([
+    getJson<LeadJson>(api(site, { action: 'query', generator: 'search', gsrsearch: q, gsrlimit: '12', prop: 'pageimages', piprop: 'thumbnail|name', pithumbsize: '400' }), signal),
+    getJson<CommonsJson>(apiAt(COMMONS, { action: 'query', generator: 'search', gsrsearch: `${q} filetype:bitmap`, gsrnamespace: '6', gsrlimit: '36', prop: 'imageinfo|categories', iiprop: 'url|extmetadata', iiurlwidth: '400', iiextmetadatafilter: META_FIELDS, iiextmetadatalanguage: 'en', clshow: '!hidden', cllimit: 'max' }), signal),
+  ]);
+  if (lead.status === 'rejected' && commons.status === 'rejected') throw lead.reason;
+  const all = [...(lead.status === 'fulfilled' ? parseLeadImages(lead.value, site) : []), ...(commons.status === 'fulfilled' ? parseCommons(commons.value) : [])];
+  const seen = new Set<string>();
+  return { items: all.filter((i) => (seen.has(sameFile(i.file)) ? false : (seen.add(sameFile(i.file)), true))), blocked: false };
+}
+
+/** A bigger copy of a picture, with its description and who made it. */
+export async function imageDetails(img: WikiImage, signal?: AbortSignal): Promise<ImageDetails> {
+  type R = { query?: { pages?: { imageinfo?: { url?: string; thumburl?: string; extmetadata?: Meta }[] }[] } };
+  const j = await getJson<R>(apiAt(img.host, { action: 'query', titles: `File:${img.file}`, prop: 'imageinfo', iiprop: 'url|extmetadata', iiurlwidth: '1000', iiextmetadatafilter: META_FIELDS, iiextmetadatalanguage: 'en' }), signal);
+  const info = j.query?.pages?.[0]?.imageinfo?.[0];
+  if (!info) throw new Error('Picture details not found.');
+  return { large: info.thumburl ?? info.url ?? img.thumb, caption: metaText(info.extmetadata, 'ImageDescription') || metaText(info.extmetadata, 'ObjectName'), credit: creditOf(info.extmetadata) };
 }

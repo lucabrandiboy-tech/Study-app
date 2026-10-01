@@ -4,7 +4,7 @@ import { COURSE, lessonPiece } from '../src/piano/course';
 import { songLibrary } from '../src/piano/songs';
 import { measureLen, toMusicXML } from '../src/piano/notation';
 import { staticIndex, runSearch, norm } from '../src/lib/search';
-import { parseExtract, stripHtml } from '../src/lib/wiki';
+import { parseExtract, stripHtml, parseCommons, parseLeadImages, unsafeText } from '../src/lib/wiki';
 
 let problems = 0;
 const fail = (m: string) => { problems++; console.log('✗', m); };
@@ -73,5 +73,17 @@ if (norm('Für Élise 𝄞!') !== 'fur elise    ') fail(`search: norm() gave "${
 if (stripHtml('a <span class="searchmatch">cell</span> &quot;x&quot; &amp; &#039;y&#039;') !== 'a cell "x" & \'y\'') fail('wiki: stripHtml');
 const secs = parseExtract('Intro text {\\displaystyle a^{2}+b^{2}}.\n\n== History ==\nOld times.\n=== Empty ===\n== References ==\nRef.\n=== More refs ===\nRef.\n== Life ==\nText.');
 if (JSON.stringify(secs.map((x) => [x.heading, x.paras])) !== JSON.stringify([['', ['Intro text.']], ['History', ['Old times.']], ['Life', ['Text.']]])) fail(`wiki: parseExtract gave ${JSON.stringify(secs)}`);
+// Picture search: safety filter and result parsing (sample API replies; no network needed).
+for (const bad of ['nude beach', 'Sexual_content', 'Category:Nudity in art', 'naked', 'corpse']) if (!unsafeText(bad)) fail(`pictures: "${bad}" should be filtered`);
+for (const ok of ['Sussex', 'photosynthesis', 'Civil War soldiers', 'Essex county', 'breast cancer awareness ribbon']) if (unsafeText(ok)) fail(`pictures: "${ok}" should not be filtered`);
+const commons = parseCommons({ query: { pages: [
+  { title: 'File:Leaf_2.jpg', index: 2, categories: [{ title: 'Category:Leaves' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/b.jpg', extmetadata: { ImageDescription: { value: 'A <b>green</b> leaf' }, Artist: { value: '<a href="x">Ann</a>' }, LicenseShortName: { value: 'CC BY-SA 4.0' } } }] },
+  { title: 'File:Leaf_1.jpg', index: 1, categories: [{ title: 'Category:Plants' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/a.jpg' }] },
+  { title: 'File:Hidden.jpg', index: 3, categories: [{ title: 'Category:Nude people' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/c.jpg' }] },
+  { title: 'File:Unchecked.jpg', index: 4, imageinfo: [{ thumburl: 'https://upload.wikimedia.org/d.jpg' }] },
+] } });
+if (JSON.stringify(commons.map((c) => [c.file, c.caption, c.credit])) !== JSON.stringify([['Leaf_1.jpg', '', ''], ['Leaf_2.jpg', 'A green leaf', 'Ann · CC BY-SA 4.0']])) fail(`pictures: parseCommons gave ${JSON.stringify(commons)}`);
+const lead = parseLeadImages({ query: { pages: [{ title: 'Leaf', index: 1, pageimage: 'Leaf_1.jpg', thumbnail: { source: 'https://upload.wikimedia.org/a.jpg' } }, { title: 'No picture', index: 2 }] } }, 'simple');
+if (lead.length !== 1 || lead[0].article !== 'Leaf' || lead[0].host !== 'simple.wikipedia.org') fail(`pictures: parseLeadImages gave ${JSON.stringify(lead)}`);
 console.log(problems ? `${problems} problem(s)` : `All good: ${pieces.length} pieces (${lib.length} library songs), all topic generators OK.`);
 process.exit(problems ? 1 : 0);

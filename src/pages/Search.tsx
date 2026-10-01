@@ -7,7 +7,7 @@ import { useSubjects } from '../study/pages';
 import { findTopic } from '../study/subjects';
 import { songLibrary } from '../piano/songs';
 import { staticIndex, userIndex, runSearch, snippet, matchRanges, queryTerms, KIND_GROUP, KIND_LABEL, type SearchItem, type Kind } from '../lib/search';
-import { wikiSearch, wikiArticle, wikiRelated, WIKI_NAME, type WikiSite, type WikiHit, type WikiArticle } from '../lib/wiki';
+import { wikiSearch, wikiArticle, wikiRelated, imageSearch, imageDetails, imageName, WIKI_NAME, type WikiSite, type WikiHit, type WikiArticle, type WikiImage, type ImageDetails } from '../lib/wiki';
 import { PageHeader, Rich, Stars } from '../components/ui';
 
 const INPUT_ID = 'search-input';
@@ -199,9 +199,55 @@ function WikiReader({ title, site, terms, onOpen }: { title: string; site: WikiS
   );
 }
 
-type Tab = 'all' | 'study' | 'piano' | 'yours' | 'web';
-type Sel = { kind: 'app'; item: SearchItem } | { kind: 'web'; title: string } | null;
+function ImageGrid({ items, active, onPick }: { items: WikiImage[]; active?: string; onPick: (img: WikiImage) => void }) {
+  return (
+    <div className="keep-cols grid grid-cols-3 sm:grid-cols-4 gap-2">
+      {items.map((img) => (
+        <button key={img.file} onClick={() => onPick(img)} title={imageName(img.file)}
+          className={`aspect-square rounded-lg overflow-hidden bg-navy border transition ${active === img.file ? 'border-edge ring-2 ring-edge' : 'border-edge/20 hover:border-edge/70'}`}>
+          <img src={img.thumb} alt={img.caption || imageName(img.file)} loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover"
+            onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A picture shown big, right here, with what it shows and who made it. */
+function ImageViewer({ img, onArticle }: { img: WikiImage; onArticle: (title: string) => void }) {
+  const [d, setD] = useState<ImageDetails | null>(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    setD(null);
+    imageDetails(img, ac.signal).then(setD).catch(() => { /* keep the small copy */ });
+    return () => ac.abort();
+  }, [img]);
+  const caption = d?.caption || img.caption;
+  const credit = d?.credit || img.credit;
+  return (
+    <div>
+      <div className="flex items-start gap-3 mb-3">
+        <div className="text-4xl leading-none">🖼️</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs muted">{img.article ? `Picture from the Wikipedia article "${img.article}"` : 'Picture from Wikimedia Commons'}</div>
+          <h2 className="h2 break-words">{imageName(img.file)}</h2>
+        </div>
+      </div>
+      <div className="rounded-xl overflow-hidden bg-navy border border-edge/30 flex items-center justify-center min-h-40">
+        <img src={d?.large ?? img.thumb} alt={caption || imageName(img.file)} referrerPolicy="no-referrer" className="max-h-[60vh] max-w-full object-contain" />
+      </div>
+      {caption && caption !== img.article && <p className="mt-3 leading-relaxed">{caption.length > 600 ? `${caption.slice(0, 600)}…` : caption}</p>}
+      {credit && <p className="text-xs muted mt-2">📷 {credit}</p>}
+      {img.article && <button className="btn mt-3" onClick={() => onArticle(img.article!)}>📖 Read about {img.article}</button>}
+      <p className="text-xs muted mt-4">These are free pictures shared by their makers. If you use one in a school project, give credit like the line above. Pictures are filtered for school, but if you ever see something that isn't okay, tell a parent or teacher.</p>
+    </div>
+  );
+}
+
+type Tab = 'all' | 'study' | 'piano' | 'yours' | 'images' | 'web';
+type Sel = { kind: 'app'; item: SearchItem } | { kind: 'web'; title: string } | { kind: 'image'; img: WikiImage } | null;
 interface Web { q: string; hits: WikiHit[]; suggestion?: string; loading: boolean; err?: string }
+interface Pics { q: string; items: WikiImage[]; loading: boolean; err?: string; blocked?: boolean }
 let lastSite: WikiSite = 'simple';
 let builtIn: { lang: string; items: SearchItem[] } | null = null; // the app's own content, indexed once per language
 const EXAMPLES = ['photosynthesis', 'Pythagorean theorem', 'Civil War', 'verbs', 'Beethoven', 'Moon'];
@@ -214,8 +260,9 @@ export function SearchPage() {
   const [sel, setSel] = useState<Sel>(null);
   const [more, setMore] = useState(0);
   const [site, setSiteState] = useState<WikiSite>(lastSite);
-  const setSite = (s: WikiSite) => { lastSite = s; setSiteState(s); if (sel?.kind === 'web') setSel(null); };
+  const setSite = (s: WikiSite) => { lastSite = s; setSiteState(s); if (sel && sel.kind !== 'app') setSel(null); };
   const [web, setWeb] = useState<Web>({ q: '', hits: [], loading: false });
+  const [pics, setPics] = useState<Pics>({ q: '', items: [], loading: false });
   const previewBox = useRef<HTMLDivElement>(null);
   usePage({ label: 'Search', subject: 'general' });
 
@@ -253,14 +300,45 @@ export function SearchPage() {
     return () => { clearTimeout(id); ac.abort(); };
   }, [text, site]);
 
-  const shown = tab === 'all' ? hits.slice(0, 8 + more) : tab === 'web' ? [] : hits.filter((h) => KIND_GROUP[h.kind] === tab).slice(0, 40 + more);
-  const total = tab === 'all' ? hits.length : tab === 'web' ? 0 : count(tab);
+  // Pictures, the same way
+  useEffect(() => {
+    const q = text.trim();
+    if (q.length < 2) { setPics({ q: '', items: [], loading: false }); return; }
+    if (!navigator.onLine) { setPics({ q, items: [], loading: false, err: OFFLINE }); return; }
+    setPics((p) => ({ ...p, loading: true, err: undefined }));
+    const ac = new AbortController();
+    const id = setTimeout(() => {
+      imageSearch(q, site, ac.signal).then((r) => setPics({ q, ...r, loading: false })).catch((e) => { if (!ac.signal.aborted) setPics({ q, items: [], loading: false, err: netMessage(e) }); });
+    }, 450);
+    return () => { clearTimeout(id); ac.abort(); };
+  }, [text, site]);
+
+  const appTab = tab !== 'web' && tab !== 'images';
+  const shown = tab === 'all' ? hits.slice(0, 8 + more) : !appTab ? [] : hits.filter((h) => KIND_GROUP[h.kind] === tab).slice(0, 40 + more);
+  const total = tab === 'all' ? hits.length : !appTab ? 0 : count(tab);
   const pickFirst = () => {
     if (shown[0]) setSel({ kind: 'app', item: shown[0] });
+    else if (tab === 'images' && pics.items[0]) setSel({ kind: 'image', img: pics.items[0] });
     else if ((tab === 'all' || tab === 'web') && web.hits[0]) setSel({ kind: 'web', title: web.hits[0].title });
   };
 
-  const chips: [Tab, string, number | null][] = [['all', 'All', null], ['study', '📚 Study', count('study')], ['piano', '🎹 Piano & songs', count('piano')], ['yours', '🗂️ Your stuff', count('yours')], ['web', '🌐 Look it up', web.q ? web.hits.length : null]];
+  const chips: [Tab, string, number | null][] = [['all', 'All', null], ['study', '📚 Study', count('study')], ['piano', '🎹 Piano & songs', count('piano')], ['yours', '🗂️ Your stuff', count('yours')], ['images', '🖼️ Pictures', pics.q ? pics.items.length : null], ['web', '🌐 Look it up', web.q ? web.hits.length : null]];
+  const picsSection = (
+    <div className="p-1">
+      <div className="flex items-center justify-between gap-2 px-1 mb-1">
+        <div className="font-bold">🖼️ Pictures</div>
+        {tab === 'all' && pics.items.length > 8 && <button className="text-sm font-bold text-edge hover:underline" onClick={() => setTab('images')}>See all {pics.items.length} →</button>}
+      </div>
+      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia and Wikimedia Commons. Tap one to see it big, right here.</div>
+      {pics.loading && <div className="muted text-sm px-1 animate-pulse">Finding pictures…</div>}
+      {!pics.loading && pics.err && <div className="text-sm text-bad px-1">{pics.err}</div>}
+      {!pics.loading && pics.blocked && <div className="muted text-sm px-1">Pictures are turned off for this search.</div>}
+      {!pics.loading && !pics.err && !pics.blocked && pics.q && !pics.items.length && <div className="muted text-sm px-1">No pictures found.</div>}
+      {!pics.loading && !!pics.items.length && (
+        <ImageGrid items={tab === 'all' ? pics.items.slice(0, 8) : pics.items} active={sel?.kind === 'image' ? sel.img.file : undefined} onPick={(img) => setSel({ kind: 'image', img })} />
+      )}
+    </div>
+  );
   const webSection = (
     <div className="p-1">
       <div className="flex items-center gap-2 flex-wrap mb-1 px-1">
@@ -283,7 +361,7 @@ export function SearchPage() {
 
   return (
     <div>
-      <PageHeader title="🔍 Search" sub="Find anything in the app, or look something up. Results open right here." />
+      <PageHeader title="🔍 Search" sub="Find anything in the app, look something up, or find pictures. Results open right here." />
       <div className="relative mb-3">
         <span className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">🔍</span>
         <input id={INPUT_ID} className="input w-full text-lg py-3 pl-11 pr-12" placeholder="Search lessons, vocab, songs, homework… or look anything up" value={text} autoComplete="off" enterKeyHint="search"
@@ -299,6 +377,7 @@ export function SearchPage() {
             <li>📚 Every lesson, vocab word and formula in your courses</li>
             <li>🎹 Piano lessons and all {songCount.toLocaleString()} songs</li>
             <li>🗂️ Your homework, tests, notes and flashcard decks</li>
+            <li>🖼️ Pictures of almost anything, from Wikipedia and Wikimedia Commons</li>
             <li>🌐 Anything else, looked up on Wikipedia and shown right here. No website opens and there's no API key.</li>
           </ul>
           <div className="text-sm muted mb-2">Try:</div>
@@ -316,7 +395,7 @@ export function SearchPage() {
           </div>
           <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] gap-4 items-start">
             <div className={`space-y-3 ${sel ? 'hidden md:block' : ''}`}>
-              {tab !== 'web' && (
+              {appTab && (
                 <div className="card p-2">
                   {!shown.length && (
                     <div className="p-3">
@@ -331,6 +410,7 @@ export function SearchPage() {
                   {shown.length < total && <button className="w-full text-sm font-bold text-edge py-2 hover:underline" onClick={() => setMore((m) => m + (tab === 'all' ? 12 : 40))}>Show more ({total - shown.length} left)</button>}
                 </div>
               )}
+              {(tab === 'all' || tab === 'images') && <div className="card p-2">{picsSection}</div>}
               {(tab === 'all' || tab === 'web') && <div className="card p-2">{webSection}</div>}
             </div>
             <div className={`${sel ? '' : 'hidden md:block'} md:sticky md:top-4`}>
@@ -339,6 +419,7 @@ export function SearchPage() {
                 {!sel && <div className="muted text-center py-16">Pick a result to see it here.</div>}
                 {sel?.kind === 'app' && <Preview item={sel.item} terms={terms} />}
                 {sel?.kind === 'web' && <WikiReader title={sel.title} site={site} terms={terms} onOpen={(t) => setSel({ kind: 'web', title: t })} />}
+                {sel?.kind === 'image' && <ImageViewer img={sel.img} onArticle={(t) => setSel({ kind: 'web', title: t })} />}
               </div>
             </div>
           </div>
