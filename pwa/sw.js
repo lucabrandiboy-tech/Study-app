@@ -16,7 +16,7 @@ self.addEventListener('fetch', (e) => {
   if (req.destination === 'image' && new URL(req.url).origin !== self.location.origin) return; // pictures from search results
   // The app page itself: use the newest version when online, the saved copy when offline.
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put('./index.html', copy)); return res; }).catch(() => caches.match('./index.html')));
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put('./index.html', copy)); return res; }).catch(() => caches.match('./index.html')));
     return;
   }
   // Everything else (icons, fonts, piano sound samples): saved copy first, refreshed in the background.

@@ -15,12 +15,50 @@ const picName = (img: WikiImage) => img.sourceTitle || imageName(img.file);
 
 const INPUT_ID = 'search-input';
 const isPhone = () => window.matchMedia('(max-width: 767px)').matches;
+const caretToEnd = (el: HTMLElement) => {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  const s = window.getSelection();
+  s?.removeAllRanges();
+  s?.addRange(r);
+};
 /** Puts the cursor at the end of the Search page's box. */
 export function focusSearch() {
-  const el = document.getElementById(INPUT_ID) as HTMLInputElement | null;
+  const el = document.getElementById(INPUT_ID);
   if (!el) return;
   el.focus();
-  el.setSelectionRange(el.value.length, el.value.length);
+  caretToEnd(el);
+}
+
+/** A one-line search box that browsers can't save. It isn't a form field (it's editable text), so there is no
+ *  autofill, no form history and no saved suggestions, whatever the browser's settings. */
+function PrivateField({ value, onChange, placeholder, label, className, id, onKeyDown, onFocus, onBlur }: {
+  value: string; onChange: (v: string) => void; placeholder: string; label: string; className: string; id?: string;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void; onFocus?: () => void; onBlur?: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || (el.textContent ?? '') === value) return;
+    el.textContent = value;
+    if (document.activeElement === el) caretToEnd(el);
+  }, [value]);
+  return (
+    <div ref={ref} id={id} role="searchbox" aria-label={label} aria-placeholder={placeholder} data-placeholder={placeholder}
+      contentEditable suppressContentEditableWarning tabIndex={0} spellCheck={false} autoCorrect="off" autoCapitalize="off" inputMode="search" enterKeyHint="search"
+      className={`pfield ${className}`}
+      onInput={(e) => {
+        const el = e.currentTarget;
+        const t = (el.textContent ?? '').replace(/[\r\n]+/g, ' ');
+        if (!t) el.innerHTML = ''; // so the placeholder shows again
+        onChange(t);
+      }}
+      onPaste={(e) => { e.preventDefault(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain').replace(/[\r\n]+/g, ' ')); }}
+      onDrop={(e) => e.preventDefault()}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); onKeyDown?.(e); }}
+      onFocus={onFocus} onBlur={onBlur} />
+  );
 }
 
 /** Ctrl+K / ⌘K anywhere opens Search. */
@@ -48,11 +86,10 @@ export function SidebarSearch() {
   return (
     <div className="relative mb-4">
       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm pointer-events-none">🔍</span>
-      <input className="input w-full pl-9 pr-14 text-sm" placeholder="Search…" value={v} aria-label="Search the app"
+      <PrivateField className="input w-full pl-9 pr-14 text-sm" placeholder="Search…" value={v} label="Search the app"
         onFocus={() => { if (here) focusSearch(); }}
         onBlur={() => setV('')}
-        autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
-        onChange={(e) => { setV(e.target.value); if (e.target.value) nav('/search', { replace: here, state: { q: e.target.value } }); }}
+        onChange={(t) => { setV(t); if (t) nav('/search', { replace: here, state: { q: t } }); }}
         onKeyDown={(e) => { if (e.key === 'Enter') nav('/search'); }} />
       <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] muted border border-edge/30 rounded px-1 pointer-events-none">Ctrl K</kbd>
     </div>
@@ -504,9 +541,9 @@ export function SearchPage() {
       <PageHeader title="🔍 Search" sub="Find anything in the app, look something up, or find pictures. Results open right here." right={<span className="chip whitespace-nowrap" title="Search words are never saved: not in browser history, not in the app">🔒 Private: nothing saved</span>} />
       <div className="relative mb-3">
         <span className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">🔍</span>
-        <input id={INPUT_ID} className="input w-full text-lg py-3 pl-11 pr-12" placeholder="Search lessons, vocab, songs, homework… or look anything up" value={text} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pickFirst(); if (isPhone()) (e.target as HTMLInputElement).blur(); } else if (e.key === 'Escape') { if (sel) setSel(null); else setText(''); } }} />
+        <PrivateField id={INPUT_ID} className="input w-full text-lg py-3 pl-11 pr-12" placeholder="Search lessons, vocab, songs, homework… or look anything up" value={text} label="Search"
+          onChange={setText}
+          onKeyDown={(e) => { if (e.key === 'Enter') { pickFirst(); if (isPhone()) e.currentTarget.blur(); } else if (e.key === 'Escape') { if (sel) setSel(null); else setText(''); } }} />
         {text && <button className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg muted hover:text-ink" onClick={() => { setText(''); setTimeout(focusSearch, 0); }} aria-label="Clear search">✕</button>}
       </div>
 

@@ -22,6 +22,11 @@ body {
   .muted { @apply text-muted; }
   .chip { @apply text-xs px-2 py-0.5 rounded-full border border-edge/50 text-muted; }
 }
+/* Search boxes (editable text, so browsers never save them): one line, with a placeholder */
+.pfield { display: block; white-space: nowrap; overflow: hidden; cursor: text; outline: none; min-height: 2.6em; line-height: 1.6; }
+.pfield br { display: none; }
+.pfield:empty::before { content: attr(data-placeholder); color: rgb(169 168 214 / .6); pointer-events: none; }
+.pfield:focus { box-shadow: 0 0 0 2px #7FD3FF, 0 0 14px rgba(127,211,255,.5); }
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background: #241552; border-radius: 8px; }
 
