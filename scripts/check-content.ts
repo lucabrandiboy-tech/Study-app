@@ -83,6 +83,7 @@ const commons = parseCommons({ query: { pages: [
   { title: 'File:Unchecked.jpg', index: 4, imageinfo: [{ thumburl: 'https://upload.wikimedia.org/d.jpg' }] },
 ] } });
 if (JSON.stringify(commons.map((c) => [c.file, c.caption, c.credit])) !== JSON.stringify([['Leaf_1.jpg', '', ''], ['Leaf_2.jpg', 'A green leaf', 'Ann · CC BY-SA 4.0']])) fail(`pictures: parseCommons gave ${JSON.stringify(commons)}`);
+if (parseCommons({ query: { pages: [{ title: 'File:Hidden.jpg', categories: [{ title: 'Category:Nude people' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/c.jpg' }] }] } }, false).length !== 1) fail('pictures: filter off should show everything');
 const lead = parseLeadImages({ query: { pages: [{ title: 'Leaf', index: 1, pageimage: 'Leaf_1.jpg', thumbnail: { source: 'https://upload.wikimedia.org/a.jpg' } }, { title: 'No picture', index: 2 }] } }, 'simple');
 if (lead.length !== 1 || lead[0].article !== 'Leaf' || lead[0].host !== 'simple.wikipedia.org') fail(`pictures: parseLeadImages gave ${JSON.stringify(lead)}`);
 console.log(problems ? `${problems} problem(s)` : `All good: ${pieces.length} pieces (${lib.length} library songs), all topic generators OK.`);

@@ -263,6 +263,7 @@ export function SearchPage() {
   const setSite = (s: WikiSite) => { lastSite = s; setSiteState(s); if (sel && sel.kind !== 'app') setSel(null); };
   const [web, setWeb] = useState<Web>({ q: '', hits: [], loading: false });
   const [pics, setPics] = useState<Pics>({ q: '', items: [], loading: false });
+  const picFilter = useApp((s) => s.settings.picFilter);
   const previewBox = useRef<HTMLDivElement>(null);
   usePage({ label: 'Search', subject: 'general' });
 
@@ -308,10 +309,10 @@ export function SearchPage() {
     setPics((p) => ({ ...p, loading: true, err: undefined }));
     const ac = new AbortController();
     const id = setTimeout(() => {
-      imageSearch(q, site, ac.signal).then((r) => setPics({ q, ...r, loading: false })).catch((e) => { if (!ac.signal.aborted) setPics({ q, items: [], loading: false, err: netMessage(e) }); });
+      imageSearch(q, site, ac.signal, picFilter).then((r) => setPics({ q, ...r, loading: false })).catch((e) => { if (!ac.signal.aborted) setPics({ q, items: [], loading: false, err: netMessage(e) }); });
     }, 450);
     return () => { clearTimeout(id); ac.abort(); };
-  }, [text, site]);
+  }, [text, site, picFilter]);
 
   const appTab = tab !== 'web' && tab !== 'images';
   const shown = tab === 'all' ? hits.slice(0, 8 + more) : !appTab ? [] : hits.filter((h) => KIND_GROUP[h.kind] === tab).slice(0, 40 + more);
@@ -329,7 +330,7 @@ export function SearchPage() {
         <div className="font-bold">🖼️ Pictures</div>
         {tab === 'all' && pics.items.length > 8 && <button className="text-sm font-bold text-edge hover:underline" onClick={() => setTab('images')}>See all {pics.items.length} →</button>}
       </div>
-      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia and Wikimedia Commons. Tap one to see it big, right here.</div>
+      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia and Wikimedia Commons. Tap one to see it big, right here.{!picFilter && ' Picture filter is off.'}</div>
       {pics.loading && <div className="muted text-sm px-1 animate-pulse">Finding pictures…</div>}
       {!pics.loading && pics.err && <div className="text-sm text-bad px-1">{pics.err}</div>}
       {!pics.loading && pics.blocked && <div className="muted text-sm px-1">Pictures are turned off for this search.</div>}

@@ -42,6 +42,7 @@ export interface AppState {
     language: 'spanish' | 'french';
     name: string;
     jazz: boolean; jazzVolume: number; midiAppSound: boolean; autoBackup: boolean;
+    picFilter: boolean; picPin: string; // picture-search filter; only someone with the teacher PIN (stored hashed) can turn it off
   };
   notes: Record<string, string>;
   decks: Deck[];
@@ -69,7 +70,7 @@ const fresh = (): AppState => ({
   topics: {},
   quizzes: [],
   piano: { lessons: {}, unitTests: {}, unlockedUnit: 1, placementDone: false, songs: {}, noteGameNPM: [] },
-  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5, midiAppSound: true, autoBackup: true },
+  settings: { goalStudy: 1, goalPiano: 1, focusWork: 25, focusShort: 5, focusLong: 15, volume: 0.8, metronome: 'click', language: 'spanish', name: '', jazz: true, jazzVolume: 0.5, midiAppSound: true, autoBackup: true, picFilter: true, picPin: '' },
   notes: {},
   decks: [],
   recordings: [],

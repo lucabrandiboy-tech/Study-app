@@ -128,34 +128,35 @@ const META_FIELDS = 'ImageDescription|ObjectName|Artist|LicenseShortName';
 
 type CommonsJson = { query?: { pages?: { title: string; index?: number; categories?: { title: string }[]; imageinfo?: { thumburl?: string; extmetadata?: Meta }[] }[] } };
 /** Picture results from a Commons file search, minus anything flagged by the safety filter. */
-export function parseCommons(j: CommonsJson): WikiImage[] {
+export function parseCommons(j: CommonsJson, filter = true): WikiImage[] {
   return (j.query?.pages ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).flatMap((p) => {
     const info = p.imageinfo?.[0];
-    if (!info?.thumburl || !p.categories) return []; // no categories returned: can't check it, so skip it
+    if (!info?.thumburl || (filter && !p.categories)) return []; // no categories returned: can't check it, so skip it
     const caption = metaText(info.extmetadata, 'ImageDescription') || metaText(info.extmetadata, 'ObjectName');
-    if (unsafeText([p.title, caption, ...p.categories.map((c) => c.title)].join(' | '))) return [];
+    if (filter && unsafeText([p.title, caption, ...(p.categories ?? []).map((c) => c.title)].join(' | '))) return [];
     return [{ file: p.title.replace(/^File:/i, ''), host: COMMONS, thumb: info.thumburl, caption, credit: creditOf(info.extmetadata) }];
   });
 }
 
 type LeadJson = { query?: { pages?: { title: string; index?: number; pageimage?: string; thumbnail?: { source: string } }[] } };
 /** The main picture of each Wikipedia article that matches the search. */
-export function parseLeadImages(j: LeadJson, site: WikiSite): WikiImage[] {
+export function parseLeadImages(j: LeadJson, site: WikiSite, filter = true): WikiImage[] {
   return (j.query?.pages ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).flatMap((p) => {
-    if (!p.thumbnail?.source || !p.pageimage || unsafeText(`${p.title} | ${p.pageimage}`)) return [];
+    if (!p.thumbnail?.source || !p.pageimage || (filter && unsafeText(`${p.title} | ${p.pageimage}`))) return [];
     return [{ file: p.pageimage, host: `${site}.wikipedia.org`, thumb: p.thumbnail.source, caption: p.title, credit: '', article: p.title }];
   });
 }
 
-/** Pictures for a search: article pictures first (most on-topic), then Commons. `blocked` when the search words themselves are filtered. */
-export async function imageSearch(q: string, site: WikiSite, signal?: AbortSignal): Promise<{ items: WikiImage[]; blocked: boolean }> {
-  if (unsafeText(q)) return { items: [], blocked: true };
+/** Pictures for a search: article pictures first (most on-topic), then Commons. `blocked` when the search words themselves are filtered.
+ *  `filter` false (teacher PIN in Settings) shows everything. */
+export async function imageSearch(q: string, site: WikiSite, signal?: AbortSignal, filter = true): Promise<{ items: WikiImage[]; blocked: boolean }> {
+  if (filter && unsafeText(q)) return { items: [], blocked: true };
   const [lead, commons] = await Promise.allSettled([
     getJson<LeadJson>(api(site, { action: 'query', generator: 'search', gsrsearch: q, gsrlimit: '12', prop: 'pageimages', piprop: 'thumbnail|name', pithumbsize: '400' }), signal),
     getJson<CommonsJson>(apiAt(COMMONS, { action: 'query', generator: 'search', gsrsearch: `${q} filetype:bitmap`, gsrnamespace: '6', gsrlimit: '36', prop: 'imageinfo|categories', iiprop: 'url|extmetadata', iiurlwidth: '400', iiextmetadatafilter: META_FIELDS, iiextmetadatalanguage: 'en', clshow: '!hidden', cllimit: 'max' }), signal),
   ]);
   if (lead.status === 'rejected' && commons.status === 'rejected') throw lead.reason;
-  const all = [...(lead.status === 'fulfilled' ? parseLeadImages(lead.value, site) : []), ...(commons.status === 'fulfilled' ? parseCommons(commons.value) : [])];
+  const all = [...(lead.status === 'fulfilled' ? parseLeadImages(lead.value, site, filter) : []), ...(commons.status === 'fulfilled' ? parseCommons(commons.value, filter) : [])];
   const seen = new Set<string>();
   return { items: all.filter((i) => (seen.has(sameFile(i.file)) ? false : (seen.add(sameFile(i.file)), true))), blocked: false };
 }
@@ -167,4 +168,11 @@ export async function imageDetails(img: WikiImage, signal?: AbortSignal): Promis
   const info = j.query?.pages?.[0]?.imageinfo?.[0];
   if (!info) throw new Error('Picture details not found.');
   return { large: info.thumburl ?? info.url ?? img.thumb, caption: metaText(info.extmetadata, 'ImageDescription') || metaText(info.extmetadata, 'ObjectName'), credit: creditOf(info.extmetadata) };
+}
+
+/** One-way scramble of the teacher PIN, so it isn't saved as plain text. */
+export function pinHash(pin: string): string {
+  let h = 2166136261;
+  for (const c of `study+piano:${pin}`) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
 }

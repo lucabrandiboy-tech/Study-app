@@ -13,6 +13,49 @@ import { MidiSetupPanel } from '../piano/MidiSetup';
 import { PhoneBanner, PhoneSetupCard } from '../components/PhoneSetup';
 import { setVolume, initAudio, click } from '../piano/audio';
 import { SaveFileCard } from '../components/SaveFile';
+import { pinHash } from '../lib/wiki';
+
+/** Teacher-only switch for the picture-search filter, locked with a PIN. */
+function PictureFilterCard() {
+  const { picFilter, picPin } = useApp((s) => s.settings);
+  const [pin, setPin] = useState('');
+  const [pin2, setPin2] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const turnOff = () => {
+    if (!picPin) {
+      if (!/^\d{4,8}$/.test(pin)) return setMsg('Pick a PIN of 4 to 8 digits.');
+      if (pin !== pin2) return setMsg("The two PINs don't match.");
+      setSettings({ picPin: pinHash(pin), picFilter: false });
+    } else {
+      if (pinHash(pin) !== picPin) return setMsg('Wrong PIN.');
+      setSettings({ picFilter: false });
+    }
+    setPin(''); setPin2(''); setMsg(null);
+  };
+  return (
+    <div className="card space-y-3">
+      <div className="h2">🖼️ Picture filter (teacher)</div>
+      <p className="text-sm muted">Picture search hides adult and gory pictures. Only someone with the teacher PIN can turn it off.</p>
+      {picFilter ? (
+        <>
+          <div className="font-bold text-good">On</div>
+          <div className="flex flex-wrap gap-2">
+            <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder={picPin ? 'Teacher PIN' : 'New PIN'} value={pin} onChange={(e) => setPin(e.target.value)} />
+            {!picPin && <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder="PIN again" value={pin2} onChange={(e) => setPin2(e.target.value)} />}
+            <button className="btn-ghost" onClick={turnOff}>Turn filter off</button>
+          </div>
+          {!picPin && <p className="text-xs muted">The first time, choose a PIN. Keep it to yourself.</p>}
+          {msg && <p className="text-sm text-bad">{msg}</p>}
+        </>
+      ) : (
+        <>
+          <div className="font-bold text-streak">Off: picture search shows everything</div>
+          <button className="btn" onClick={() => setSettings({ picFilter: true })}>Turn filter back on</button>
+        </>
+      )}
+    </div>
+  );
+}
 
 const tooltipStyle = { contentStyle: { background: '#141B3D', border: '1px solid #7FD3FF', borderRadius: 10, color: '#E8ECFF' }, labelStyle: { color: '#A9A8D6' } };
 
@@ -256,6 +299,7 @@ export function Settings() {
             <span className="flex gap-2"><select className="input" value={set.metronome} onChange={(e) => setSettings({ metronome: e.target.value as 'click' | 'wood' | 'beep' })}><option value="click">Click</option><option value="wood">Woodblock</option><option value="beep">Beep</option></select>
               <button className="btn-ghost py-1" onClick={async () => { await initAudio(); click(true); setTimeout(() => click(false), 400); }}>Test</button></span></label>
         </div>
+        <PictureFilterCard />
         <div className="card space-y-3">
           <div className="h2">🤖 AI helper</div>
           <div className="flex items-center gap-3">
