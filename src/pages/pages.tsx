@@ -15,22 +15,18 @@ import { setVolume, initAudio, click } from '../piano/audio';
 import { SaveFileCard } from '../components/SaveFile';
 import { pinHash } from '../lib/wiki';
 
+/** The teacher PIN, stored scrambled (pinHash), the same on every device. */
+const TEACHER_PIN = '1nz74ys';
+
 /** Teacher mode, locked with a PIN: turns off the search filter and adds open web search. */
 function TeacherModeCard() {
-  const { picFilter, picPin } = useApp((s) => s.settings);
+  const picFilter = useApp((s) => s.settings.picFilter);
   const [pin, setPin] = useState('');
-  const [pin2, setPin2] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const turnOff = () => {
-    if (!picPin) {
-      if (!/^\d{4,8}$/.test(pin)) return setMsg('Pick a PIN of 4 to 8 digits.');
-      if (pin !== pin2) return setMsg("The two PINs don't match.");
-      setSettings({ picPin: pinHash(pin), picFilter: false });
-    } else {
-      if (pinHash(pin) !== picPin) return setMsg('Wrong PIN.');
-      setSettings({ picFilter: false });
-    }
-    setPin(''); setPin2(''); setMsg(null);
+    if (pinHash(pin.trim()) !== TEACHER_PIN) return setMsg('Wrong PIN.');
+    setSettings({ picFilter: false });
+    setPin(''); setMsg(null);
   };
   return (
     <div className="card space-y-3">
@@ -40,11 +36,9 @@ function TeacherModeCard() {
         <>
           <div className="font-bold text-good">Student mode (filtered)</div>
           <div className="flex flex-wrap gap-2">
-            <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder={picPin ? 'Teacher PIN' : 'New PIN'} value={pin} onChange={(e) => setPin(e.target.value)} />
-            {!picPin && <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder="PIN again" value={pin2} onChange={(e) => setPin2(e.target.value)} />}
+            <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder="Teacher PIN" value={pin} onChange={(e) => setPin(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') turnOff(); }} />
             <button className="btn-ghost" onClick={turnOff}>Turn on teacher mode</button>
           </div>
-          {!picPin && <p className="text-xs muted">The first time, choose a PIN. Keep it to yourself.</p>}
           {msg && <p className="text-sm text-bad">{msg}</p>}
         </>
       ) : (
