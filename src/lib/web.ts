@@ -14,7 +14,7 @@ export function parseMarginalia(j: MG): WebHit[] {
   return (j.results ?? []).filter((r) => /^https?:\/\//.test(r.url)).map((r) => ({ url: r.url, title: stripHtml(r.title || hostOf(r.url)), snippet: stripHtml(r.description ?? ''), host: hostOf(r.url) }));
 }
 export async function webSearch(q: string, signal?: AbortSignal): Promise<WebHit[]> {
-  const res = await fetch(`https://api.marginalia.nu/public/search/${encodeURIComponent(q)}?count=20`, { signal });
+  const res = await fetch(`https://api.marginalia.nu/public/search/${encodeURIComponent(q)}?count=20`, { signal, cache: 'no-store', referrerPolicy: 'no-referrer' });
   if (!res.ok) throw new Error(`Web search answered ${res.status}`);
   return parseMarginalia(await res.json());
 }
@@ -34,6 +34,7 @@ export function instantAnswer(q: string): Promise<Instant | null> {
     const t = setTimeout(() => done(null), 8000);
     (window as unknown as Record<string, unknown>)[cb] = (j: DDG) => done(parseInstant(j));
     s.onerror = () => done(null);
+    s.referrerPolicy = 'no-referrer';
     s.src = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1&callback=${cb}`;
     document.head.appendChild(s);
   });
@@ -58,7 +59,7 @@ export function parseReader(md: string, url: string): WebPage {
 }
 /** Any web page as plain text, to read inside the app. */
 export async function readPage(url: string, signal?: AbortSignal): Promise<WebPage> {
-  const res = await fetch(`https://r.jina.ai/${url}`, { signal });
+  const res = await fetch(`https://r.jina.ai/${url}`, { signal, cache: 'no-store', referrerPolicy: 'no-referrer' });
   if (!res.ok) throw new Error(`Couldn't load that page (${res.status}).`);
   return parseReader(await res.text(), url);
 }

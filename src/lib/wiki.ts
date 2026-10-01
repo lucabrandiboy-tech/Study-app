@@ -16,7 +16,7 @@ const COMMONS = 'commons.wikimedia.org';
 const cache = new Map<string, unknown>();
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   if (cache.has(url)) return cache.get(url) as T;
-  const res = await fetch(url, { signal });
+  const res = await fetch(url, { signal, cache: 'no-store', referrerPolicy: 'no-referrer' }); // nothing kept in the browser cache
   if (!res.ok) throw new Error(`Wikipedia answered ${res.status}`);
   const json = (await res.json()) as T;
   if (cache.size > 200) cache.clear();

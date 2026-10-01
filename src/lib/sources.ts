@@ -3,7 +3,7 @@
 import { stripHtml, unsafeText, type WikiImage } from './wiki';
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
+  const res = await fetch(url, { signal, cache: 'no-store', referrerPolicy: 'no-referrer' }); // nothing kept in the browser cache
   if (!res.ok) throw new Error(`${new URL(url).host} answered ${res.status}`);
   return (await res.json()) as T;
 }

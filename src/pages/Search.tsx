@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp, openChat } from '../lib/store';
 import { embedded } from '../lib/embed';
 import { usePage } from '../lib/hooks';
@@ -51,7 +51,8 @@ export function SidebarSearch() {
       <input className="input w-full pl-9 pr-14 text-sm" placeholder="Search…" value={v} aria-label="Search the app"
         onFocus={() => { if (here) focusSearch(); }}
         onBlur={() => setV('')}
-        onChange={(e) => { setV(e.target.value); if (e.target.value) nav(`/search?q=${encodeURIComponent(e.target.value)}`, { replace: here }); }}
+        autoComplete="off"
+        onChange={(e) => { setV(e.target.value); if (e.target.value) nav('/search', { replace: here, state: { q: e.target.value } }); }}
         onKeyDown={(e) => { if (e.key === 'Enter') nav('/search'); }} />
       <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] muted border border-edge/30 rounded px-1 pointer-events-none">Ctrl K</kbd>
     </div>
@@ -320,8 +321,12 @@ const EXAMPLES = ['photosynthesis', 'Pythagorean theorem', 'Civil War', 'verbs',
 
 /** Search: finds anything in the app, and looks things up on Wikipedia. Results open in a preview here instead of sending you away. */
 export function SearchPage() {
-  const [params, setParams] = useSearchParams();
-  const [text, setText] = useState(() => params.get('q') ?? '');
+  // Private: the search words never go in the page address (so the browser's history list never shows them)
+  // and are never saved by the app. Words typed in the sidebar arrive as one-time navigation state.
+  const loc = useLocation();
+  const nav = useNavigate();
+  const incoming = (loc.state as { q?: string } | null)?.q ?? new URLSearchParams(loc.search).get('q');
+  const [text, setText] = useState(() => incoming ?? '');
   const [tab, setTab] = useState<Tab>('all');
   const [sel, setSel] = useState<Sel>(null);
   const [more, setMore] = useState(0);
@@ -338,9 +343,11 @@ export function SearchPage() {
   usePage({ label: 'Search', subject: 'general' });
 
   // keep the box and the address (?q=) in step, both ways
-  const urlQ = params.get('q') ?? '';
-  useEffect(() => { if (urlQ !== text) setParams(text ? { q: text } : {}, { replace: true }); }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (urlQ !== text) setText(urlQ); }, [urlQ]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (incoming == null) return;
+    setText(incoming);
+    nav('/search', { replace: true, state: null }); // forget it right away (also strips old ?q= links)
+  }, [loc.key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { focusSearch(); }, []);
   useEffect(() => { setSel(null); setMore(0); }, [text]);
   useEffect(() => { previewBox.current?.scrollTo(0, 0); if (sel && isPhone()) window.scrollTo(0, 0); }, [sel]);
