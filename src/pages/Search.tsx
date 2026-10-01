@@ -51,7 +51,7 @@ export function SidebarSearch() {
       <input className="input w-full pl-9 pr-14 text-sm" placeholder="Search…" value={v} aria-label="Search the app"
         onFocus={() => { if (here) focusSearch(); }}
         onBlur={() => setV('')}
-        autoComplete="off"
+        autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
         onChange={(e) => { setV(e.target.value); if (e.target.value) nav('/search', { replace: here, state: { q: e.target.value } }); }}
         onKeyDown={(e) => { if (e.key === 'Enter') nav('/search'); }} />
       <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] muted border border-edge/30 rounded px-1 pointer-events-none">Ctrl K</kbd>
@@ -501,10 +501,10 @@ export function SearchPage() {
 
   return (
     <div>
-      <PageHeader title="🔍 Search" sub="Find anything in the app, look something up, or find pictures. Results open right here." />
+      <PageHeader title="🔍 Search" sub="Find anything in the app, look something up, or find pictures. Results open right here." right={<span className="chip whitespace-nowrap" title="Search words are never saved: not in browser history, not in the app">🔒 Private: nothing saved</span>} />
       <div className="relative mb-3">
         <span className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">🔍</span>
-        <input id={INPUT_ID} className="input w-full text-lg py-3 pl-11 pr-12" placeholder="Search lessons, vocab, songs, homework… or look anything up" value={text} autoComplete="off" enterKeyHint="search"
+        <input id={INPUT_ID} className="input w-full text-lg py-3 pl-11 pr-12" placeholder="Search lessons, vocab, songs, homework… or look anything up" value={text} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} enterKeyHint="search"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); pickFirst(); if (isPhone()) (e.target as HTMLInputElement).blur(); } else if (e.key === 'Escape') { if (sel) setSel(null); else setText(''); } }} />
         {text && <button className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg muted hover:text-ink" onClick={() => { setText(''); setTimeout(focusSearch, 0); }} aria-label="Clear search">✕</button>}
