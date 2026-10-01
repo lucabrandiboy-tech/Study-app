@@ -20,6 +20,7 @@ import { Reminders } from './components/Reminders';
 import { APlanPage } from './study/APlan';
 import { HomeworkCalendar } from './study/Calendar';
 import { SearchPage, SearchHotkey } from './pages/Search';
+import { MiniPlayer } from './components/MiniPlayer';
 
 const Router = import.meta.env.VITE_SINGLEFILE ? HashRouter : BrowserRouter;
 
@@ -66,6 +67,7 @@ export default function App() {
         </main>
       </div>
       <SearchHotkey />
+      <MiniPlayer />
       <JazzController />
       <GeoTools />
       <Reminders />

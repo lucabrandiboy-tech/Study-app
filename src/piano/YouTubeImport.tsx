@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { addImportedSong } from '../lib/store';
 import { midiName, type Piece } from './notation';
+import { playYouTube } from '../components/MiniPlayer';
 import { startListening, framesToNotes, notesToPiece, pieceToSong, youTubeId } from './listen';
 
 /** Song Player panel: play a YouTube video inside the app, and turn its melody into a song by listening to it. */
@@ -22,7 +23,7 @@ export function YouTubeImport({ onDone, onClose }: { onDone: (p: Piece, msg: str
     return () => clearInterval(id);
   }, [listening]);
 
-  const load = () => { const id = youTubeId(link); setErr(id ? null : "That doesn't look like a YouTube link. Copy the link from the video's Share button."); setVid(id); };
+  const load = () => { const id = youTubeId(link); setErr(id ? null : "That doesn't look like a YouTube link. Copy the link from the video's Share button."); setVid(id); if (id) playYouTube(id); };
   const start = async () => {
     setErr(null);
     try {
@@ -52,13 +53,7 @@ export function YouTubeImport({ onDone, onClose }: { onDone: (p: Piece, msg: str
           onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') load(); }} autoComplete="off" />
         <button className="rounded-full bg-[#111827] text-white font-bold px-5 py-2.5" onClick={load}>Load video</button>
       </div>
-      {vid && (
-        <div className="relative w-full max-w-[720px] aspect-video rounded-xl overflow-hidden bg-black mb-3">
-          {/* YouTube's own player. No allow-popups in the sandbox, so its links can't open YouTube outside the app. */}
-          <iframe className="absolute inset-0 w-full h-full" src={`https://www.youtube-nocookie.com/embed/${vid}?rel=0&playsinline=1&modestbranding=1`} title="YouTube video"
-            sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen />
-        </div>
-      )}
+      {vid && <div className="rounded-xl bg-[#F0FDF4] text-[#166534] px-4 py-3 mb-3">▶️ Playing in the mini player (bottom-right corner). It keeps playing while you go to other pages; tap ▾ Hide to shrink it or ✕ to stop.</div>}
       <div className="flex gap-3 flex-wrap items-end">
         <label className="text-sm font-semibold">Song name<br /><input className="mt-1 w-56 rounded-lg border border-[#E5E7EB] px-3 py-2" value={name} onChange={(e) => setName(e.target.value)} placeholder="Song from YouTube" autoComplete="off" /></label>
         <label className="text-sm font-semibold">Speed (BPM)<br /><input type="number" min={40} max={200} className="mt-1 w-24 rounded-lg border border-[#E5E7EB] px-3 py-2" value={bpm} onChange={(e) => setBpm(Math.max(40, Math.min(200, Number(e.target.value) || 90)))} /></label>
