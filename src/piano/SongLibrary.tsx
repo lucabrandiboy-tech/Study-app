@@ -7,6 +7,7 @@ import { useActiveMinutes, usePage } from '../lib/hooks';
 import { songLibrary, LEVELS, CATEGORIES, type SongEntry, type Level, type Category } from './songs';
 import type { Piece } from './notation';
 import { SimplyPlayer } from './SimplyPlayer';
+import { YouTubeImport } from './YouTubeImport';
 import type { PlayResult } from './engine';
 
 const tagBg: Record<Level, string> = { Beginner: '#16A34A', Intermediate: '#0EA5E9', 'Pre-Advanced': '#F97316', Advanced: '#DC2626' };
@@ -46,6 +47,7 @@ export function SongPlayer() {
   const [cat, setCat] = useState<Category | 'all'>('all');
   const [q, setQ] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [yt, setYt] = useState(false);
   const piece = useMemo(() => imported ?? open?.piece() ?? null, [open, imported]);
   useActiveMinutes('piano');
   usePage({ label: piece ? `Piano > Song Player: ${piece.title}` : 'Piano > Song Player', subject: 'piano' }, { kind: 'piano', path: '/songs' });
@@ -81,10 +83,12 @@ export function SongPlayer() {
           </div>
           <div className="flex gap-2 items-center">
             <input className="w-72 rounded-full border border-[#E5E7EB] bg-white px-4 py-2.5 outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/30" placeholder="🔍 Search songs or composers" value={q} onChange={(e) => setQ(e.target.value)} />
+            <button className="rounded-full border border-[#E5E7EB] bg-white px-4 py-2.5 font-bold hover:bg-[#F1F5F9]" onClick={() => setYt((v) => !v)}>▶️ From YouTube</button>
             <label className="rounded-full border border-[#E5E7EB] bg-white px-4 py-2.5 font-bold cursor-pointer hover:bg-[#F1F5F9]">📂 Import MusicXML / MIDI
               <input type="file" multiple accept=".xml,.musicxml,.mid,.midi,.mxl" className="hidden" onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; fs.forEach((f) => void onFile(f)); }} /></label>
           </div>
         </div>
+        {yt && <YouTubeImport onClose={() => setYt(false)} onDone={(piece, m) => { setYt(false); setErr(null); setMsg(m); setImported(piece); }} />}
         {msg && <div className="rounded-xl bg-[#F0FDF4] text-[#166534] px-4 py-3 mb-4">{msg}</div>}
         {err && <div className="rounded-xl bg-[#FEF2F2] text-[#B91C1C] px-4 py-3 mb-4">{err}</div>}
 

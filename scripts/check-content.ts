@@ -5,6 +5,7 @@ import { songLibrary } from '../src/piano/songs';
 import { measureLen, toMusicXML } from '../src/piano/notation';
 import { staticIndex, runSearch, norm } from '../src/lib/search';
 import { parseExtract, stripHtml, parseCommons, parseLeadImages, unsafeText } from '../src/lib/wiki';
+import { detectPitch, hzToMidi, framesToNotes, notesToPiece, youTubeId } from '../src/piano/listen';
 import { parseMarginalia, parseInstant, parseReader } from '../src/lib/web';
 import { parseOpenverse, parseNasa, parseArt, parseWiktionary, parseBooks, interleave } from '../src/lib/sources';
 
@@ -107,5 +108,19 @@ if (JSON.stringify(commons.map((c) => [c.file, c.caption, c.credit])) !== JSON.s
 if (parseCommons({ query: { pages: [{ title: 'File:Hidden.jpg', categories: [{ title: 'Category:Nude people' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/c.jpg' }] }] } }, false).length !== 1) fail('pictures: filter off should show everything');
 const lead = parseLeadImages({ query: { pages: [{ title: 'Leaf', index: 1, pageimage: 'Leaf_1.jpg', thumbnail: { source: 'https://upload.wikimedia.org/a.jpg' } }, { title: 'No picture', index: 2 }] } }, 'simple');
 if (lead.length !== 1 || lead[0].article !== 'Leaf' || lead[0].host !== 'simple.wikipedia.org') fail(`pictures: parseLeadImages gave ${JSON.stringify(lead)}`);
+// Listen & make a song: pitch detection, note joining, timing, YouTube links.
+{
+  const sr = 48000, tone = (hz: number) => Float32Array.from({ length: 2048 }, (_, i) => 0.5 * Math.sin((2 * Math.PI * hz * i) / sr));
+  for (const hz of [130.81, 261.63, 440, 659.25, 987.77]) { const got = detectPitch(tone(hz), sr); if (!got || Math.abs(hzToMidi(got) - hzToMidi(hz)) > 0) fail(`listen: ${hz} Hz detected as ${got}`); }
+  if (detectPitch(new Float32Array(2048), sr) !== null) fail('listen: silence should be no pitch');
+  const frames = [60, 60, 60, 60, 60, 72, 60, 60, null, 62, 62, 62, 62, 62, 64, 64, 64, 64, 64, 64, null, null, null].map((m, i) => ({ t: i * 0.03, midi: m }));
+  const notes = framesToNotes(frames);
+  if (notes.map((n) => n.midi).join() !== '60,62,64') fail(`listen: framesToNotes gave ${JSON.stringify(notes)}`);
+  const pc = notesToPiece([{ start: 1, end: 1.6, midi: 60 }, { start: 1.67, end: 2.3, midi: 62 }, { start: 2.33, end: 3.6, midi: 64 }], 'T', 90);
+  if (JSON.stringify(pc.events.map((e) => [e.beat, e.dur, e.midi])) !== JSON.stringify([[0, 1, 60], [1, 1, 62], [2, 2, 64]])) fail(`listen: notesToPiece gave ${JSON.stringify(pc.events)}`);
+  for (const l of ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'https://youtu.be/dQw4w9WgXcQ?si=x', 'https://m.youtube.com/watch?feature=share&v=dQw4w9WgXcQ', 'https://www.youtube.com/shorts/dQw4w9WgXcQ', 'https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=1'])
+    if (youTubeId(l) !== 'dQw4w9WgXcQ') fail(`listen: youTubeId(${l}) = ${youTubeId(l)}`);
+  if (youTubeId('https://example.com/watch?v=abc') !== null) fail('listen: non-YouTube link accepted');
+}
 console.log(problems ? `${problems} problem(s)` : `All good: ${pieces.length} pieces (${lib.length} library songs), all topic generators OK.`);
 process.exit(problems ? 1 : 0);
