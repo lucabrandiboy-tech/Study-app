@@ -10,8 +10,8 @@ import { SidebarSearch } from '../pages/Search';
 const NAV = [
   { to: '/search', icon: '🔍', label: 'Search', phone: true },
   { to: '/', icon: '🏠', label: 'Home', end: true },
+  { to: '/calendar', icon: '📅', label: 'Homework Calendar' },
   { to: '/plan', icon: '🎯', label: 'A+ Plan' },
-  { to: '/calendar', icon: '📅', label: 'Homework', sub: true },
   { to: '/study', icon: '📚', label: 'Study Zone' },
   { to: '/advanced', icon: '🚀', label: 'Super Advanced', sub: true },
   { to: '/piano', icon: '🎹', label: 'Piano Course' },
@@ -85,6 +85,7 @@ export function MobileTopBar() {
       <header className="md:hidden sticky top-0 z-30 -mx-3 -mt-3 mb-3 flex items-center gap-3 px-3 py-2 bg-navy/95 backdrop-blur border-b border-edge/25">
         <button className="text-2xl w-11 h-11 rounded-xl border border-edge/40 flex items-center justify-center" onClick={() => setOpen(true)} aria-label="Open menu">☰</button>
         <div className="font-extrabold flex-1">✨ Study<span className="text-accent">+</span>Piano</div>
+        <Link to="/calendar" className="text-xl w-11 h-11 rounded-xl border border-edge/40 flex items-center justify-center" aria-label="Homework calendar">📅</Link>
         <Link to="/search" className="text-xl w-11 h-11 rounded-xl border border-edge/40 flex items-center justify-center" aria-label="Search">🔍</Link>
         <div className="flex items-center gap-1 font-extrabold text-streak"><Flame n={streak} size={22} />{streak}</div>
       </header>
