@@ -12,7 +12,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || !req.url.startsWith('http')) return;
   // Search look-ups (Wikipedia, dictionary, books, pictures) always come fresh from the internet and aren't stored.
-  if (/^https:\/\/([^/]+\.)?(wikipedia\.org|wikimedia\.org|wiktionary\.org|openverse\.org|nasa\.gov|artic\.edu|openlibrary\.org)\//.test(req.url)) return;
+  if (/^https:\/\/([^/]+\.)?(wikipedia\.org|wikimedia\.org|wiktionary\.org|openverse\.org|nasa\.gov|artic\.edu|openlibrary\.org|marginalia\.nu|jina\.ai|duckduckgo\.com)\//.test(req.url)) return;
   if (req.destination === 'image' && new URL(req.url).origin !== self.location.origin) return; // pictures from search results
   // The app page itself: use the newest version when online, the saved copy when offline.
   if (req.mode === 'navigate') {

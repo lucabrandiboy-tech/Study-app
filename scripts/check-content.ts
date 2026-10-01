@@ -5,6 +5,7 @@ import { songLibrary } from '../src/piano/songs';
 import { measureLen, toMusicXML } from '../src/piano/notation';
 import { staticIndex, runSearch, norm } from '../src/lib/search';
 import { parseExtract, stripHtml, parseCommons, parseLeadImages, unsafeText } from '../src/lib/wiki';
+import { parseMarginalia, parseInstant, parseReader } from '../src/lib/web';
 import { parseOpenverse, parseNasa, parseArt, parseWiktionary, parseBooks, interleave } from '../src/lib/sources';
 
 let problems = 0;
@@ -90,6 +91,11 @@ for (const ok of ['Sussex', 'photosynthesis', 'Civil War soldiers', 'Essex count
   const bk = parseBooks({ docs: [{ key: '/works/1', title: 'Hatchet', author_name: ['Gary Paulsen'], first_publish_year: 1987, cover_i: 9 }] }, true);
   if (bk[0]?.cover !== 'https://covers.openlibrary.org/b/id/9-M.jpg') fail(`sources: parseBooks gave ${JSON.stringify(bk)}`);
   if (interleave([[1, 2, 3], [4], [5, 6]]).join() !== '1,4,5,2,6,3') fail('sources: interleave');
+  const mg = parseMarginalia({ results: [{ url: 'https://www.example.com/a', title: 'Ex <b>A</b>', description: 'desc' }, { url: 'javascript:x' }] });
+  if (mg.length !== 1 || mg[0].host !== 'example.com' || mg[0].title !== 'Ex A') fail(`web: parseMarginalia gave ${JSON.stringify(mg)}`);
+  if (parseInstant({ Heading: 'Moon', AbstractText: 'The Moon is...', AbstractSource: 'Wikipedia' })?.heading !== 'Moon' || parseInstant({}) !== null) fail('web: parseInstant');
+  const pg = parseReader('Title: Hello\nURL Source: https://x\n\nMarkdown Content:\n# Big\nSee [this link](https://y) ![pic](https://z.png) now.\n- item one\n---\n', 'https://x');
+  if (JSON.stringify(pg) !== JSON.stringify({ title: 'Hello', url: 'https://x', paras: [{ kind: 'h', text: 'Big' }, { kind: 'p', text: 'See this link now.' }, { kind: 'li', text: 'item one' }] })) fail(`web: parseReader gave ${JSON.stringify(pg)}`);
 }
 const commons = parseCommons({ query: { pages: [
   { title: 'File:Leaf_2.jpg', index: 2, categories: [{ title: 'Category:Leaves' }], imageinfo: [{ thumburl: 'https://upload.wikimedia.org/b.jpg', extmetadata: { ImageDescription: { value: 'A <b>green</b> leaf' }, Artist: { value: '<a href="x">Ann</a>' }, LicenseShortName: { value: 'CC BY-SA 4.0' } } }] },

@@ -10,6 +10,7 @@ import { staticIndex, userIndex, runSearch, snippet, matchRanges, queryTerms, KI
 import { wikiSearch, wikiArticle, wikiRelated, imageSearch, imageDetails, imageName, WIKI_NAME, type WikiSite, type WikiHit, type WikiArticle, type WikiImage, type ImageDetails } from '../lib/wiki';
 import { PageHeader, Rich, Stars } from '../components/ui';
 import { morePictures, interleave, define, findBooks, type Definition, type Book } from '../lib/sources';
+import { webSearch, instantAnswer, readPage, type WebHit, type Instant, type WebPage } from '../lib/web';
 const picName = (img: WikiImage) => img.sourceTitle || imageName(img.file);
 
 const INPUT_ID = 'search-input';
@@ -267,6 +268,34 @@ function BookView({ book }: { book: Book }) {
   );
 }
 
+/** A web page shown as plain text inside the app (teacher web search). */
+function PageReader({ hit, terms }: { hit: WebHit; terms: string[] }) {
+  const [page, setPage] = useState<WebPage | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    const ac = new AbortController();
+    setPage(null); setErr(null);
+    readPage(hit.url, ac.signal).then(setPage).catch((e) => { if (!ac.signal.aborted) setErr(netMessage(e)); });
+    return () => ac.abort();
+  }, [hit.url]);
+  return (
+    <div>
+      <div className="text-xs muted break-all">🌍 {hit.host} · reading it right here in the app</div>
+      <h2 className="h2 mb-3">{page?.title ?? hit.title}</h2>
+      {!page && !err && <div className="muted animate-pulse">Loading the page…</div>}
+      {err && <div className="text-bad">{err}</div>}
+      {page && !page.paras.length && <div className="muted">This page has no readable text.</div>}
+      {page && (
+        <article className="leading-relaxed">
+          {page.paras.map((x, i) => x.kind === 'h' ? <h3 key={i} className="text-lg font-bold mt-4 mb-1 text-edge">{x.text}</h3>
+            : <p key={i} className={`mb-2 ${x.kind === 'li' ? 'pl-4' : ''}`}>{x.kind === 'li' ? '• ' : ''}<Hl text={x.text} terms={terms} /></p>)}
+        </article>
+      )}
+      <p className="text-xs muted mt-5">Shown as text through a free reader service, so the website itself never opens.</p>
+    </div>
+  );
+}
+
 function DictionaryCard({ d }: { d: Definition }) {
   return (
     <div className="rounded-xl bg-navy border border-edge/40 px-3 py-2.5 mb-2">
@@ -281,8 +310,8 @@ function DictionaryCard({ d }: { d: Definition }) {
   );
 }
 
-type Tab = 'all' | 'study' | 'piano' | 'yours' | 'images' | 'web';
-type Sel = { kind: 'app'; item: SearchItem } | { kind: 'web'; title: string } | { kind: 'image'; img: WikiImage } | { kind: 'book'; book: Book } | null;
+type Tab = 'all' | 'study' | 'piano' | 'yours' | 'images' | 'web' | 'net';
+type Sel = { kind: 'app'; item: SearchItem } | { kind: 'web'; title: string } | { kind: 'image'; img: WikiImage } | { kind: 'book'; book: Book } | { kind: 'page'; hit: WebHit } | null;
 interface Web { q: string; hits: WikiHit[]; suggestion?: string; loading: boolean; err?: string }
 interface Pics { q: string; items: WikiImage[]; loading: boolean; err?: string; blocked?: boolean }
 let lastSite: WikiSite = 'simple';
@@ -303,6 +332,8 @@ export function SearchPage() {
   const picFilter = useApp((s) => s.settings.picFilter);
   const [dict, setDict] = useState<Definition | null>(null);
   const [books, setBooks] = useState<Book[]>([]);
+  const [net, setNet] = useState<{ q: string; hits: WebHit[]; instant: Instant | null; loading: boolean; err?: string }>({ q: '', hits: [], instant: null, loading: false });
+  const teacher = !picFilter; // teacher PIN turned the filter off: open web search too
   const previewBox = useRef<HTMLDivElement>(null);
   usePage({ label: 'Search', subject: 'general' });
 
@@ -358,6 +389,23 @@ export function SearchPage() {
     return () => { clearTimeout(id); ac.abort(); };
   }, [text, site, picFilter]);
 
+  // Open web (teacher only)
+  useEffect(() => {
+    const q = text.trim();
+    if (!teacher || q.length < 2) { setNet({ q: '', hits: [], instant: null, loading: false }); return; }
+    if (!navigator.onLine) { setNet({ q, hits: [], instant: null, loading: false, err: OFFLINE }); return; }
+    setNet((n) => ({ ...n, loading: true, err: undefined }));
+    const ac = new AbortController();
+    const id = setTimeout(() => {
+      Promise.all([webSearch(q, ac.signal).catch((e) => { if (ac.signal.aborted) throw e; return e as Error; }), instantAnswer(q)]).then(([hits, instant]) => {
+        if (ac.signal.aborted) return;
+        if (hits instanceof Error) setNet({ q, hits: [], instant, loading: false, err: instant ? undefined : netMessage(hits) });
+        else setNet({ q, hits, instant, loading: false });
+      }).catch(() => { /* cancelled */ });
+    }, 450);
+    return () => { clearTimeout(id); ac.abort(); };
+  }, [text, teacher]);
+
   // Dictionary and books
   useEffect(() => {
     const q = text.trim();
@@ -371,16 +419,37 @@ export function SearchPage() {
     return () => { clearTimeout(id); ac.abort(); };
   }, [text, picFilter]);
 
-  const appTab = tab !== 'web' && tab !== 'images';
+  const appTab = tab !== 'web' && tab !== 'images' && tab !== 'net';
   const shown = tab === 'all' ? hits.slice(0, 8 + more) : !appTab ? [] : hits.filter((h) => KIND_GROUP[h.kind] === tab).slice(0, 40 + more);
   const total = tab === 'all' ? hits.length : !appTab ? 0 : count(tab);
   const pickFirst = () => {
     if (shown[0]) setSel({ kind: 'app', item: shown[0] });
     else if (tab === 'images' && pics.items[0]) setSel({ kind: 'image', img: pics.items[0] });
+    else if (tab === 'net' && net.hits[0]) setSel({ kind: 'page', hit: net.hits[0] });
     else if ((tab === 'all' || tab === 'web') && web.hits[0]) setSel({ kind: 'web', title: web.hits[0].title });
   };
 
-  const chips: [Tab, string, number | null][] = [['all', 'All', null], ['study', '📚 Study', count('study')], ['piano', '🎹 Piano & songs', count('piano')], ['yours', '🗂️ Your stuff', count('yours')], ['images', '🖼️ Pictures', pics.q ? pics.items.length : null], ['web', '🌐 Look it up', web.q ? web.hits.length + books.length + (dict ? 1 : 0) : null]];
+  const chips: [Tab, string, number | null][] = [['all', 'All', null], ['study', '📚 Study', count('study')], ['piano', '🎹 Piano & songs', count('piano')], ['yours', '🗂️ Your stuff', count('yours')], ['images', '🖼️ Pictures', pics.q ? pics.items.length : null], ['web', '🌐 Look it up', web.q ? web.hits.length + books.length + (dict ? 1 : 0) : null], ...(teacher ? [['net', '🌍 Web', net.q ? net.hits.length : null] as [Tab, string, number | null]] : [])];
+  const netSection = (
+    <div className="p-1">
+      <div className="font-bold px-1">🌍 Web <span className="chip ml-1">teacher</span></div>
+      <div className="text-xs muted px-1 mb-2">Open web search (Marginalia and DuckDuckGo, no key). Pages open as text here in the app.</div>
+      {net.instant && (
+        <div className="rounded-xl bg-navy border border-edge/40 px-3 py-2.5 mb-2 flex gap-3">
+          {net.instant.image && <img src={net.instant.image} alt="" referrerPolicy="no-referrer" className="w-16 h-16 object-cover rounded-lg shrink-0" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+          <div className="min-w-0"><div className="font-bold">{net.instant.heading || text.trim()} <span className="text-xs muted font-normal">· {net.instant.source}</span></div><div className="text-sm mt-1">{net.instant.text}</div></div>
+        </div>
+      )}
+      {net.loading && <div className="muted text-sm px-1 animate-pulse">Searching the web…</div>}
+      {!net.loading && net.err && <div className="text-sm text-bad px-1">{net.err}</div>}
+      {!net.loading && !net.err && net.q && !net.hits.length && <div className="muted text-sm px-1">No web pages found.</div>}
+      {!net.loading && (tab === 'all' ? net.hits.slice(0, 6) : net.hits).map((h) => (
+        <Row key={h.url} icon="🌍" title={h.title} sub={h.host} text={h.snippet} label="Web" terms={terms}
+          active={sel?.kind === 'page' && sel.hit.url === h.url} onClick={() => setSel({ kind: 'page', hit: h })} />
+      ))}
+      {tab === 'all' && net.hits.length > 6 && <button className="w-full text-sm font-bold text-edge py-2 hover:underline" onClick={() => setTab('net')}>See all {net.hits.length} web results →</button>}
+    </div>
+  );
   const picsSection = (
     <div className="p-1">
       <div className="flex items-center justify-between gap-2 px-1 mb-1">
@@ -477,6 +546,7 @@ export function SearchPage() {
               )}
               {(tab === 'all' || tab === 'images') && <div className="card p-2">{picsSection}</div>}
               {(tab === 'all' || tab === 'web') && <div className="card p-2">{webSection}</div>}
+              {teacher && (tab === 'all' || tab === 'net') && <div className="card p-2">{netSection}</div>}
             </div>
             <div className={`${sel ? '' : 'hidden md:block'} md:sticky md:top-4`}>
               <div ref={previewBox} className="card2 md:max-h-[calc(100vh-2rem)] md:overflow-auto">
@@ -485,6 +555,7 @@ export function SearchPage() {
                 {sel?.kind === 'app' && <Preview item={sel.item} terms={terms} />}
                 {sel?.kind === 'web' && <WikiReader title={sel.title} site={site} terms={terms} onOpen={(t) => setSel({ kind: 'web', title: t })} />}
                 {sel?.kind === 'book' && <BookView book={sel.book} />}
+                {sel?.kind === 'page' && <PageReader hit={sel.hit} terms={terms} />}
                 {sel?.kind === 'image' && <ImageViewer img={sel.img} onArticle={(t) => setSel({ kind: 'web', title: t })} />}
               </div>
             </div>

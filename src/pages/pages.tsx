@@ -35,7 +35,7 @@ function PictureFilterCard() {
   return (
     <div className="card space-y-3">
       <div className="h2">🖼️ Picture filter (teacher)</div>
-      <p className="text-sm muted">Search hides nudity, sexual content and extreme gore from pictures and books (school topics like biology and history still show). Only someone with the teacher PIN can turn it off.</p>
+      <p className="text-sm muted">Search hides nudity, sexual content and extreme gore from pictures and books (school topics like biology and history still show). Only someone with the teacher PIN can turn it off. Turning it off also adds 🌍 Web: open web search, read inside the app.</p>
       {picFilter ? (
         <>
           <div className="font-bold text-good">On</div>
@@ -49,7 +49,7 @@ function PictureFilterCard() {
         </>
       ) : (
         <>
-          <div className="font-bold text-streak">Off: picture search shows everything</div>
+          <div className="font-bold text-streak">Off: search shows everything, plus 🌍 Web</div>
           <button className="btn" onClick={() => setSettings({ picFilter: true })}>Turn filter back on</button>
         </>
       )}
