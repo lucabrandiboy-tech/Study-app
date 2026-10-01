@@ -1,7 +1,7 @@
 import * as Tone from 'tone';
 
 /**
- * Generative smooth-jazz background music for the menus.
+ * Generative smooth-jazz background music (plays on every page).
  * Electric-piano chords, walking bass, soft brushes and a mellow sax-like melody that improvises
  * over a ii–V–I progression (different every time through). All synthesized, no audio files needed.
  */

@@ -500,7 +500,7 @@ export function SearchPage() {
         <div className="font-bold">🖼️ Pictures</div>
         {tab === 'all' && pics.items.length > 8 && <button className="text-sm font-bold text-edge hover:underline" onClick={() => setTab('images')}>See all {pics.items.length} →</button>}
       </div>
-      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia, Wikimedia Commons, Openverse, NASA and the Art Institute of Chicago. Tap one to see it big, right here.{!picFilter && ' Picture filter is off.'}</div>
+      <div className="text-xs muted px-1 mb-2">Free pictures from Wikipedia, Wikimedia Commons, Openverse, NASA and the Art Institute of Chicago. Tap one to see it big, right here.{!picFilter && ' 👩‍🏫 Teacher mode: nothing is filtered.'}</div>
       {pics.loading && <div className="muted text-sm px-1 animate-pulse">Finding pictures…</div>}
       {!pics.loading && pics.err && <div className="text-sm text-bad px-1">{pics.err}</div>}
       {!pics.loading && pics.blocked && <div className="muted text-sm px-1">Pictures are turned off for this search.</div>}

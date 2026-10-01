@@ -15,8 +15,8 @@ import { setVolume, initAudio, click } from '../piano/audio';
 import { SaveFileCard } from '../components/SaveFile';
 import { pinHash } from '../lib/wiki';
 
-/** Teacher-only switch for the picture-search filter, locked with a PIN. */
-function PictureFilterCard() {
+/** Teacher mode, locked with a PIN: turns off the search filter and adds open web search. */
+function TeacherModeCard() {
   const { picFilter, picPin } = useApp((s) => s.settings);
   const [pin, setPin] = useState('');
   const [pin2, setPin2] = useState('');
@@ -34,23 +34,23 @@ function PictureFilterCard() {
   };
   return (
     <div className="card space-y-3">
-      <div className="h2">🖼️ Picture filter (teacher)</div>
-      <p className="text-sm muted">Search hides nudity, sexual content and extreme gore from pictures and books (school topics like biology and history still show). Only someone with the teacher PIN can turn it off. Turning it off also adds 🌍 Web: open web search, read inside the app.</p>
+      <div className="h2">👩‍🏫 Teacher mode</div>
+      <p className="text-sm muted">In student mode, search hides nudity, sexual content and extreme gore from pictures and books (school topics like biology and history still show). Teacher mode needs the teacher PIN: it shows everything and adds 🌍 Web, open web search read inside the app.</p>
       {picFilter ? (
         <>
-          <div className="font-bold text-good">On</div>
+          <div className="font-bold text-good">Student mode (filtered)</div>
           <div className="flex flex-wrap gap-2">
             <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder={picPin ? 'Teacher PIN' : 'New PIN'} value={pin} onChange={(e) => setPin(e.target.value)} />
             {!picPin && <input className="input w-36" type="password" inputMode="numeric" autoComplete="off" placeholder="PIN again" value={pin2} onChange={(e) => setPin2(e.target.value)} />}
-            <button className="btn-ghost" onClick={turnOff}>Turn filter off</button>
+            <button className="btn-ghost" onClick={turnOff}>Turn on teacher mode</button>
           </div>
           {!picPin && <p className="text-xs muted">The first time, choose a PIN. Keep it to yourself.</p>}
           {msg && <p className="text-sm text-bad">{msg}</p>}
         </>
       ) : (
         <>
-          <div className="font-bold text-streak">Off: search shows everything, plus 🌍 Web</div>
-          <button className="btn" onClick={() => setSettings({ picFilter: true })}>Turn filter back on</button>
+          <div className="font-bold text-streak">👩‍🏫 Teacher mode is on: search shows everything, plus 🌍 Web</div>
+          <button className="btn" onClick={() => setSettings({ picFilter: true })}>Back to student mode</button>
         </>
       )}
     </div>
@@ -293,13 +293,13 @@ export function Settings() {
         <div className="card space-y-3">
           <div className="h2">🔊 Sound</div>
           <label className="flex items-center justify-between gap-3"><span>Volume</span><input type="range" min={0} max={1} step={0.05} value={set.volume} className="accent-[#A970FF] w-48" onChange={(e) => { setSettings({ volume: Number(e.target.value) }); setVolume(Number(e.target.value)); }} /></label>
-          <label className="flex items-center justify-between gap-3"><span>🎷 Smooth jazz on menus</span><input type="checkbox" checked={set.jazz} onChange={(e) => setSettings({ jazz: e.target.checked })} /></label>
+          <label className="flex items-center justify-between gap-3"><span>🎷 Background jazz (plays on every page)</span><input type="checkbox" checked={set.jazz} onChange={(e) => setSettings({ jazz: e.target.checked })} /></label>
           <label className="flex items-center justify-between gap-3"><span>Jazz volume</span><input type="range" min={0} max={1} step={0.05} value={set.jazzVolume} className="accent-[#A970FF] w-48" onChange={(e) => setSettings({ jazzVolume: Number(e.target.value) })} /></label>
           <label className="flex items-center justify-between gap-3"><span>Metronome sound</span>
             <span className="flex gap-2"><select className="input" value={set.metronome} onChange={(e) => setSettings({ metronome: e.target.value as 'click' | 'wood' | 'beep' })}><option value="click">Click</option><option value="wood">Woodblock</option><option value="beep">Beep</option></select>
               <button className="btn-ghost py-1" onClick={async () => { await initAudio(); click(true); setTimeout(() => click(false), 400); }}>Test</button></span></label>
         </div>
-        <PictureFilterCard />
+        <TeacherModeCard />
         <div className="card space-y-3">
           <div className="h2">🤖 AI helper</div>
           <div className="flex items-center gap-3">
