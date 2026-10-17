@@ -14,6 +14,7 @@ await build({
   banner: { js: '/* Robot Voice speech engine. Contains eSpeak 1.43 (Jonathan Duddington, https://espeak.sourceforge.net/), speak.js (Alon Zakai, https://github.com/kripken/speak.js) and meSpeak.js (Norbert Landsteiner, https://www.masswerk.at/mespeak/). All free software under the GNU General Public License v3: https://www.gnu.org/licenses/gpl-3.0.html */' },
 });
 
+fs.copyFileSync('robot-voice/vocoder-worklet.js', `${out}/vocoder-worklet.js`); // the live voice changer (an AudioWorklet)
 const page = fs.readFileSync('robot-voice/page.html', 'utf8');
 const split = page.indexOf('<main');
 const icon = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🤖</text></svg>');

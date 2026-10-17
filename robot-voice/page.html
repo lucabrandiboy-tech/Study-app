@@ -564,101 +564,30 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
     }
   }
 
-  // ---- voice changer: a channel vocoder. The mic's sound shapes a steady buzz, so it comes out flat and robotic.
-  // Each of 18 bands follows how loud that slice of the mic is and opens the same slice of the buzz by that much.
-  let vc = null;
-  const BANDS = (() => { const n = 18, lo = 140, hi = 5600, f = []; for (let i = 0; i < n; i++) f.push(lo * Math.pow(hi / lo, i / (n - 1))); return f; })();
-  const BAND_Q = 5;
-  const rectCurve = (() => { const n = 2049, c = new Float32Array(n); for (let i = 0; i < n; i++) c[i] = Math.abs((i / (n - 1)) * 2 - 1); return c; })();
-  const GATE = 0.0025; // band loudness below this is background noise: keep the robot quiet
-  // soft limiter for the live voice: unchanged when quiet, rounds off loud peaks instead of clipping (fed at half level).
-  // Evening out the bands turns the sawtooth's lined-up harmonics into sharp clicks, and those would otherwise clip.
+  // ---- voice changer: vocoder-worklet.js on the audio thread. The mic's sound shapes a steady buzz at the robot's pitch,
+  // so it comes out flat and robotic; it levels the mic and gates out room noise itself (so the browser's own
+  // noise suppression and auto-volume are off: they warble, and the robot made every warble buzz).
+  let vc = null, workletReady = null, vcJob = 0;
+  // soft limiter after the voice's effects: unchanged when quiet, rounds off loud peaks instead of clipping (fed at half level)
   const softCurve = (() => { const n = 4097, c = new Float32Array(n); for (let i = 0; i < n; i++) c[i] = Math.tanh(2 * ((i / (n - 1)) * 2 - 1)); return c; })();
-  const gateCurve = (() => { const n = 8193, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = x > GATE ? x - GATE : 0; } return c; })();
-  let noiseBuf = null;
-  /** The buzz: a sawtooth at the robot's pitch, plus hiss in the top bands only (for s, f and t sounds). */
-  function carrier(a, f0) {
-    if (!noiseBuf || noiseBuf.sampleRate !== a.sampleRate) {
-      noiseBuf = a.createBuffer(1, a.sampleRate * 2, a.sampleRate);
-      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    }
-    const out = a.createGain();
-    const saw = a.createOscillator(); saw.type = 'sawtooth'; saw.frequency.value = f0;
-    const noise = a.createBufferSource(); noise.buffer = noiseBuf; noise.loop = true;
-    const sg = a.createGain(); sg.gain.value = 0.6; const ng = a.createGain(); ng.gain.value = 0.12;
-    const hiss = a.createBiquadFilter(); hiss.type = 'highpass'; hiss.frequency.value = 2500; hiss.Q.value = 0.7;
-    saw.connect(sg); noise.connect(hiss); hiss.connect(ng); sg.connect(out); ng.connect(out);
-    return { out, saw, starts: [saw, noise] };
-  }
-  /** How loud the buzz is in each band at this pitch, so every band can be evened out (rendered offline in a few ms). */
-  async function bandLevels(f0) {
-    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-    const rate = ctx.sampleRate, off = new OAC(BANDS.length, Math.round(rate * 0.6), rate);
-    const c = carrier(off, f0), merge = off.createChannelMerger(BANDS.length);
-    BANDS.forEach((f, i) => { const bp = off.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = BAND_Q; c.out.connect(bp); bp.connect(merge, 0, i); });
-    merge.connect(off.destination);
-    c.starts.forEach((s) => s.start(0));
-    const buf = await off.startRendering();
-    return BANDS.map((f, i) => { const d = buf.getChannelData(i); let s = 0; const from = Math.round(rate * 0.1); for (let k = from; k < d.length; k++) s += d[k] * d[k]; return Math.sqrt(s / (d.length - from)) || 1e-4; });
-  }
-  async function vocoder(a, input, f0) {
-    const levels = await bandLevels(f0);
-    const out = a.createGain();
-    const c = carrier(a, f0);
-    const boosts = [];
-    BANDS.forEach((f, i) => {
-      const mb = a.createBiquadFilter(); mb.type = 'bandpass'; mb.frequency.value = f; mb.Q.value = BAND_Q;
-      const rect = a.createWaveShaper(); rect.curve = rectCurve;
-      const env = a.createBiquadFilter(); env.type = 'lowpass'; env.frequency.value = 30; env.Q.value = 0.5;
-      const gate = a.createWaveShaper(); gate.curve = gateCurve;
-      const boost = a.createGain(); boost.gain.value = 1 / levels[i];
-      const cb = a.createBiquadFilter(); cb.type = 'bandpass'; cb.frequency.value = f; cb.Q.value = BAND_Q;
-      const vca = a.createGain(); vca.gain.value = 0;
-      input.connect(mb); mb.connect(rect); rect.connect(env); env.connect(gate); gate.connect(boost); boost.connect(vca.gain);
-      c.out.connect(cb); cb.connect(vca); vca.connect(out);
-      boosts.push(boost);
-    });
-    c.starts.forEach((s) => s.start());
-    let pitchJob = 0;
-    return {
-      out,
-      async setPitch(hz2) {
-        c.saw.frequency.setTargetAtTime(hz2, a.currentTime, 0.03);
-        const job = ++pitchJob, lv = await bandLevels(hz2);
-        if (job === pitchJob) boosts.forEach((b, i) => b.gain.setTargetAtTime(1 / lv[i], a.currentTime, 0.03));
-      },
-      stop() { c.starts.forEach((s) => { try { s.stop(); } catch { /* stopped */ } }); out.disconnect(); },
-    };
-  }
-  /** (Re)builds the voice changer's sound path for the current voice. The mic itself stays open. */
-  async function buildVc() {
+  /** (Re)builds what comes after the vocoder for the current voice: robot/own-voice blend, effects, limiter. */
+  function buildVc() {
     if (!vc) return;
-    const mine = vc, build = ++mine.build;
-    const p = presetOf(), m = voice.effect / 100;
-    const input = ctx.createGain(); // this path's own tap on the mic, so swapping paths never cuts the new one
-    const voc = await vocoder(ctx, input, hz(voice.pitch));
-    if (vc !== mine || build !== mine.build) { voc.stop(); return; }
-    mine.src.connect(input);
-    if (mine.chain) mine.chain.stop();
+    if (vc.chain) vc.chain.stop();
+    const node = vc.node, p = presetOf(), m = voice.effect / 100;
     const mix = ctx.createGain();
-    const dry = ctx.createGain(); dry.gain.value = Math.max(0, 1 - 2 * m); // 0% = your own voice, 50% and up = all robot
-    input.connect(dry); dry.connect(mix);
-    const wet = ctx.createGain(); wet.gain.value = Math.min(1, 2 * m);
+    const wet = ctx.createGain(); wet.gain.value = Math.min(1, 2 * m); // 0% = your own voice, 50% and up = all robot
+    const dry = ctx.createGain(); dry.gain.value = Math.max(0, 1 - 2 * m);
     const fx = effects(ctx, p, m, mix);
-    voc.out.connect(wet); wet.connect(fx.input);
+    node.connect(wet, 0); wet.connect(fx.input);
+    node.connect(dry, 1); dry.connect(mix);
     fx.oscs.forEach((o) => o.start());
     const half = ctx.createGain(); half.gain.value = 0.5;
     const limit = ctx.createWaveShaper(); limit.curve = softCurve;
     mix.connect(half); half.connect(limit); limit.connect(bus);
-    mine.chain = {
-      voc,
-      stop() {
-        try { mine.src.disconnect(input); } catch { /* already unplugged */ }
-        input.disconnect();
-        voc.stop(); fx.oscs.forEach((o) => { try { o.stop(); } catch { /* stopped */ } }); mix.disconnect(); limit.disconnect();
-      },
-    };
+    vc.chain = { stop() { try { node.disconnect(wet); node.disconnect(dry); } catch { /* already unplugged */ } fx.oscs.forEach((o) => { try { o.stop(); } catch { /* stopped */ } }); limit.disconnect(); } };
   }
+  function setVcPitch() { if (vc) vc.node.parameters.get('pitch').setTargetAtTime(hz(voice.pitch), ctx.currentTime, 0.03); }
   function micError(e) {
     const n = e && e.name;
     if (n === 'NotAllowedError' || n === 'SecurityError') return micBlocked ? 'The mic can\'t be used inside claude.ai. Open the full app (link above).' : 'The microphone is blocked. Click the icon left of the address, allow the microphone, then try again.';
@@ -668,28 +597,39 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
   }
   async function startVc() {
     if (vc) return;
+    const job = ++vcJob; // turning it off (or picking another mic) while it starts cancels this start
     audio();
     stopTalk();
     setVcUi('starting');
+    if (!ctx.audioWorklet || typeof AudioWorkletNode === 'undefined') { setVcUi('off', 'This browser is too old for the voice changer. Use a recent Chrome or Edge.'); return; }
     let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: io.micId ? { exact: io.micId } : undefined, echoCancellation: false, noiseSuppression: true, autoGainControl: true } });
-    } catch (e) { setVcUi('off', micError(e)); return; }
+      if (!workletReady) workletReady = ctx.audioWorklet.addModule('vocoder-worklet.js');
+      await workletReady;
+    } catch (e) { workletReady = null; if (job === vcJob) setVcUi('off', 'The voice changer didn\'t load. Reload the page and try again.'); return; }
+    if (job !== vcJob) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: io.micId ? { exact: io.micId } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    } catch (e) { if (job === vcJob) setVcUi('off', micError(e)); return; }
+    if (job !== vcJob) { stream.getTracks().forEach((t) => t.stop()); return; }
     const src = ctx.createMediaStreamSource(stream);
     const meter = ctx.createAnalyser(); meter.fftSize = 1024; src.connect(meter);
-    vc = { stream, src, meter, chain: null, build: 0 };
+    const node = new AudioWorkletNode(ctx, 'robot-vocoder', { numberOfInputs: 1, numberOfOutputs: 2, outputChannelCount: [1, 1], channelCount: 1, channelCountMode: 'explicit', parameterData: { pitch: hz(voice.pitch) } });
+    src.connect(node);
+    vc = { stream, src, meter, node, chain: null };
     stream.getAudioTracks().forEach((t) => t.addEventListener('ended', () => stopVc('The microphone was unplugged or turned off.')));
-    try { await buildVc(); } catch (e) { stopVc('The voice changer didn\'t start. ' + ((e && e.message) || '')); return; }
+    buildVc();
     setVcUi('on');
     startScope();
     refreshDevices(false);
   }
   function stopVc(msg) {
+    vcJob++;
     if (vc) {
       const v = vc; vc = null;
       if (v.chain) v.chain.stop();
       v.stream.getTracks().forEach((t) => t.stop());
-      try { v.src.disconnect(); } catch { /* done */ }
+      try { v.src.disconnect(); v.node.disconnect(); } catch { /* done */ }
     }
     setVcUi('off', msg);
   }
@@ -873,7 +813,7 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
           voice.preset = p.id; voice.pitch = p.pitch; voice.speed = p.speed;
           syncControls(); store.set('voice', voice);
           if (mini) $('say').focus();
-          if (vc) buildVc(); else say('This is ' + p.name + '.');
+          if (vc) { buildVc(); setVcPitch(); } else say('This is ' + p.name + '.');
         });
         box.appendChild(b);
       }
@@ -887,7 +827,7 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
     $('effectOut').textContent = voice.effect + '%';
     $('readout').textContent = presetOf().name.toUpperCase() + ' · ' + hz(voice.pitch) + ' Hz · ' + voice.speed + ' wpm · FX ' + voice.effect + '%';
   }
-  $('pitch').addEventListener('input', () => { voice.pitch = Number($('pitch').value); syncControls(); if (vc && vc.chain) vc.chain.voc.setPitch(hz(voice.pitch)); });
+  $('pitch').addEventListener('input', () => { voice.pitch = Number($('pitch').value); syncControls(); setVcPitch(); });
   $('speed').addEventListener('input', () => { voice.speed = Number($('speed').value); syncControls(); });
   $('effect').addEventListener('input', () => { voice.effect = Number($('effect').value); syncControls(); });
   $('effect').addEventListener('change', () => { if (vc) buildVc(); });
