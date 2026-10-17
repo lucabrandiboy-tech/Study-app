@@ -11,6 +11,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || !req.url.startsWith('http')) return;
+  // The separate Robot Voice app lives on the same site (robot-voice/) but isn't part of this app: leave its pages and files alone.
+  if (/\/robot-voice(\/|$)/.test(new URL(req.url).pathname)) return;
   // Search look-ups (Wikipedia, dictionary, books, pictures) always come fresh from the internet and aren't stored.
   if (/^https:\/\/([^/]+\.)?(wikipedia\.org|wikimedia\.org|wiktionary\.org|openverse\.org|nasa\.gov|artic\.edu|openlibrary\.org|marginalia\.nu|jina\.ai|duckduckgo\.com)\//.test(req.url)) return;
   if (req.destination === 'image' && new URL(req.url).origin !== self.location.origin) return; // pictures from search results

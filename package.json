@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "check": "tsx scripts/check-content.ts",
     "build:single": "vite build --config vite.single.config.ts",
-    "build:pwa": "vite build --config vite.single.config.ts && node scripts/build-pwa.mjs"
+    "build:pwa": "vite build --config vite.single.config.ts && node scripts/build-pwa.mjs && node scripts/build-robot-voice.mjs",
+    "build:robot": "node scripts/build-robot-voice.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.129.0",
@@ -33,6 +34,8 @@
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "concurrently": "^10.0.5",
+    "esbuild": "0.28.2",
+    "mespeak": "2.0.2",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
     "tsx": "^4.23.15",
