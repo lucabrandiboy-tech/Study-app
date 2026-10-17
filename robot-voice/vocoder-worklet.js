@@ -7,7 +7,7 @@
 
 const BANDS = (() => { const n = 22, lo = 120, hi = 6400, f = []; for (let i = 0; i < n; i++) f.push(lo * Math.pow(hi / lo, i / (n - 1))); return f; })();
 const Q = 5;
-const TARGET_DB = -20; // levelled speech loudness (RMS)
+const TARGET_DB = -28; // levelled speech loudness (RMS): the robot comes out about as loud as the typed lines
 const MIN_OPEN_DB = -60; // anything quieter than this is never speech
 
 const dbOf = (x) => 10 * Math.log10(x + 1e-12); // x is a mean square
