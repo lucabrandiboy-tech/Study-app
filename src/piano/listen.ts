@@ -1,5 +1,5 @@
-// "Listen & make a song": hears music through the microphone (for example a YouTube video playing out loud),
-// finds the melody notes, and turns them into a playable song. Works best when one clear melody stands out.
+// "Listen & make a song": hears music (for example a YouTube video) through the microphone or straight from the
+// computer's own sound, finds the melody notes, and turns them into a playable song. Works best when one clear melody stands out.
 import type { Piece, NoteEv } from './notation';
 import type { ImportedSong } from '../lib/store';
 import { estimateLevel } from './importer';
@@ -78,10 +78,47 @@ export function pieceToSong(p: Piece): ImportedSong {
   return { id: p.id, title: p.title, composer: p.composer ?? 'Learned by ear', level: estimateLevel(p), added: new Date().toISOString().slice(0, 10), piece: p };
 }
 
-/** Starts listening on the microphone. `onPitch` gets the note heard right now (for a live display). */
-export async function startListening(onPitch: (midi: number | null) => void): Promise<{ stop: () => Frame[] }> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+/** 'mic' hears the room (the song has to come out of speakers). 'computer' hears the computer's own sound through the
+ *  browser's tab / screen sharing, so it works with headphones on (Chrome and Edge on computers). */
+export type ListenSource = 'mic' | 'computer';
+
+/** The computer's own sound can only be shared where the browser has screen sharing (computers, not phones). */
+export const canHearComputer = () => typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
+
+/** The sharing box was used but no sound came with it (tab audio left off, or a browser that can't share sound). */
+export class NoSoundShared extends Error {}
+
+// While listening, the app's own background music stays quiet so it isn't heard as part of the song.
+let listeningNow = false;
+const listenSubs = new Set<() => void>();
+export const isListening = () => listeningNow;
+export function onListening(f: () => void) { listenSubs.add(f); return () => { listenSubs.delete(f); }; }
+function setListening(v: boolean) { listeningNow = v; listenSubs.forEach((f) => f()); }
+
+const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+
+async function computerSound(): Promise<MediaStream> {
+  // Chrome only shares sound along with a picture, so ask for both and drop the picture straight away.
+  // The tab list comes first and includes this tab (the mini player plays here); the person still hears it in their headphones.
+  const opts = { video: { displaySurface: 'browser' }, audio: { ...RAW, suppressLocalAudioPlayback: false }, selfBrowserSurface: 'include', systemAudio: 'include' };
+  const stream = await navigator.mediaDevices.getDisplayMedia(opts as DisplayMediaStreamOptions);
+  stream.getVideoTracks().forEach((t) => t.stop());
+  if (!stream.getAudioTracks().length) throw new NoSoundShared();
+  return stream;
+}
+
+/** Starts listening. `onPitch` gets the note heard right now (for a live display). `onEnded` is called if listening
+ *  ends without `stop()`: the person pressed the browser's "Stop sharing", the mic went away, or 3 minutes passed. */
+export async function startListening(source: ListenSource, onPitch: (midi: number | null) => void, onEnded: () => void): Promise<{ stop: () => Frame[] }> {
+  // The background jazz pauses as soon as listening starts but takes 0.8 s to fade out, so what's heard before it's gone is skipped.
+  setListening(true);
+  const quietAt = performance.now() + 1200;
+  let stream: MediaStream;
+  try {
+    stream = source === 'computer' ? await computerSound() : await navigator.mediaDevices.getUserMedia({ audio: RAW });
+  } catch (e) { setListening(false); throw e; }
   const ctx = new AudioContext();
+  void ctx.resume();
   const src = ctx.createMediaStreamSource(stream);
   const an = ctx.createAnalyser();
   an.fftSize = 2048;
@@ -89,22 +126,28 @@ export async function startListening(onPitch: (midi: number | null) => void): Pr
   const buf = new Float32Array(an.fftSize);
   const frames: Frame[] = [];
   const t0 = performance.now();
+  let done = false;
+  const end = () => { if (!done) onEnded(); };
   const id = setInterval(() => {
+    if (performance.now() < quietAt) return;
     an.getFloatTimeDomainData(buf);
     const hz = detectPitch(buf, ctx.sampleRate);
     const midi = hz ? hzToMidi(hz) : null;
     frames.push({ t: (performance.now() - t0) / 1000, midi });
     onPitch(midi);
-    if (frames.length > 6000) clearInterval(id); // about 3 minutes
+    if (frames.length === 6000) end(); // about 3 minutes
   }, 30);
-  return {
-    stop: () => {
-      clearInterval(id);
-      stream.getTracks().forEach((t) => t.stop());
-      void ctx.close();
-      return frames;
-    },
+  const stop = () => {
+    if (done) return frames;
+    done = true;
+    clearInterval(id);
+    stream.getTracks().forEach((t) => t.stop());
+    void ctx.close();
+    setListening(false);
+    return frames;
   };
+  stream.getAudioTracks().forEach((t) => t.addEventListener('ended', end));
+  return { stop };
 }
 
 /** The video id from any YouTube link (watch, youtu.be, shorts, embed, music.youtube.com), or null. */
