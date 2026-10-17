@@ -268,6 +268,14 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
         </div>
         <button class="btn" id="findBtn" type="button">Find my sound devices</button>
         <label class="check" for="monitor"><input type="checkbox" id="monitor" checked> Hear it myself</label>
+        <div class="field">
+          <button class="btn" id="tabBtn" type="button">Add a tab's sound (YouTube)</button>
+          <p class="fine" id="tabHint">Your friends hear a YouTube video (or any tab) along with you. You keep hearing it from its own tab.</p>
+        </div>
+        <div class="slider" id="tabVolBox" hidden>
+          <label for="tabVol">Tab sound for friends <output id="tabVolOut" for="tabVol"></output></label>
+          <input type="range" id="tabVol" min="0" max="100" step="5">
+        </div>
         <p class="err" id="sendErr" hidden></p>
         <details>
           <summary>How to set it up (once)</summary>
@@ -276,7 +284,9 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
             <li>Come back here, press <b>Find my sound devices</b>, and pick <b>CABLE Input</b> above.</li>
             <li>In Discord (Settings, Voice &amp; Video) or your game's voice settings, set the microphone to <b>CABLE Output</b>.</li>
             <li>Type with <kbd>G</kbd>, or turn on the voice changer or talk mode. Friends now hear the robot.</li>
+            <li>For a YouTube video: press <b>Add a tab's sound</b>, pick the YouTube tab, keep <b>Also share tab audio</b> on, and press <b>Share</b>.</li>
           </ol>
+          <p class="fine">Discord's mic is now the cable, so your own voice only gets there through this app: turn on the voice changer, with <b>Robot effect</b> at 0% for your normal voice. Switch off <b>Hear it myself</b> if hearing yourself is distracting. In Discord, set <b>Noise suppression</b> to None, or it will cut out music and the robot.</p>
           <p class="fine">If a game has no microphone setting, make CABLE Output the default in Windows (Settings, System, Sound, Input). Then pick your real mic in this app's Microphone list, and for talk mode pick it in Chrome too (the icon left of the address, then Site settings, Microphone).</p>
         </details>
       </article>
@@ -371,8 +381,9 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
   voice.pitch = clamp(voice.pitch, 0, 99, 50); voice.speed = clamp(voice.speed, 80, 280, 165); voice.effect = clamp(voice.effect, 0, 100, 60);
   const presetOf = () => PRESETS.find((p) => p.id === voice.preset) || PRESETS[0];
   // where the sound goes: monitor = hear it myself; sendTo = an extra output device (a virtual cable); micId = voice changer mic
-  const io = Object.assign({ monitor: true, sendTo: '', micId: '' }, obj(store.get('io', null)));
+  const io = Object.assign({ monitor: true, sendTo: '', micId: '', tabVol: 60 }, obj(store.get('io', null)));
   io.monitor = io.monitor !== false; io.sendTo = typeof io.sendTo === 'string' ? io.sendTo : ''; io.micId = typeof io.micId === 'string' ? io.micId : '';
+  io.tabVol = clamp(io.tabVol, 0, 100, 60);
   const saveIo = () => store.set('io', io);
 
   // ---- speech engine (Web Worker; falls back to the page if a worker can't start) ----------------------
@@ -440,7 +451,7 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
   async function setSend(id) {
     io.sendTo = id; saveIo();
     show($('sendErr'));
-    if (!id) { if (sendEl) sendEl.pause(); updateSendUi(); return; }
+    if (!id) { if (sendEl) sendEl.pause(); stopTabSound(); updateSendUi(); return; }
     if (!canSend || !navigator.mediaDevices) { show($('sendErr'), 'This browser can\'t pick where sound goes. Use Chrome or Edge on a computer.'); io.sendTo = ''; saveIo(); updateSendUi(); return; }
     picking = true; audio(); picking = false;
     try {
@@ -726,11 +737,48 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
     $('findBtn').hidden = named;
     updateSendUi();
   }
+  // A tab's sound (e.g. a YouTube video) mixed into what goes to the cable only: you still hear that tab yourself, so it
+  // never goes to your own speakers here. This tab can't be picked (its sound would loop back into itself).
+  let tab = null;
+  const canShareTab = () => !micBlocked && !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && (() => { try { return !policy || policy.allowsFeature('display-capture'); } catch { return true; } })();
+  async function addTabSound() {
+    show($('sendErr'));
+    if (!io.sendTo) { show($('sendErr'), 'First pick CABLE Input under "Also send the robot to", so the tab\'s sound has somewhere to go.'); return; }
+    audio();
+    let s;
+    try {
+      const opts = { video: { displaySurface: 'browser' }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false }, selfBrowserSurface: 'exclude', systemAudio: 'exclude', monitorTypeSurfaces: 'exclude', surfaceSwitching: 'include' };
+      s = await navigator.mediaDevices.getDisplayMedia(opts);
+    } catch (e) {
+      show($('sendErr'), e && e.name === 'NotAllowedError' ? 'Sharing was cancelled. Press Add a tab\'s sound again and pick the YouTube tab.' : 'The tab\'s sound couldn\'t be shared. ' + ((e && e.message) || ''));
+      return;
+    }
+    s.getVideoTracks().forEach((t) => t.stop()); // only the sound is needed
+    if (!s.getAudioTracks().length) { show($('sendErr'), 'No sound came with that. Press Add a tab\'s sound again, pick the YouTube tab, and switch on Also share tab audio.'); return; }
+    stopTabSound();
+    const src = ctx.createMediaStreamSource(s), gain = ctx.createGain();
+    gain.gain.value = io.tabVol / 100;
+    src.connect(gain);
+    if (sendDest) gain.connect(sendDest);
+    tab = { s, src, gain };
+    s.getAudioTracks().forEach((t) => t.addEventListener('ended', () => { if (tab && tab.s === s) stopTabSound(); }));
+    updateSendUi();
+  }
+  function stopTabSound() {
+    if (!tab) return;
+    const t = tab; tab = null;
+    t.s.getTracks().forEach((x) => x.stop());
+    try { t.src.disconnect(); t.gain.disconnect(); } catch { /* done */ }
+    updateSendUi();
+  }
   function updateSendUi() {
+    $('tabBtn').textContent = tab ? 'Stop the tab\'s sound' : 'Add a tab\'s sound (YouTube)';
+    $('tabVolBox').hidden = !tab;
+    $('tabVol').value = io.tabVol; $('tabVolOut').textContent = io.tabVol + '%';
     const on = !!io.sendTo && !!sendEl && !sendEl.paused;
     const os = $('outSelect'), name = os.selectedOptions[0] ? os.selectedOptions[0].textContent.replace(' (virtual cable)', '') : '';
     $('sendCard').dataset.on = String(on); $('sendPill').dataset.on = String(on);
-    $('sendPill').textContent = on ? 'Sending' : io.sendTo ? 'Picked' : 'Off';
+    $('sendPill').textContent = on ? (tab ? 'Sending + tab' : 'Sending') : io.sendTo ? 'Picked' : 'Off';
     $('sendPill').title = on ? 'Sending to ' + name : '';
   }
 
@@ -915,6 +963,10 @@ textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3p
   $('vcToggle').addEventListener('click', () => { if (vc) stopVc(); else startVc(); });
   $('talkToggle').addEventListener('click', () => { if (talkOn) stopTalk(); else startTalk(); });
   $('findBtn').addEventListener('click', () => refreshDevices(true));
+  $('tabBtn').addEventListener('click', () => { if (tab) stopTabSound(); else addTabSound(); });
+  $('tabVol').addEventListener('input', () => { io.tabVol = Number($('tabVol').value); $('tabVolOut').textContent = io.tabVol + '%'; if (tab) tab.gain.gain.setTargetAtTime(io.tabVol / 100, ctx.currentTime, 0.03); });
+  $('tabVol').addEventListener('change', saveIo);
+  if (!canShareTab() || !canSend) { $('tabBtn').disabled = true; $('tabHint').textContent = micBlocked ? 'Works in the full app.' : 'Sharing a tab\'s sound works in Chrome or Edge on a computer.'; }
   $('outSelect').addEventListener('change', () => setSend($('outSelect').value));
   $('micSelect').addEventListener('change', () => { io.micId = $('micSelect').value; saveIo(); if (vc) { stopVc(); startVc(); } });
   $('monitor').checked = io.monitor;
