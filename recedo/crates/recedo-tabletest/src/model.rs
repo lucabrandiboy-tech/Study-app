@@ -125,6 +125,25 @@ pub struct FrameStats {
     pub input_age_ms: f64,
     pub present_mode: String,
     pub frames: u64,
+    /// The app's own work per frame (UI, tessellation, recording GPU commands), in ms,
+    /// smoothed. This is what the app controls.
+    pub work_ms: f64,
+    /// Time per frame spent waiting for the GPU or the display (getting a free image and
+    /// presenting), in ms, smoothed. Mostly the display's refresh rate and the GPU's speed.
+    pub wait_ms: f64,
+}
+
+impl FrameStats {
+    /// Folds one frame's timings into the smoothed values.
+    pub fn add_timing(&mut self, work_ms: f64, wait_ms: f64) {
+        if self.frames <= 1 {
+            self.work_ms = work_ms;
+            self.wait_ms = wait_ms;
+        } else {
+            self.work_ms += 0.1 * (work_ms - self.work_ms);
+            self.wait_ms += 0.1 * (wait_ms - self.wait_ms);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

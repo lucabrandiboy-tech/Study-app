@@ -11,7 +11,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GIT_HASH: &str = env!("RECEDO_GIT_HASH");
 
 fn source_block(out: &mut String, name: &str, st: &mut SourceStats, now_us: u64) {
-    let _ = writeln!(out, "[{name}]");
+    let _ = writeln!(out, "[{name} samples]");
     if st.samples == 0 {
         let _ = writeln!(out, "  no samples");
         return;
@@ -28,7 +28,7 @@ fn source_block(out: &mut String, name: &str, st: &mut SourceStats, now_us: u64)
     if st.pressure.seen {
         let _ = writeln!(out, "  pressure {:.4} .. {:.4}, {} distinct raw levels", st.pressure.min, st.pressure.max, st.pressure_levels());
     } else {
-        let _ = writeln!(out, "  pressure: none seen while touching");
+        let _ = writeln!(out, "  pressure: none (not reported, or never touched)");
     }
     if st.tilt_x.seen {
         let _ = writeln!(out, "  tilt X {:+.1} .. {:+.1}, tilt Y {:+.1} .. {:+.1}", st.tilt_x.min, st.tilt_x.max, st.tilt_y.min, st.tilt_y.max);
@@ -111,6 +111,7 @@ pub fn build(m: &mut Model, now_us: u64) -> String {
     let _ = writeln!(out, "[Screen]");
     let _ = writeln!(out, "  {} frames; while drawing (last second): {:.0} fps, frame {:.2} ms avg / {:.2} ms worst, {:.2} samples per frame; newest sample to present {:.2} ms",
         f.frames, f.fps, f.frame_ms_avg, f.frame_ms_max, f.samples_per_frame, f.input_age_ms);
+    let _ = writeln!(out, "  per frame: {:.2} ms app work, {:.2} ms waiting for GPU/display", f.work_ms, f.wait_ms);
     let _ = writeln!(out, "  strokes {}, dabs {}", m.strokes, m.dabs);
     let _ = writeln!(out);
     let _ = writeln!(out, "[Log]");
@@ -131,7 +132,7 @@ mod tests {
         let batch: Vec<PenSample> = (0..20).map(|i| PenSample::synthetic(i * 5000, i as f64, 0.0, 0.5, true)).collect();
         m.stats.ink.record_batch(&batch, 100_000, false);
         let r = build(&mut m, 100_000);
-        for needle in ["[Wintab driver]", "[Windows Ink]", "[Windows Ink]", "samples 20", "pressure 0.5000", "[Screen]", "[Log]"] {
+        for needle in ["[Wintab driver]", "[Windows Ink]", "[Windows Ink samples]", "[Wintab samples]", "samples 20", "pressure 0.5000", "[Screen]", "[Log]"] {
             assert!(r.contains(needle), "missing {needle:?} in\n{r}");
         }
     }

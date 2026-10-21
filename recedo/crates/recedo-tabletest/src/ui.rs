@@ -174,6 +174,7 @@ fn rate_section(ui: &mut Ui, m: &mut Model, now_us: u64, actions: &mut Vec<Actio
             ui.label("Screen while drawing: move the pen to measure");
         }
         ui.label(format!("Newest sample to screen: {:.1} ms (plus display scan-out)", f.input_age_ms));
+        ui.label(format!("Per frame: {:.1} ms of app work, {:.1} ms waiting for the GPU and display", f.work_ms, f.wait_ms));
         let st = m.stats.get(m.settings.api.source());
         if st.pressure.seen {
             ui.label(format!(

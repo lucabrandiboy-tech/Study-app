@@ -422,8 +422,12 @@ pub fn run(out_dir: Option<&str>) -> i32 {
         with_app(|a| a.request_frame());
         step(false);
     }
-    let fps = with_app(|a| a.model.frame.frames).unwrap_or(0) - f0;
-    r.check("continuous redraw", fps >= 15, format!("{fps} frames in 1 s (this machine's GPU/vsync; not the target PC)"));
+    let (fps, work, wait) = with_app(|a| (a.model.frame.frames - f0, a.model.frame.work_ms, a.model.frame.wait_ms)).unwrap_or((0, 0.0, 0.0));
+    // The overall frame rate depends on this machine's GPU and display (CI machines render
+    // in software), so it is reported, not judged. What the app itself spends per frame is
+    // its own responsibility: it must stay well under a 60 Hz frame (16.7 ms).
+    r.note(format!("continuous redraw: {fps} frames in 1 s; per frame {work:.1} ms app work, {wait:.1} ms waiting for GPU/display"));
+    r.check("app work per frame", fps > 0 && work <= 8.0, format!("{work:.1} ms (limit 8 ms, half a 60 Hz frame)"));
     let panel = (crate::ui::PANEL_WIDTH * dpi as f32 / 96.0) as i32;
     let x0 = panel + 60;
     let x1 = cw as i32 - 60;

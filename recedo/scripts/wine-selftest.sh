@@ -17,6 +17,7 @@ fi
 [ -d "$WINEPREFIX" ] || wineboot -i >/dev/null 2>&1
 rm -rf "$out" && mkdir -p "$out"
 cp "$rel/recedo-tablet-test.exe" "$rel/wintab_mock.dll" "$out/"
+echo "testing $(sha256sum "$rel/recedo-tablet-test.exe")"
 cd "$out"
 # Wine's own GL driver path (llvmpipe) is the reliable GPU backend here.
 set +e

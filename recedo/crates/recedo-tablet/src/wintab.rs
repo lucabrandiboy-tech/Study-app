@@ -260,6 +260,17 @@ impl WintabContext {
             .info_struct(WTI_DEFSYSCTX, 0)
             .ok_or_else(|| "the driver has no default system context (WTI_DEFSYSCTX)".to_string())?;
         let mut open_log = Vec::new();
+        // Some drivers leave the default context's input extent at 0; the device's own axis
+        // ranges describe the same thing.
+        let mut base = base;
+        if base.lcInExtX <= 0 && device.x.axMax > device.x.axMin {
+            base.lcInExtX = device.x.axMax - device.x.axMin + 1;
+            open_log.push(format!("default context had no X extent; using the device's {}", base.lcInExtX));
+        }
+        if base.lcInExtY <= 0 && device.y.axMax > device.y.axMin {
+            base.lcInExtY = device.y.axMax - device.y.axMin + 1;
+            open_log.push(format!("default context had no Y extent; using the device's {}", base.lcInExtY));
+        }
         let mut opened = None;
         for mask in [PACKETDATA_FULL, PACKETDATA_QT, PACKETDATA_MIN] {
             let mut ctx = base;

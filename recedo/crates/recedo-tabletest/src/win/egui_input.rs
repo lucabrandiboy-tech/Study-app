@@ -141,7 +141,12 @@ impl EguiInput {
                 true
             }
             WM_CAPTURECHANGED => {
-                self.buttons_down = 0;
+                // Capture was taken away mid-drag: no button-up will come, so tell egui the
+                // pointer is gone rather than leave a slider stuck to the pen.
+                if self.buttons_down != 0 {
+                    self.buttons_down = 0;
+                    self.raw.events.push(Event::PointerGone);
+                }
                 false
             }
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {

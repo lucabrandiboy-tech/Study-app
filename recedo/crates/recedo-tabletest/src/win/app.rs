@@ -79,6 +79,8 @@ pub struct App {
     frame_wanted: bool,
     next_refresh: Instant,
     acquired: Option<wgpu::SurfaceTexture>,
+    /// Time the last `acquire` waited for a free swap-chain image, in ms.
+    acquire_wait_ms: f64,
     frame_times: VecDeque<Instant>,
     samples_since_frame: usize,
     newest_unpresented_recv: Option<u64>,
@@ -148,6 +150,7 @@ impl App {
             frame_wanted: true,
             next_refresh: Instant::now(),
             acquired: None,
+            acquire_wait_ms: 0.0,
             frame_times: VecDeque::new(),
             samples_since_frame: 0,
             newest_unpresented_recv: None,
@@ -580,7 +583,10 @@ impl App {
         if self.acquired.is_some() || !self.reconfigure_if_resized() {
             return;
         }
-        match self.surface.get_current_texture() {
+        let t0 = Instant::now();
+        let current = self.surface.get_current_texture();
+        self.acquire_wait_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        match current {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => self.acquired = Some(t),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.gpu.device, &self.config);
@@ -592,6 +598,7 @@ impl App {
     /// Acquires (if needed), draws and presents one frame.
     pub fn frame(&mut self) {
         self.acquire();
+        let work_start = Instant::now();
         let Some(frame) = self.acquired.take() else {
             // Minimised or not ready: try again later.
             self.next_refresh = Instant::now() + STATS_REFRESH;
@@ -681,7 +688,11 @@ impl App {
             self.egui_renderer.free_texture(&id);
         }
         gpu.queue.submit(extra.into_iter().chain(std::iter::once(enc.finish())));
+        let work_ms = work_start.elapsed().as_secs_f64() * 1000.0;
+        let present_start = Instant::now();
         gpu.queue.present(frame);
+        let wait_ms = self.acquire_wait_ms + present_start.elapsed().as_secs_f64() * 1000.0;
+        self.acquire_wait_ms = 0.0;
 
         // Frame statistics. Only frames that drew new pen input count: when nothing moves
         // the app idles at a few frames per second on purpose, which says nothing about how
@@ -689,6 +700,7 @@ impl App {
         let t = Instant::now();
         let f = &mut self.model.frame;
         f.frames += 1;
+        f.add_timing(work_ms, wait_ms);
         if self.samples_since_frame > 0 {
             self.frame_times.push_back(t);
             f.samples_per_frame = f.samples_per_frame * 0.9 + self.samples_since_frame as f64 * 0.1;
