@@ -26,7 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::clock::{now_us, qpc_to_us};
-use crate::sample::{Flags, PenSample, Source};
+use crate::sample::{Flags, FrameFilter, PenSample, Source};
 use crate::wintab::client_origin;
 
 /// What a pointer message turned into.
@@ -49,6 +49,10 @@ pub struct InkInput {
     pub max_history: u32,
     /// Samples that used the integer pixel position because the HIMETRIC one disagreed.
     pub coarse_fallbacks: u64,
+    /// Frames already delivered (Windows can send the same frame in two messages).
+    frames: FrameFilter,
+    /// Repeated frames that were dropped.
+    pub repeats_dropped: u64,
 }
 
 fn device_rects(device: HANDLE) -> Option<(RECT, RECT)> {
@@ -78,6 +82,7 @@ impl InkInput {
             return None;
         }
         if msg == WM_POINTERLEAVE {
+            self.frames.forget(id);
             return Some(InkEvent::Leave { pointer_id: id });
         }
         if !matches!(msg, WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP | WM_POINTERENTER) {
@@ -110,6 +115,10 @@ impl InkInput {
         // History is newest first.
         for i in (0..n).rev() {
             let pen = self.buf[i];
+            if !self.frames.is_new(pen.pointerInfo.pointerId, pen.pointerInfo.frameId) {
+                self.repeats_dropped += 1;
+                continue;
+            }
             out.push(self.convert(&pen, origin, recv, msg == WM_POINTERENTER && i == n - 1));
         }
         Some(InkEvent::Samples(out))

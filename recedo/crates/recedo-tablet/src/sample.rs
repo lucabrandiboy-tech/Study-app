@@ -138,3 +138,59 @@ impl PenSample {
         }
     }
 }
+
+/// Drops input frames that were already delivered.
+///
+/// Windows numbers every pointer input frame (`frameId`), and the same frame can reach the
+/// window twice, e.g. in `WM_POINTERENTER` and in the `WM_POINTERUPDATE` after it. Frame
+/// numbers only grow, so anything not newer than the last one seen is a repeat.
+#[derive(Clone, Debug, Default)]
+pub struct FrameFilter {
+    last: std::collections::HashMap<u32, u32>,
+}
+
+impl FrameFilter {
+    /// True if this frame of this pointer has not been seen yet (and records it).
+    pub fn is_new(&mut self, pointer: u32, frame: u32) -> bool {
+        match self.last.get(&pointer) {
+            // Wrapping comparison, so the counter rolling over at u32::MAX is fine.
+            Some(&last) if (frame.wrapping_sub(last) as i32) <= 0 => false,
+            _ => {
+                self.last.insert(pointer, frame);
+                true
+            }
+        }
+    }
+
+    /// Forget a pointer (it left range; Windows may reuse the id later).
+    pub fn forget(&mut self, pointer: u32) {
+        self.last.remove(&pointer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_frames_are_dropped() {
+        let mut f = FrameFilter::default();
+        assert!(f.is_new(1, 100));
+        assert!(!f.is_new(1, 100), "same frame twice");
+        assert!(f.is_new(1, 101));
+        assert!(!f.is_new(1, 99), "older frame");
+        assert!(f.is_new(2, 5), "pointers are independent");
+        f.forget(1);
+        assert!(f.is_new(1, 3), "after forgetting, a reused id starts fresh");
+    }
+
+    #[test]
+    fn frame_counter_wraparound() {
+        let mut f = FrameFilter::default();
+        assert!(f.is_new(1, u32::MAX - 1));
+        assert!(f.is_new(1, u32::MAX));
+        assert!(f.is_new(1, 0));
+        assert!(f.is_new(1, 1));
+        assert!(!f.is_new(1, u32::MAX));
+    }
+}

@@ -465,6 +465,7 @@ pub struct WintabInput {
     /// The newest packet, for the diagnostics panel.
     pub last_packet: Option<RawPacket>,
     pub last_norm: Option<Norm>,
+    contact: ContactDetector,
 }
 
 impl WintabInput {
@@ -481,6 +482,7 @@ impl WintabInput {
             in_proximity: false,
             last_packet: None,
             last_norm: None,
+            contact: ContactDetector::default(),
         })
     }
 
@@ -518,8 +520,7 @@ impl WintabInput {
             let norm = space.normalize(p.x, p.y);
             let (sx, sy) = self.calibrator.map(norm, &self.targets);
             let pressure = if has_pressure { ((p.normal_pressure as f64 - p_min) / p_span).clamp(0.0, 1.0) as f32 } else { 0.0 };
-            let tip = p.buttons & 1 != 0;
-            let contact = tip || (has_pressure && p.normal_pressure as f64 > p_min);
+            let contact = self.contact.contact(p.buttons, has_pressure.then_some(pressure as f64));
             let mut flags = Flags(0);
             flags.set(Flags::CONTACT, contact);
             flags.set(Flags::HAS_PRESSURE, has_pressure);

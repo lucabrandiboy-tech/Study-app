@@ -154,6 +154,7 @@ pub struct InkView {
     pub devices: Vec<String>,
     pub max_history: u32,
     pub coarse_fallbacks: u64,
+    pub repeats_dropped: u64,
     pub in_range: bool,
 }
 

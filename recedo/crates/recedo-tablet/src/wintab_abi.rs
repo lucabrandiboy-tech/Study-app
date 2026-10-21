@@ -434,3 +434,54 @@ mod tests {
         assert_eq!(describe_mask(PK_X | PK_Y), "0x0180 [x, y]");
     }
 }
+
+/// Decides whether a Wintab packet means "the pen touches the tablet".
+///
+/// The tip is logical button 0 in `pkButtons`; Qt and Krita use that. Pressure alone is
+/// not trusted, because some drivers report a little pressure while the pen hovers, which
+/// would draw without touching. Only for a driver that has never reported the tip button
+/// is pressure used, above 2% of its range.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContactDetector {
+    tip_button_seen: bool,
+}
+
+impl ContactDetector {
+    /// `pressure`: normalised 0..=1, or `None` if the context has no pressure.
+    pub fn contact(&mut self, buttons: u32, pressure: Option<f64>) -> bool {
+        if buttons & 1 != 0 {
+            self.tip_button_seen = true;
+            return true;
+        }
+        if self.tip_button_seen {
+            return false;
+        }
+        pressure.is_some_and(|p| p > 0.02)
+    }
+}
+
+#[cfg(test)]
+mod contact_tests {
+    use super::*;
+
+    #[test]
+    fn tip_button_decides_once_seen() {
+        let mut c = ContactDetector::default();
+        // Hover noise below the threshold never counts.
+        assert!(!c.contact(0, Some(0.01)));
+        assert!(c.contact(1, Some(0.3)));
+        // From now on pressure without the tip button is hover noise, not contact.
+        assert!(!c.contact(0, Some(0.2)));
+        assert!(!c.contact(0b10, Some(0.2)), "a side button is not the tip");
+        assert!(c.contact(0b11, Some(0.2)));
+    }
+
+    #[test]
+    fn drivers_without_a_tip_button_fall_back_to_pressure() {
+        let mut c = ContactDetector::default();
+        assert!(!c.contact(0, Some(0.0)));
+        assert!(!c.contact(0, Some(0.02)));
+        assert!(c.contact(0, Some(0.05)));
+        assert!(!c.contact(0, None));
+    }
+}

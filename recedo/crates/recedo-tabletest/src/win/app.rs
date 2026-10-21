@@ -87,7 +87,6 @@ pub struct App {
     ppp: f32,
     cursor: egui::CursorIcon,
     mouse_clock: MsClockMapper,
-    last_pen_us: u64,
     ink_in_range: bool,
     deferred: Vec<Deferred>,
     /// Save settings on exit (off for the self-test).
@@ -156,7 +155,6 @@ impl App {
             ppp: 1.0,
             cursor: egui::CursorIcon::Default,
             mouse_clock: MsClockMapper::default(),
-            last_pen_us: 0,
             ink_in_range: false,
             deferred: Vec::new(),
             persist,
@@ -299,6 +297,7 @@ impl App {
             devices: std::mem::take(&mut self.model.ink.devices),
             max_history: self.ink.max_history,
             coarse_fallbacks: self.ink.coarse_fallbacks,
+            repeats_dropped: self.ink.repeats_dropped,
             in_range: self.ink_in_range,
         };
         // SAFETY: valid window.
@@ -309,10 +308,6 @@ impl App {
         self.frame_wanted = true;
     }
 
-    fn pen_recently_active(&self) -> bool {
-        self.ink_in_range || self.wintab.as_ref().is_some_and(|w| w.in_proximity) || now_us().saturating_sub(self.last_pen_us) < 2_000_000
-    }
-
     pub fn on_samples(&mut self, source: Source, samples: Vec<PenSample>) {
         if samples.is_empty() {
             return;
@@ -321,12 +316,9 @@ impl App {
         let serials = source == Source::Wintab && self.wintab.as_ref().is_some_and(|w| w.ctx.layout.has(PK_SERIAL_NUMBER));
         self.model.stats.get_mut(source).record_batch(&samples, now, serials);
         self.model.record(&samples);
-        if source != Source::Mouse {
-            self.last_pen_us = now;
-        }
-        let api = self.model.settings.api;
-        let draws = source == api.source() || (source == Source::Mouse && (api == Api::MouseOnly || !self.pen_recently_active()));
-        if !draws {
+        // Only the chosen API draws. (Statistics above are kept for every source, so both
+        // tablet APIs' rates can be compared while one of them draws.)
+        if source != self.model.settings.api.source() {
             return;
         }
         let brush = self.model.settings.brush;
@@ -352,7 +344,10 @@ impl App {
     }
 
     fn on_mouse(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-        if mouse_from_pen_or_touch() {
+        // The mouse draws only in "Mouse only" mode. With a tablet API chosen, a mouse click
+        // made by the pen driver could arrive before the tablet's own data and start a stroke
+        // without pressure, so the mouse is ignored for drawing then.
+        if self.model.settings.api != Api::MouseOnly || mouse_from_pen_or_touch() {
             return;
         }
         let contact = match msg {
@@ -763,6 +758,7 @@ impl App {
                 self.model.stats = Default::default();
                 self.ink.max_history = 0;
                 self.ink.coarse_fallbacks = 0;
+                self.ink.repeats_dropped = 0;
             }
             Action::PresentModeChanged => self.apply_present_mode(),
         }

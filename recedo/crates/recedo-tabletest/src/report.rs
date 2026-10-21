@@ -102,7 +102,7 @@ pub fn build(m: &mut Model, now_us: u64) -> String {
     for d in &m.ink.devices {
         let _ = writeln!(out, "  device: {d}");
     }
-    let _ = writeln!(out, "  most samples in one message: {}, whole-pixel fallbacks: {}", m.ink.max_history, m.ink.coarse_fallbacks);
+    let _ = writeln!(out, "  most samples in one message: {}, whole-pixel fallbacks: {}, repeated frames dropped: {}", m.ink.max_history, m.ink.coarse_fallbacks, m.ink.repeats_dropped);
     let _ = writeln!(out);
     source_block(&mut out, Source::Wintab.label(), &mut m.stats.wintab, now_us);
     source_block(&mut out, Source::Ink.label(), &mut m.stats.ink, now_us);

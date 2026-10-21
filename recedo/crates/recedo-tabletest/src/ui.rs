@@ -319,6 +319,7 @@ fn ink_section(ui: &mut Ui, m: &mut Model) {
         }
         ui.small(format!("Most samples carried by one message: {}", m.ink.max_history));
         ui.small(format!("Samples that fell back to whole-pixel positions: {}", m.ink.coarse_fallbacks));
+        ui.small(format!("Repeated frames dropped: {}", m.ink.repeats_dropped));
         ui.small("Windows Ink always reports pressure as 0…1024 (1025 levels), whatever the pen's own resolution.");
     });
 }
