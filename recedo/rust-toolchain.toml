@@ -1,0 +1,7 @@
+# The exact Rust used to develop and test Recedo, so CI and local builds agree
+# (newer releases add lints that would fail `clippy -D warnings`).
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-gnu"]
+profile = "minimal"

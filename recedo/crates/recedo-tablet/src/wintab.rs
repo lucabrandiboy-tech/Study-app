@@ -132,7 +132,7 @@ impl WintabLib {
 
     pub fn info_string(&self, category: u32, index: u32) -> Option<String> {
         let b = self.info_bytes(category, index)?;
-        let wide: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let wide: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)).collect();
         Some(utf16_until_nul(&wide)).filter(|s| !s.is_empty())
     }
 

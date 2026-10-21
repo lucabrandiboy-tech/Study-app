@@ -462,7 +462,7 @@ pub fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<
 
 /// Un-premultiplies RGBA8 in place (for saving PNGs, which are straight alpha).
 pub fn unpremultiply(rgba: &mut [u8]) {
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = px[3] as u32;
         if a != 0 && a != 255 {
             for c in &mut px[..3] {

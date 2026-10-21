@@ -28,9 +28,9 @@ jobs:
           sudo apt-get update -qq
           # MinGW links the Windows build; Mesa's software Vulkan runs the GPU tests.
           sudo apt-get install -y -qq gcc-mingw-w64-x86-64 mesa-vulkan-drivers
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
-          rustup target add x86_64-pc-windows-gnu
+          # recedo/rust-toolchain.toml pins the Rust version, clippy and the Windows target.
+          rustup toolchain install
+          rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: recedo
