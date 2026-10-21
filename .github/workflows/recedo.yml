@@ -1,0 +1,76 @@
+name: Recedo (painting app)
+
+# Only for the Recedo sources; the Study app's publishing workflow is separate.
+on:
+  push:
+    branches: [claude/charming-babbage-qg8hlr]
+    paths: ['recedo/**', '.github/workflows/recedo.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recedo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint, test, cross-compile (Linux)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: recedo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          # MinGW links the Windows build; Mesa's software Vulkan runs the GPU tests.
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 mesa-vulkan-drivers
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustup target add x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: recedo
+      - name: Clippy (Linux)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (Windows)
+        run: cargo clippy --workspace --target x86_64-pc-windows-gnu -- -D warnings
+      - name: Unit and GPU tests
+        env:
+          RECEDO_REQUIRE_GPU: '1'
+        run: cargo test --workspace
+      - name: Build Windows binaries
+        run: cargo build --release --target x86_64-pc-windows-gnu -p recedo-tabletest -p wintab-mock
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recedo-windows
+          path: |
+            recedo/target/x86_64-pc-windows-gnu/release/recedo-tablet-test.exe
+            recedo/target/x86_64-pc-windows-gnu/release/wintab_mock.dll
+
+  windows-selftest:
+    name: Self-test on Windows
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: recedo-windows
+          path: bin
+      - name: Run the self-test (mouse, Windows Ink injection, mock Wintab)
+        shell: pwsh
+        run: |
+          $env:RECEDO_WINTAB_DLL = "$PWD\bin\wintab_mock.dll"
+          $p = Start-Process -FilePath "bin\recedo-tablet-test.exe" -ArgumentList '--selftest', "$PWD\out" -Wait -PassThru
+          if (Test-Path out\selftest-results.txt) { Get-Content out\selftest-results.txt } else { Write-Host "no results file" }
+          Write-Host "----- app report -----"
+          if (Test-Path out\selftest-app-report.txt) { Get-Content out\selftest-app-report.txt }
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-selftest-output
+          path: out
