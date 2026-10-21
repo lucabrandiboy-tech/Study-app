@@ -12,13 +12,15 @@ the end collects them for me.
 
 1. Unzip `Recedo-TabletTest-Phase0.zip` (right-click it, **Extract All**).
 2. Open the **XP-Pen driver** (the "Pentablet" app). On the pen settings page, make sure
-   **Windows Ink** is ticked. (Needed for steps 4-10. It does no harm to Wintab.)
+   **Windows Ink** is ticked. (Needed for steps 4-10. If Wintab shows a red error later,
+   try unticking it, restart the test app, and note whether that changed anything.)
 3. Double-click **`recedo-tablet-test.exe`**.
    * If Windows shows **"Windows protected your PC"**: click **More info**, then
      **Run anyway**. (This appears for any program that isn't signed by a company.)
-   * The window opens full-screen on the monitor your mouse is on. If that's not the
+   * The window opens maximised on the monitor your mouse is on. If that's not the
      Artist 12, open **Screen and display** in the left panel and click **Move here**
-     next to the Artist 12 (it's listed by name), or drag the window there.
+     next to the Artist 12 (listed by name if the monitor reports one, otherwise as
+     `\\.\DISPLAY…` with its size, 1920×1080), or drag the window there.
 
 ## Windows Ink
 
@@ -35,6 +37,10 @@ the end collects them for me.
    *Expected:* **Tilt X** is positive (+) when leaning right and negative (−) left;
    **Tilt Y** is positive leaning toward you and negative away. The blue line in the
    circle points the way the pen leans. Values up to about ±60° are normal.
+   *Note:* not every Artist 12 pen has a tilt sensor. The newer models (Artist 12
+   2nd Gen, Artist 12 Pro) do; the original 2018 Artist 12 most likely does not. If
+   **Tilt X / Y** says "not reported" in both Windows Ink and Wintab, tell me which
+   model you have (it's on the label on the back) and we'll check it.
 8. Draw a few **fast** scribbles and S-curves.
    *Expected:* lines with **no gaps** between dots. (Small corners on very fast curves
    are expected here: this test draws the raw pen readings with no smoothing. The

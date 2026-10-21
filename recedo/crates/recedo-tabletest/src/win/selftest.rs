@@ -416,19 +416,34 @@ pub fn run(out_dir: Option<&str>) -> i32 {
     r.note(format!("client area {cw}x{ch} px at {dpi} dpi"));
     let frames = with_app(|a| a.model.frame.frames).unwrap_or(0);
     r.check("window renders", frames > 0, format!("{frames} frames while idle for 0.5 s (it redraws only when something changes)"));
-    // Redraw continuously for a second, as when drawing.
+    // Redraw continuously for a second, as when drawing, and collect each frame's timings.
     let start = Instant::now();
     let f0 = frames;
+    let mut last = frames;
+    let (mut work, mut wait) = (Vec::new(), Vec::new());
     while start.elapsed() < Duration::from_secs(1) {
         with_app(|a| a.request_frame());
         step(false);
+        if let Some((n, wk, wt)) = with_app(|a| (a.model.frame.frames, a.model.frame.last_work_ms, a.model.frame.last_wait_ms))
+            && n != last
+        {
+            last = n;
+            work.push(wk);
+            wait.push(wt);
+        }
     }
-    let (fps, work, wait) = with_app(|a| (a.model.frame.frames - f0, a.model.frame.work_ms, a.model.frame.wait_ms)).unwrap_or((0, 0.0, 0.0));
+    let fps = last - f0;
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
+    };
+    let worst_work = work.iter().copied().fold(0.0, f64::max);
+    let (work_med, wait_med) = (median(&mut work), median(&mut wait));
     // The overall frame rate depends on this machine's GPU and display (CI machines render
     // in software), so it is reported, not judged. What the app itself spends per frame is
-    // its own responsibility: it must stay well under a 60 Hz frame (16.7 ms).
-    r.note(format!("continuous redraw: {fps} frames in 1 s; per frame {work:.1} ms app work, {wait:.1} ms waiting for GPU/display"));
-    r.check("app work per frame", fps > 0 && work <= 8.0, format!("{work:.1} ms (limit 8 ms, half a 60 Hz frame)"));
+    // its own responsibility: the median must stay well under a 60 Hz frame (16.7 ms).
+    r.note(format!("continuous redraw: {fps} frames in 1 s; median per frame {work_med:.1} ms app work (worst {worst_work:.1}), {wait_med:.1} ms waiting for GPU/display"));
+    r.check("app work per frame", fps > 0 && work_med <= 8.0, format!("median {work_med:.1} ms over {fps} frames (limit 8 ms, half a 60 Hz frame)"));
     let panel = (crate::ui::PANEL_WIDTH * dpi as f32 / 96.0) as i32;
     let x0 = panel + 60;
     let x1 = cw as i32 - 60;

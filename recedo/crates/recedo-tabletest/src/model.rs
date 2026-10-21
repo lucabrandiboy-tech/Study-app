@@ -131,11 +131,16 @@ pub struct FrameStats {
     /// Time per frame spent waiting for the GPU or the display (getting a free image and
     /// presenting), in ms, smoothed. Mostly the display's refresh rate and the GPU's speed.
     pub wait_ms: f64,
+    /// The last frame's unsmoothed timings (for measurements over a set of frames).
+    pub last_work_ms: f64,
+    pub last_wait_ms: f64,
 }
 
 impl FrameStats {
     /// Folds one frame's timings into the smoothed values.
     pub fn add_timing(&mut self, work_ms: f64, wait_ms: f64) {
+        self.last_work_ms = work_ms;
+        self.last_wait_ms = wait_ms;
         if self.frames <= 1 {
             self.work_ms = work_ms;
             self.wait_ms = wait_ms;
