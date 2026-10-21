@@ -378,6 +378,7 @@ fn wintab_test(r: &mut Results, hwnd: windows_sys::Win32::Foundation::HWND, x0: 
 }
 
 pub fn run(out_dir: Option<&str>) -> i32 {
+    super::install_crash_report(false);
     set_dpi_awareness();
     let out = std::path::PathBuf::from(out_dir.unwrap_or("selftest-output"));
     let _ = std::fs::create_dir_all(&out);

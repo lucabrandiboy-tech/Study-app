@@ -597,6 +597,10 @@ impl App {
 
     /// Acquires (if needed), draws and presents one frame.
     pub fn frame(&mut self) {
+        // Lets the self-test check the crash report (never set in normal use).
+        if std::env::var_os("RECEDO_TEST_CRASH").is_some() {
+            panic!("crash requested by RECEDO_TEST_CRASH");
+        }
         self.acquire();
         let work_start = Instant::now();
         let Some(frame) = self.acquired.take() else {

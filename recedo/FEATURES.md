@@ -17,9 +17,9 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 |---|---|---|
 | Stack evaluation, `DECISIONS.md` | WORKING | Written; includes rejected options and scope warnings. |
 | Test app: draws with pressure and tilt through **Wintab** | NEEDS HARDWARE CHECK | Self-test under Wine with a stand-in `Wintab32.dll`: every packet arrives, a deliberately dropped packet is detected, positions within 0.03 px, pressure within 0.0001, tilt within 0.1°. Real XP-Pen driver: user's checklist. |
-| Test app: draws with pressure and tilt through **Windows Ink** | NEEDS HARDWARE CHECK | Windows CI self-test injects pen strokes with pressure and tilt (see `DECISIONS.md` §3 for the result). Real pen: user's checklist. |
+| Test app: draws with pressure and tilt through **Windows Ink** | NEEDS HARDWARE CHECK | Self-test on real Windows (CI) with injected pen strokes: every frame arrived, pressure and tilt exact, positions within 0.024 px, line width follows pressure. Real pen: user's checklist. |
 | Test app: raw event rate display | WORKING | Rates, peak, device interval rate, samples per message, losses; checked by unit tests and the self-test. The Artist 12's actual numbers come from the checklist. |
-| Every tablet event used, including coalesced ones | NEEDS HARDWARE CHECK | Wintab: whole queue drained per message (self-test: 220/220 packets, up to 3 per message). Ink: full pointer history read, repeats dropped (Windows CI). |
+| Every tablet event used, including coalesced ones | NEEDS HARDWARE CHECK | Wintab: whole queue drained per message (self-test on Windows: 220/220 packets, up to 47 in one message). Ink: full pointer history read, repeats dropped (Windows: 121/121 frames, up to 3 in one message). |
 | Sub-pixel positions | NEEDS HARDWARE CHECK | Wintab: from tablet units (self-test). Ink: HIMETRIC location, falls back to whole pixels if inconsistent (counted in the panel). |
 | Wintab screen mapping on a multi-monitor PC | NEEDS HARDWARE CHECK | Automatic choice by comparison with the cursor; unit-tested for two monitors, flipped Y and sub-area mappings. |
 | Display scaling 125% / 150%, crisp UI | NEEDS HARDWARE CHECK | Per-monitor DPI awareness v2; panel rendered at the monitor's real pixel density; layout unit-tested at 150%. Only seen at 100% so far. |

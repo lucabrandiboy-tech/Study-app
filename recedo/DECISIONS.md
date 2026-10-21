@@ -95,8 +95,10 @@ What has been verified, and how:
 | Tilt math (azimuth/altitude → tilt X/Y) | Unit tests, including a flat pen and the inverse | pass |
 | Screen mapping auto-selection | Unit tests: two monitors, Y flip, sub-area fit, fast moves ignored | pass |
 | Wintab end to end | Self-test under Wine with a stand-in `Wintab32.dll` that plays a stroke: every packet arrives, the one deliberately dropped is detected, positions within 0.03 px, pressure within 0.0001, tilt within 0.1° | pass |
-| Mouse end to end | Self-test under Wine and on Windows CI | pass under Wine |
-| Windows Ink end to end | Self-test on Windows CI: pen strokes injected with `InjectSyntheticPointerInput`, several frames per message; checks every frame arrives with exact pressure and tilt | see CI run |
+| Mouse end to end | Self-test under Wine and on Windows CI | pass (both) |
+| Windows Ink end to end | Self-test on real Windows (GitHub Actions, Windows build 26100 = 24H2, Direct3D 12): pen strokes injected with `InjectSyntheticPointerInput`, several frames per message. 121 of 121 touching frames arrived, up to 3 unpacked from one message, positions within 0.024 px, pressure and tilt exact, line width follows pressure (4 px → 22 px) | pass |
+| Wintab on real Windows | Same run, mock driver: 220 of 220 packets (up to 47 drained from one message), dropped packet detected, positions within 0.016 px | pass |
+| App's own work per frame | Self-test: must stay under 8 ms (half a 60 Hz frame). Under Wine: 3.2 ms. The overall frame rate on CI is not meaningful (no GPU there: Windows' software renderer gave 12 fps) | pass under Wine |
 | Drawing | GPU tests: pressure ramp gives thin→thick, no gaps on fast sparse samples, eraser end erases | pass |
 | **Real XP-Pen Artist 12, both APIs** | **The user's checklist** | **waiting** |
 

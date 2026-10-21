@@ -179,8 +179,46 @@ pub fn uninstall() -> Option<App> {
     APP.with(|cell| cell.borrow_mut().take())
 }
 
+/// On a crash (panic), saves what happened to `Documents\Recedo\crash-<time>.txt` and, in
+/// the normal app, says so in a message box. Without this the window would just vanish.
+/// The self-test passes `interactive = false`: no message box, so CI can never hang on one.
+pub fn install_crash_report(interactive: bool) {
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown place".into());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(no message)".into());
+        let text = format!(
+            "Recedo tablet test crashed.\r\nversion {} ({})\r\nos: {}\r\nwhere: {location}\r\nwhat: {message}\r\n",
+            crate::report::VERSION,
+            crate::report::GIT_HASH,
+            sys::os_version()
+        );
+        let dir = sys::output_dir();
+        let path = dir.join(format!("crash-{}.txt", sys::timestamp()));
+        let saved = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &text)).is_ok();
+        eprintln!("{text}");
+        println!("CRASH  {location}: {message}");
+        if interactive {
+            let note = if saved {
+                format!("{text}\r\nThis was saved to:\r\n{}\r\n\r\nPlease send that file in the chat.", path.display())
+            } else {
+                format!("{text}\r\n(Could not save it to a file; please take a screenshot of this message.)")
+            };
+            let msg = sys::wide(&note);
+            let title = sys::wide("Recedo tablet test: crash");
+            // SAFETY: valid strings; no owner window (it may be in a broken state).
+            unsafe { MessageBoxW(std::ptr::null_mut(), msg.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
+        }
+    }));
+}
+
 /// Runs the tablet test app until its window closes.
 pub fn run() -> i32 {
+    install_crash_report(true);
     set_dpi_awareness();
     let settings = Settings::load(&sys::settings_path());
     let placement = settings.window;
