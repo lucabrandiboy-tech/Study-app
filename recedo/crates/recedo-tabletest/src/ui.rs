@@ -384,6 +384,30 @@ fn log_section(ui: &mut Ui, m: &mut Model) {
     });
 }
 
+/// The whole window's UI for one frame: the side panel and the overlay on the canvas.
+/// Returns the panel's actions and its rectangle (in points).
+pub fn frame_ui(ui: &mut Ui, m: &mut Model, now_us: u64) -> (Vec<Action>, egui::Rect) {
+    let side = if m.settings.panel_right { egui::Panel::right("panel") } else { egui::Panel::left("panel") };
+    let mut actions = Vec::new();
+    let resp = side.resizable(false).exact_size(PANEL_WIDTH).show(ui, |ui| {
+        actions = panel(ui, m, now_us);
+    });
+    let ppp = ui.ctx().pixels_per_point();
+    crosshair(ui.ctx(), m, ppp);
+    (actions, resp.response.rect)
+}
+
+/// May a pen stroke start at this window pixel? Not outside the window, not on the panel,
+/// not on a popup (an open list, a tooltip). Plain overlays such as the red cross, which
+/// sits right under the pen, do not count.
+pub fn stroke_may_start(ctx: &egui::Context, panel: egui::Rect, ppp: f32, size_px: (f64, f64), x: f64, y: f64) -> bool {
+    if x < 0.0 || y < 0.0 || x >= size_px.0 || y >= size_px.1 {
+        return false;
+    }
+    let p = egui::pos2(x as f32 / ppp, y as f32 / ppp);
+    !panel.contains(p) && !ctx.layer_id_at(p).is_some_and(|l| l.order != egui::Order::Background)
+}
+
 /// Draws the red cross at the newest tablet position (canvas overlay, in points).
 pub fn crosshair(ctx: &egui::Context, m: &Model, pixels_per_point: f32) {
     if !m.settings.show_crosshair {
@@ -428,6 +452,74 @@ mod tests {
                 }
             }
         });
+    }
+
+    fn input(w: f32, h: f32) -> egui::RawInput {
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))), ..Default::default() }
+    }
+
+    #[test]
+    fn strokes_start_on_the_canvas_even_under_the_red_cross() {
+        let ctx = egui::Context::default();
+        let mut m = Model::default();
+        assert!(m.settings.show_crosshair, "the cross is on by default");
+        let mut s = recedo_tablet::PenSample::synthetic(0, 800.0, 300.0, 0.5, false);
+        s.source = Source::Ink;
+        m.latest = Some(s);
+        let mut panel_rect = egui::Rect::NOTHING;
+        for _ in 0..2 {
+            ctx.run_ui(input(1280.0, 800.0), |ui| {
+                panel_rect = frame_ui(ui, &mut m, 0).1;
+            })
+            .drop_without_applying_deltas();
+        }
+        let size = (1280.0, 800.0);
+        assert!((panel_rect.width() - PANEL_WIDTH).abs() < 1.0, "{panel_rect:?}");
+        assert!(stroke_may_start(&ctx, panel_rect, 1.0, size, 800.0, 300.0), "the cross must not block the pen");
+        assert!(stroke_may_start(&ctx, panel_rect, 1.0, size, 400.0, 10.0));
+        assert!(!stroke_may_start(&ctx, panel_rect, 1.0, size, 100.0, 300.0), "panel");
+        assert!(!stroke_may_start(&ctx, panel_rect, 1.0, size, 1280.0, 300.0), "outside");
+        assert!(!stroke_may_start(&ctx, panel_rect, 1.0, size, -1.0, 300.0), "outside");
+    }
+
+    #[test]
+    fn strokes_do_not_start_on_a_popup() {
+        let ctx = egui::Context::default();
+        let mut m = Model::default();
+        let mut panel_rect = egui::Rect::NOTHING;
+        for _ in 0..2 {
+            ctx.run_ui(input(1280.0, 800.0), |ui| {
+                panel_rect = frame_ui(ui, &mut m, 0).1;
+                // Stands in for an open drop-down list over the canvas.
+                egui::Area::new(egui::Id::unique("test popup")).order(egui::Order::Foreground).fixed_pos(egui::pos2(600.0, 200.0)).show(ui.ctx(), |ui| {
+                    ui.set_min_size(egui::vec2(200.0, 100.0));
+                    ui.label("popup");
+                });
+            })
+            .drop_without_applying_deltas();
+        }
+        assert!(!stroke_may_start(&ctx, panel_rect, 1.0, (1280.0, 800.0), 650.0, 250.0));
+        assert!(stroke_may_start(&ctx, panel_rect, 1.0, (1280.0, 800.0), 1000.0, 600.0));
+    }
+
+    #[test]
+    fn panel_on_the_right_and_high_dpi() {
+        let ctx = egui::Context::default();
+        ctx.set_zoom_factor(1.0);
+        let mut m = Model::default();
+        m.settings.panel_right = true;
+        let mut panel_rect = egui::Rect::NOTHING;
+        // 1920x1080 pixels at 150% = 1280x720 points.
+        let mut raw = input(1280.0, 720.0);
+        raw.viewports.entry(raw.viewport_id).or_default().native_pixels_per_point = Some(1.5);
+        ctx.run_ui(raw, |ui| {
+            panel_rect = frame_ui(ui, &mut m, 0).1;
+        })
+        .drop_without_applying_deltas();
+        let size = (1920.0, 1080.0);
+        // Pixel 1900 is point 1266.7: on the right-hand panel.
+        assert!(!stroke_may_start(&ctx, panel_rect, 1.5, size, 1900.0, 500.0), "{panel_rect:?}");
+        assert!(stroke_may_start(&ctx, panel_rect, 1.5, size, 100.0, 500.0));
     }
 
     #[test]

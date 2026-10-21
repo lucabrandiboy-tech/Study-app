@@ -22,7 +22,7 @@ use windows_sys::Win32::UI::Input::Pointer::{POINTER_FLAG_DOWN, POINTER_FLAG_INC
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::app::{App, client_size};
-use super::{create_window, install, set_dpi_awareness, step, uninstall, with_app};
+use super::{create_window, install, set_dpi_awareness, step, with_app};
 use crate::gpu::{unpremultiply, write_png};
 use crate::model::{Api, Settings};
 use crate::replay::measure;
@@ -382,7 +382,8 @@ pub fn run(out_dir: Option<&str>) -> i32 {
     let out = std::path::PathBuf::from(out_dir.unwrap_or("selftest-output"));
     let _ = std::fs::create_dir_all(&out);
     let mut r = Results::default();
-    let settings = Settings { show_crosshair: false, ..Settings::default() };
+    // The same defaults the user starts with (red cross on).
+    let settings = Settings::default();
     let hwnd = match create_window("Recedo self-test", Some((40, 40, 1340, 860, false)), true) {
         Ok(h) => h,
         Err(e) => {
@@ -450,8 +451,6 @@ pub fn run(out_dir: Option<&str>) -> i32 {
     let _ = writeln!(r.text, "\n{summary}");
     println!("\n{summary}");
     let _ = std::fs::write(out.join("selftest-results.txt"), &r.text);
-    // SAFETY: valid window.
-    unsafe { DestroyWindow(hwnd) };
-    drop(uninstall());
+    super::shutdown(hwnd);
     if r.failed > 0 { 1 } else { 0 }
 }

@@ -136,12 +136,13 @@ fn run_deferred() {
     let ops = with_app(|a| a.take_deferred()).unwrap_or_default();
     for op in ops {
         let hwnd = with_app(|a| a.hwnd);
-        if let (Some(hwnd), Deferred::MoveTo(r)) = (hwnd, op) {
-            // SAFETY: valid window. Runs outside the app borrow because SetWindowPos sends
-            // WM_SIZE / WM_DPICHANGED back synchronously.
+        if let (Some(hwnd), Deferred::MoveAndMaximize(r)) = (hwnd, op) {
+            // SAFETY: valid window. Runs outside the app borrow because these calls send
+            // WM_SIZE / WM_DPICHANGED back synchronously, and those should reach the app.
             unsafe {
                 ShowWindow(hwnd, SW_RESTORE);
                 SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                ShowWindow(hwnd, SW_MAXIMIZE);
             }
         }
     }
@@ -195,9 +196,21 @@ pub fn run() -> i32 {
     let maximized = placement.is_none_or(|p| p.4);
     // SAFETY: valid window.
     unsafe { ShowWindow(hwnd, if maximized { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL }) };
-    while step(true) {}
-    drop(uninstall());
+    while step(true) {
+        if with_app(|a| a.close_requested).unwrap_or(false) {
+            break;
+        }
+    }
+    shutdown(hwnd);
     0
+}
+
+/// Drops the app (GPU surface first), then destroys the window and drains its last messages.
+pub fn shutdown(hwnd: HWND) {
+    drop(uninstall());
+    // SAFETY: valid window; the app no longer refers to it.
+    unsafe { DestroyWindow(hwnd) };
+    pump();
 }
 
 pub fn fatal(msg: &str) -> i32 {

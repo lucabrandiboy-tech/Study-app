@@ -29,7 +29,8 @@ use crate::{report, ui};
 /// to the window synchronously).
 #[derive(Clone)]
 pub enum Deferred {
-    MoveTo(RECT),
+    /// Restore the window, move it to the rectangle, then maximise it there.
+    MoveAndMaximize(RECT),
 }
 
 const TIMER_SIZEMOVE: usize = 1;
@@ -91,6 +92,9 @@ pub struct App {
     deferred: Vec<Deferred>,
     /// Save settings on exit (off for the self-test).
     pub persist: bool,
+    /// The user closed the window. The loop drops the app (and its GPU surface) and only
+    /// then destroys the window, so the surface never outlives its window.
+    pub close_requested: bool,
     monitors: Vec<sys::Monitor>,
 }
 
@@ -100,7 +104,8 @@ impl App {
         let mut wh = raw_window_handle::Win32WindowHandle::new(NonZeroIsize::new(hwnd as isize).ok_or("no window")?);
         // SAFETY: plain call.
         wh.hinstance = NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) } as isize);
-        // SAFETY: the window outlives the surface (App is dropped before the window is destroyed).
+        // SAFETY: the window outlives the surface: on close the app (and this surface) is
+        // dropped before the window is destroyed (see `close_requested`).
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle: Some(raw_window_handle::RawDisplayHandle::Windows(raw_window_handle::WindowsDisplayHandle::new())),
@@ -155,6 +160,7 @@ impl App {
             ink_in_range: false,
             deferred: Vec::new(),
             persist,
+            close_requested: false,
             monitors: Vec::new(),
         };
         app.apply_present_mode();
@@ -325,18 +331,11 @@ impl App {
         }
         let brush = self.model.settings.brush;
         let (show_dots, show_hover) = (self.model.settings.show_dots, self.model.settings.show_hover_dots);
-        // May a stroke start at this window pixel? Not on the panel or a popup. The closure
-        // copies what it needs so the tracker can be borrowed mutably.
+        // The closure copies what it needs so the tracker can be borrowed mutably.
         let accept = {
-            let (w, h, ppp, panel) = (self.config.width as f64, self.config.height as f64, self.ppp, self.panel_rect);
+            let (size, ppp, panel) = ((self.config.width as f64, self.config.height as f64), self.ppp, self.panel_rect);
             let ctx = self.egui_ctx.clone();
-            move |x: f64, y: f64| {
-                if x < 0.0 || y < 0.0 || x >= w || y >= h {
-                    return false;
-                }
-                let p = egui::pos2(x as f32 / ppp, y as f32 / ppp);
-                !panel.contains(p) && !ctx.layer_id_at(p).is_some_and(|l| l.order != egui::Order::Background)
-            }
+            move |x: f64, y: f64| ui::stroke_may_start(&ctx, panel, ppp, size, x, y)
         };
         let before = self.tracker.strokes_started;
         for s in &samples {
@@ -445,9 +444,14 @@ impl App {
                 None
             }
             WM_DPICHANGED => {
-                // SAFETY: lparam points to the suggested window rectangle.
-                let r = unsafe { *(lparam as *const RECT) };
-                self.deferred.push(Deferred::MoveTo(r));
+                // Apply Windows' suggested rectangle right away, as Microsoft recommends. The
+                // WM_SIZE etc. this sends back arrive while the app is borrowed and get default
+                // handling; the new size is picked up at the next frame.
+                // SAFETY: lparam points to the suggested window rectangle; valid window.
+                unsafe {
+                    let r = *(lparam as *const RECT);
+                    SetWindowPos(hwnd, std::ptr::null_mut(), r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
                 self.request_frame();
                 Some(0)
             }
@@ -507,7 +511,8 @@ impl App {
             }
             WM_CLOSE => {
                 self.save_settings();
-                None
+                self.close_requested = true;
+                Some(0)
             }
             WM_DESTROY => {
                 // SAFETY: plain call.
@@ -603,19 +608,18 @@ impl App {
         self.refresh_views();
         let (w, h) = (self.config.width, self.config.height);
         let native_ppp = self.model.window_dpi as f32 / 96.0;
-        self.egui_ctx.set_zoom_factor(self.model.settings.ui_scale);
+        let zoom = self.model.settings.ui_scale.clamp(0.5, 3.0);
+        self.egui_ctx.set_zoom_factor(zoom);
+        // This frame's scale, not last frame's: the first frame (and the first after a DPI
+        // change) must already be laid out at the right size.
+        self.ppp = native_ppp * zoom;
         let raw = self.egui_in.take((w, h), native_ppp, self.ppp);
         let now = now_us();
         let mut actions = Vec::new();
         let mut panel_rect = egui::Rect::NOTHING;
         let model = &mut self.model;
         let mut out = self.egui_ctx.run_ui(raw, |ui| {
-            let side = if model.settings.panel_right { egui::Panel::right("panel") } else { egui::Panel::left("panel") };
-            let resp = side.resizable(false).exact_size(ui::PANEL_WIDTH).show(ui, |ui| {
-                actions = ui::panel(ui, model, now);
-            });
-            panel_rect = resp.response.rect;
-            ui::crosshair(ui.ctx(), model, ui.ctx().pixels_per_point());
+            (actions, panel_rect) = ui::frame_ui(ui, model, now);
         });
         self.panel_rect = panel_rect;
         self.ppp = out.pixels_per_point;
@@ -752,7 +756,7 @@ impl App {
             Action::OpenFolder => sys::open_folder(&sys::output_dir()),
             Action::MoveToMonitor(i) => {
                 if let Some(m) = self.monitors.get(i) {
-                    self.deferred.push(Deferred::MoveTo(m.work));
+                    self.deferred.push(Deferred::MoveAndMaximize(m.work));
                 }
             }
             Action::ResetStats => {
