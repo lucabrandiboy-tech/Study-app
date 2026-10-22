@@ -377,6 +377,51 @@ fn wintab_test(r: &mut Results, hwnd: windows_sys::Win32::Foundation::HWND, x0: 
     }
 }
 
+/// A Wintab stroke with the stabilizer on, through the live app loop: the line must be
+/// drawn, smooth enough to stay near the script's path, and (finish line) reach the point
+/// where the pen lifted, which a stabilized line would otherwise lag behind by ~20 px.
+fn stabilizer_test(r: &mut Results, hwnd: windows_sys::Win32::Foundation::HWND, x0: i32, x1: i32, y0: i32, y1: i32) {
+    if std::env::var(recedo_tablet::wintab::DLL_OVERRIDE_ENV).is_err() {
+        r.skip("stabilizer", "needs the mock Wintab driver (RECEDO_WINTAB_DLL)");
+        return;
+    }
+    with_app(|a| {
+        a.model.settings.stabilizer = recedo_core::StabilizerSettings { enabled: true, ..Default::default() };
+    });
+    set_api(Api::Wintab);
+    let play: Option<PlayFn> = with_app(|a| {
+        a.wintab.as_ref().and_then(|w| w.ctx.proc_address(c"wtmock_play")).map(|f| {
+            // SAFETY: the mock exports this signature.
+            unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, PlayFn>(f) }
+        })
+    })
+    .flatten();
+    let Some(play) = play else {
+        r.check("stabilizer: mock driver opened", false, "no wtmock_play");
+        return;
+    };
+    let tl = screen_of(hwnd, x0, y0);
+    let br = screen_of(hwnd, x1, y1);
+    // SAFETY: mock export.
+    unsafe { play(tl.x, tl.y, br.x - tl.x, br.y - tl.y) };
+    run_for(Duration::from_millis(1800));
+    force_frame();
+    let still = with_app(|a| a.tracker.stabilizing()).unwrap_or(true);
+    r.check("stabilizer: stroke finished", !still, if still { "still stabilizing" } else { "ended on lift-off" });
+    // Where the pen lifted, in client pixels.
+    let script = recedo_tablet::mock_script::stroke(tl.x as f64, tl.y as f64, (br.x - tl.x) as f64, (br.y - tl.y) as f64);
+    let lift = script.iter().rev().find(|s| s.tip).map(|s| (s.sx - tl.x as f64 + x0 as f64, s.sy - tl.y as f64 + y0 as f64));
+    if let (Some((lx, ly)), Some(px)) = (lift, canvas_pixels()) {
+        let near = (-3..=3).any(|dx| ink_near(&px, lx.round() as i32 + dx, ly.round() as i32, 3) > 0);
+        r.check("stabilizer: finish line reaches the lift-off point", near, format!("ink within 3 px of ({lx:.0}, {ly:.0})"));
+        let mid_y = (y0 + y1) / 2;
+        let cols = (x0 + 100..x1 - 100).step_by(10).filter(|&x| ink_near(&px, x, mid_y, (y1 - y0) / 2) > 0).count();
+        let total = (x0 + 100..x1 - 100).step_by(10).count();
+        r.check("stabilizer: stroke drawn", cols == total, format!("{cols} of {total} sampled columns inked"));
+    }
+    with_app(|a| a.model.settings.stabilizer.enabled = false);
+}
+
 pub fn run(out_dir: Option<&str>) -> i32 {
     super::install_crash_report(false);
     set_dpi_awareness();
@@ -453,6 +498,7 @@ pub fn run(out_dir: Option<&str>) -> i32 {
         mouse_test(&mut r, hwnd, x0, x1, 80);
         ink_test(&mut r, hwnd, x0, x1, 220);
         wintab_test(&mut r, hwnd, x0, x1, 330, 560);
+        stabilizer_test(&mut r, hwnd, x0, x1, 580, 730);
     }
     force_frame();
     if let Some((w, h, mut px)) = canvas_pixels() {

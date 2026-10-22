@@ -4,6 +4,7 @@
 //! so what you see is exactly what the tablet sent. Smoothing (the stabilizer) is Phase 1.
 
 use bytemuck::{Pod, Zeroable};
+use recedo_core::PaintInfo;
 use recedo_tablet::{Flags, PenSample};
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +103,10 @@ impl Point {
         }
     }
 
+    fn from_info(p: &PaintInfo, has_tilt: bool) -> Point {
+        Point { x: p.x, y: p.y, pressure: p.pressure, tilt_x: p.tilt_x, tilt_y: p.tilt_y, has_tilt }
+    }
+
     fn lerp(a: &Point, b: &Point, t: f64) -> Point {
         let tf = t as f32;
         Point {
@@ -180,7 +185,15 @@ impl StrokeBuilder {
 
     /// Adds one sample; appends the dabs it produces to `out`.
     pub fn add(&mut self, sample: &PenSample, out: &mut Vec<Dab>) {
-        let p = Point::from(sample);
+        self.add_point(Point::from(sample), out);
+    }
+
+    /// Adds a point that already went through the stabilizer.
+    pub fn add_info(&mut self, info: &PaintInfo, has_tilt: bool, out: &mut Vec<Dab>) {
+        self.add_point(Point::from_info(info, has_tilt), out);
+    }
+
+    fn add_point(&mut self, p: Point, out: &mut Vec<Dab>) {
         self.samples_used += 1;
         let Some(prev) = self.last else {
             out.push(self.dab(&p));

@@ -27,11 +27,23 @@ Recedo tablet test
 
   recedo-tablet-test                          open the test window (Windows)
   recedo-tablet-test --selftest [dir]         automated self-test with injected input (Windows)
-  recedo-tablet-test --replay <in.csv> <out.png> [width height]
+  recedo-tablet-test --replay <in.csv> <out.png> [width height] [--stabilizer <distance>]
                                               draw a saved pen recording to a PNG
 ";
 
 fn replay_cli(args: &[String]) -> i32 {
+    // Optional "--stabilizer <distance>" anywhere after the file names.
+    let mut stabilizer = recedo_core::StabilizerSettings::default();
+    let mut args: Vec<String> = args.to_vec();
+    if let Some(i) = args.iter().position(|a| a == "--stabilizer") {
+        let Some(d) = args.get(i + 1).and_then(|v| v.parse::<f32>().ok()) else {
+            eprintln!("--stabilizer needs a distance, e.g. --stabilizer 50");
+            return 2;
+        };
+        stabilizer.enabled = true;
+        stabilizer.distance = d;
+        args.drain(i..i + 2);
+    }
     let (Some(input), Some(output)) = (args.first(), args.get(1)) else {
         eprintln!("{USAGE}");
         return 2;
@@ -66,7 +78,7 @@ fn replay_cli(args: &[String]) -> i32 {
         .into_iter()
         .max_by_key(|src| samples.iter().filter(|s| s.source == *src && s.contact()).count());
     let brush = brush::BrushSettings::default();
-    match replay::render(&gpu, &samples, &brush, source, w, h) {
+    match replay::render_with(&gpu, &samples, &brush, &stabilizer, source, w, h) {
         Ok(mut r) => {
             gpu::unpremultiply(&mut r.canvas);
             if let Err(e) = gpu::write_png(std::path::Path::new(output), r.width, r.height, &r.canvas) {

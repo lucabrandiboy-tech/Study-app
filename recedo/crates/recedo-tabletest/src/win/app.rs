@@ -325,6 +325,7 @@ impl App {
             return;
         }
         let brush = self.model.settings.brush;
+        self.tracker.stabilizer = self.model.settings.stabilizer;
         let (show_dots, show_hover) = (self.model.settings.show_dots, self.model.settings.show_hover_dots);
         // The closure copies what it needs so the tracker can be borrowed mutably.
         let accept = {
@@ -397,7 +398,7 @@ impl App {
                     }
                     Some(InkEvent::Leave { .. }) => {
                         self.ink_in_range = false;
-                        self.tracker.end_source(Source::Ink);
+                        self.tracker.end_source(Source::Ink, now_us(), &mut self.pending_dabs);
                         self.request_frame();
                     }
                     None => {}
@@ -406,7 +407,7 @@ impl App {
                 None
             }
             WM_POINTERCAPTURECHANGED => {
-                self.tracker.end_source(Source::Ink);
+                self.tracker.end_source(Source::Ink, now_us(), &mut self.pending_dabs);
                 None
             }
             m if (WT_DEFBASE..=WT_DEFBASE + WT_MAXOFFSET).contains(&m) => {
@@ -420,7 +421,7 @@ impl App {
                         WT_PROXIMITY => {
                             w.on_proximity(lparam);
                             if !w.in_proximity {
-                                self.tracker.end_source(Source::Wintab);
+                                self.tracker.end_source(Source::Wintab, now_us(), &mut self.pending_dabs);
                             }
                             self.request_frame();
                         }
@@ -612,6 +613,9 @@ impl App {
         self.frame_wanted = false;
         self.next_refresh = Instant::now() + STATS_REFRESH;
         self.refresh_views();
+        // Stabilized strokes keep moving towards the pen between samples.
+        self.tracker.tick(now_us(), &mut self.pending_dabs);
+        self.model.leash = self.tracker.leash().map(|(b, p, r)| crate::model::Leash { brush: (b.x, b.y), pen: (p.x, p.y), radius: r });
         let (w, h) = (self.config.width, self.config.height);
         let native_ppp = self.model.window_dpi as f32 / 96.0;
         let zoom = self.model.settings.ui_scale.clamp(0.5, 3.0);
@@ -635,7 +639,7 @@ impl App {
                 let _ = sys::set_clipboard_text(self.hwnd, t);
             }
         }
-        if out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.repaint_delay.is_zero()) {
+        if out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.repaint_delay.is_zero()) || self.tracker.stabilizing() {
             self.frame_wanted = true;
         }
         for a in actions {

@@ -12,6 +12,7 @@ name = "recedo-tablet-test"
 path = "src/main.rs"
 
 [dependencies]
+recedo-core = { path = "../recedo-core" }
 recedo-tablet = { path = "../recedo-tablet" }
 wgpu.workspace = true
 egui.workspace = true

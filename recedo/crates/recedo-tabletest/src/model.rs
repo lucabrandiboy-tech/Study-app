@@ -8,6 +8,8 @@ use recedo_tablet::stats::SourceStats;
 use recedo_tablet::{PenSample, Source};
 use serde::{Deserialize, Serialize};
 
+use recedo_core::StabilizerSettings;
+
 use crate::brush::BrushSettings;
 
 /// Which tablet API draws on the canvas (Krita: Settings > Tablet settings > Tablet Input API).
@@ -45,6 +47,7 @@ pub struct Settings {
     /// [`MappingMode::key`].
     pub mapping: String,
     pub brush: BrushSettings,
+    pub stabilizer: StabilizerSettings,
     pub show_dots: bool,
     pub show_hover_dots: bool,
     pub show_crosshair: bool,
@@ -61,6 +64,7 @@ impl Default for Settings {
             api: Api::WindowsInk,
             mapping: MappingMode::Auto.key().to_string(),
             brush: BrushSettings::default(),
+            stabilizer: StabilizerSettings::default(),
             show_dots: false,
             show_hover_dots: false,
             show_crosshair: true,
@@ -228,6 +232,16 @@ pub struct Model {
     pub gpu: String,
     pub window_dpi: u32,
     pub os: String,
+    /// Stabilizer delay overlay (window pixels).
+    pub leash: Option<Leash>,
+}
+
+/// Where the stabilized brush is, where the pen is, and the delay's dead-zone radius.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Leash {
+    pub brush: (f64, f64),
+    pub pen: (f64, f64),
+    pub radius: f64,
 }
 
 impl Model {

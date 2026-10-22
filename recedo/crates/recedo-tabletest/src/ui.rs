@@ -25,6 +25,7 @@ pub fn panel(ui: &mut Ui, m: &mut Model, now_us: u64) -> Vec<Action> {
         live_section(ui, m);
         rate_section(ui, m, now_us, &mut actions);
         brush_section(ui, m, &mut actions);
+        stabilizer_section(ui, m);
         wintab_section(ui, m, &mut actions);
         ink_section(ui, m);
         screen_section(ui, m, &mut actions);
@@ -242,6 +243,23 @@ fn brush_section(ui: &mut Ui, m: &mut Model, actions: &mut Vec<Action>) {
     });
 }
 
+fn stabilizer_section(ui: &mut Ui, m: &mut Model) {
+    egui::CollapsingHeader::new(RichText::new("Stabilizer (Phase 1 preview)").strong()).default_open(false).show(ui, |ui| {
+        let s = &mut m.settings.stabilizer;
+        ui.checkbox(&mut s.enabled, "Use the stabilizer");
+        ui.small("Krita's stabilizer: the line follows the pen smoothly. Changes apply to the next stroke.");
+        ui.add_enabled_ui(s.enabled, |ui| {
+            ui.add(egui::Slider::new(&mut s.distance, 3.0..=500.0).logarithmic(true).text("distance"));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut s.delay, "Delay");
+                ui.add_enabled(s.delay, egui::Slider::new(&mut s.delay_distance, 1.0..=500.0).logarithmic(true).text("px"));
+            });
+            ui.checkbox(&mut s.finish_line, "Finish line (catch up on lift)");
+            ui.checkbox(&mut s.stabilize_sensors, "Stabilize pressure and tilt");
+        });
+    });
+}
+
 fn wintab_section(ui: &mut Ui, m: &mut Model, actions: &mut Vec<Action>) {
     egui::CollapsingHeader::new(RichText::new("Wintab details").strong()).default_open(false).show(ui, |ui| {
         let w = &m.wintab;
@@ -414,6 +432,14 @@ pub fn stroke_may_start(ctx: &egui::Context, panel: egui::Rect, ppp: f32, size_p
 pub fn crosshair(ctx: &egui::Context, m: &Model, pixels_per_point: f32) {
     if !m.settings.show_crosshair {
         return;
+    }
+    // Stabilizer delay: the dead-zone circle around the pen and the leash to the brush.
+    if let Some(crate::model::Leash { brush: (bx, by), pen: (px, py), radius: r }) = m.leash {
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("recedo leash")));
+        let to_pt = |x: f64, y: f64| egui::pos2(x as f32 / pixels_per_point, y as f32 / pixels_per_point);
+        let stroke = Stroke::new(1.0, Color32::from_rgb(80, 140, 230));
+        painter.circle_stroke(to_pt(px, py), r as f32 / pixels_per_point, stroke);
+        painter.line_segment([to_pt(bx, by), to_pt(px, py)], stroke);
     }
     let Some(s) = m.latest else { return };
     if s.source == Source::Mouse {

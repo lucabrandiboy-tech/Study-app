@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/recedo-tablet", "crates/recedo-tabletest", "crates/wintab-mock"]
+members = ["crates/recedo-core", "crates/recedo-tablet", "crates/recedo-tabletest", "crates/wintab-mock"]
 
 [workspace.package]
 version = "0.0.1"

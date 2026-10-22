@@ -938,6 +938,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "recedo-core"
+version = "0.0.1"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "recedo-tablet"
 version = "0.0.1"
 dependencies = [
@@ -954,6 +961,7 @@ dependencies = [
  "png",
  "pollster",
  "raw-window-handle",
+ "recedo-core",
  "recedo-tablet",
  "serde",
  "serde_json",

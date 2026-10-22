@@ -1,5 +1,6 @@
 //! Renders a pen recording off-screen, exactly as the live app would draw it.
 
+use recedo_core::StabilizerSettings;
 use recedo_tablet::{PenSample, Source};
 
 use crate::brush::{BrushSettings, DabBatch, sample_dot};
@@ -15,10 +16,25 @@ pub struct Rendered {
     pub dabs: usize,
 }
 
-/// Draws every sample of `source` (or of every source, if `None`).
+/// Draws every sample of `source` (or of every source, if `None`), without the stabilizer.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render(gpu: &Gpu, samples: &[PenSample], brush: &BrushSettings, source: Option<Source>, width: u32, height: u32) -> Result<Rendered, String> {
+    render_with(gpu, samples, brush, &StabilizerSettings::default(), source, width, height)
+}
+
+/// Like [`render`], with the stabilizer settings to use.
+pub fn render_with(
+    gpu: &Gpu,
+    samples: &[PenSample],
+    brush: &BrushSettings,
+    stabilizer: &StabilizerSettings,
+    source: Option<Source>,
+    width: u32,
+    height: u32,
+) -> Result<Rendered, String> {
     let mut canvas = CanvasRenderer::new(gpu, width, height, None);
     let mut tracker = StrokeTracker::default();
+    tracker.stabilizer = *stabilizer;
     let mut batches: Vec<DabBatch> = Vec::new();
     let mut dots = Vec::new();
     for s in samples.iter().filter(|s| source.is_none_or(|src| s.source == src)) {
@@ -26,6 +42,10 @@ pub fn render(gpu: &Gpu, samples: &[PenSample], brush: &BrushSettings, source: O
         if s.contact() {
             dots.push(sample_dot(s));
         }
+    }
+    // A recording that ends mid-stroke ends it as a lift-off would.
+    if let (Some(src), Some(last)) = (tracker.active_source(), samples.last()) {
+        tracker.end_source(src, last.recv_us, &mut batches);
     }
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     canvas.draw(gpu, &mut enc, Layer::Canvas, &batches);
@@ -154,6 +174,28 @@ mod tests {
         assert!(inked(&r.canvas, r.width, 300, 50));
         // The eraser also clears the white page outside the ink.
         assert!(erased(&r.canvas, r.width, 200, 58));
+    }
+
+    #[test]
+    fn stabilizer_smooths_a_shaky_line() {
+        let Some(gpu) = gpu() else { return };
+        let brush = BrushSettings { size: 4.0, pressure_size: false, hardness: 1.0, ..Default::default() };
+        // 200 Hz, ±4 px alternating jitter around y = 50, moving 1 px per sample.
+        let mut samples: Vec<PenSample> = (0..=300)
+            .map(|i| PenSample::synthetic(i * 5000, 50.0 + i as f64, 50.0 + if i % 2 == 0 { 4.0 } else { -4.0 }, 1.0, true))
+            .collect();
+        let last = *samples.last().unwrap();
+        samples.push(PenSample { flags: Flags(0), recv_us: last.recv_us + 5000, t_us: last.t_us + 5000, ..last });
+        let raw = render(&gpu, &samples, &brush, None, 420, 100).unwrap();
+        let stab = StabilizerSettings { enabled: true, distance: 50.0, ..Default::default() };
+        let smooth = render_with(&gpu, &samples, &brush, &stab, None, 420, 100).unwrap();
+        // Rows touched by ink in the middle of the line.
+        let rows = |r: &Rendered| (0..100u32).filter(|&y| (150..300).any(|x| inked(&r.canvas, r.width, x, y))).count();
+        let (raw_rows, smooth_rows) = (rows(&raw), rows(&smooth));
+        assert!(raw_rows >= 10, "raw line should zigzag over ~12 rows, got {raw_rows}");
+        assert!(smooth_rows <= 6, "stabilized line should be ~4 px thick, got {smooth_rows}");
+        // The finish line takes the stroke to the last sample.
+        assert!(inked(&smooth.canvas, smooth.width, 349, 50) || inked(&smooth.canvas, smooth.width, 349, 54) || inked(&smooth.canvas, smooth.width, 349, 46));
     }
 
     #[test]
