@@ -422,6 +422,24 @@ fn stabilizer_test(r: &mut Results, hwnd: windows_sys::Win32::Foundation::HWND, 
     with_app(|a| a.model.settings.stabilizer.enabled = false);
 }
 
+/// "Save drawing": the .kra must read back with exactly the canvas pixels.
+fn save_drawing_test(r: &mut Results, out: &std::path::Path, w: u32, h: u32, canvas: &[u8]) {
+    let saved = with_app(|a| a.save_drawing_to(out, "selftest"));
+    let Some(Ok((kra, _png))) = saved else {
+        r.check("save drawing as .kra", false, format!("{saved:?}"));
+        return;
+    };
+    match recedo_core::kra::load_file(&kra) {
+        Ok(l) => {
+            let flat = l.doc.flatten();
+            let same = (flat.width, flat.height) == (w, h) && flat.data == canvas;
+            let size = std::fs::metadata(&kra).map_or(0, |m| m.len());
+            r.check("save drawing as .kra", same && l.warnings.is_empty(), format!("{} ({size} bytes) reads back {}", kra.display(), if same { "identical to the canvas" } else { "DIFFERENT from the canvas" }));
+        }
+        Err(e) => r.check("save drawing as .kra", false, e),
+    }
+}
+
 pub fn run(out_dir: Option<&str>) -> i32 {
     super::install_crash_report(false);
     set_dpi_awareness();
@@ -508,6 +526,7 @@ pub fn run(out_dir: Option<&str>) -> i32 {
             Ok(()) => r.note(format!("canvas saved to {}", path.display())),
             Err(e) => r.note(format!("could not save canvas: {e}")),
         }
+        save_drawing_test(&mut r, &out, w, h, &px);
     }
     let report = with_app(|a| crate::report::build(&mut a.model, recedo_tablet::clock::now_us())).unwrap_or_default();
     let _ = std::fs::write(out.join("selftest-app-report.txt"), &report);

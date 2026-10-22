@@ -386,6 +386,9 @@ fn record_section(ui: &mut Ui, m: &mut Model, actions: &mut Vec<Action>) {
                 actions.push(Action::CopyReport);
             }
         });
+        if ui.button("Save drawing (.kra for Krita + .png)").clicked() {
+            actions.push(Action::SaveDrawing);
+        }
         if let Some(p) = &m.saved_to {
             ui.small(format!("Saved: {p}"));
             if ui.small_button("Open folder").clicked() {

@@ -204,6 +204,7 @@ pub enum Action {
     Clear,
     ClearDots,
     SaveRecording,
+    SaveDrawing,
     CopyReport,
     OpenFolder,
     MoveToMonitor(usize),

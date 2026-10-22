@@ -763,6 +763,17 @@ impl App {
             }
             Action::ClearDots => self.clear_dots = true,
             Action::SaveRecording => self.save_recording(),
+            Action::SaveDrawing => {
+                let dir = sys::output_dir();
+                match self.save_drawing_to(&dir, &sys::timestamp()) {
+                    Ok((kra, png)) => {
+                        let p = format!("{} and {}", kra.display(), png.display());
+                        self.model.log(format!("Saved {p}"));
+                        self.model.saved_to = Some(p);
+                    }
+                    Err(e) => self.model.log(format!("Saving the drawing failed: {e}")),
+                }
+            }
             Action::CopyReport => {
                 let text = report::build(&mut self.model, now_us());
                 match sys::set_clipboard_text(self.hwnd, &text) {
@@ -785,6 +796,22 @@ impl App {
             Action::PresentModeChanged => self.apply_present_mode(),
         }
         self.request_frame();
+    }
+
+    /// Saves the canvas as a one-layer Krita file and a PNG, named `drawing-<stamp>`.
+    pub fn save_drawing_to(&mut self, dir: &std::path::Path, stamp: &str) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut px = self.canvas.read_canvas(&self.gpu)?;
+        crate::gpu::unpremultiply(&mut px);
+        let (w, h) = (self.canvas.width, self.canvas.height);
+        let mut layer = recedo_core::doc::Layer::new("Tablet test drawing");
+        layer.pixels.write_rect(0, 0, w, h, &px);
+        let doc = recedo_core::doc::Document { width: w, height: h, dpi: 96.0, layers: vec![layer] };
+        let kra = dir.join(format!("drawing-{stamp}.kra"));
+        recedo_core::kra::save_file(&doc, &kra)?;
+        let png = dir.join(format!("drawing-{stamp}.png"));
+        crate::gpu::write_png(&png, w, h, &px)?;
+        Ok((kra, png))
     }
 
     pub fn save_recording(&mut self) {
