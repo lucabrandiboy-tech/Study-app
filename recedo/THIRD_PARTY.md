@@ -18,6 +18,16 @@ Unicode-3.0, or a choice among these), all compatible with the GPL. Run
 | egui, epaint, emath, ecolor, egui-wgpu (UI) | MIT OR Apache-2.0 |
 | windows-sys (Win32 bindings) | MIT OR Apache-2.0 |
 | raw-window-handle, bytemuck, pollster, serde, serde_json, png | MIT / Apache-2.0 / Zlib |
+| zip, flate2, miniz_oxide, quick-xml (Krita `.kra` files) | MIT / Apache-2.0 / Zlib |
+| zopfli (part of zip's deflate support) | Apache-2.0 |
+| jpeg-encoder (JPG export) | (MIT OR Apache-2.0) AND IJG, see below |
+| self_cell (used by the UI's text shaping) | Apache-2.0 OR GPL-2.0-only, used under Apache-2.0 |
+
+JPG export: this software is based in part on the work of the Independent JPEG Group
+(the `jpeg-encoder` crate is derived from the IJG's libjpeg).
+
+`.kra` files name Krita's sRGB profile (`sRGB-elle-V2-srgbtrc.icc`) but do not contain it;
+Krita ships that profile itself.
 
 ### Fonts (from `epaint_default_fonts`, embedded in the .exe)
 

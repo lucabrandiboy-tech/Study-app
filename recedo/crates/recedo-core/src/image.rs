@@ -40,6 +40,28 @@ pub fn encode_png(img: &Rgba8, fast: bool) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Encodes as a JPEG at `quality` (1..=100), with see-through areas filled with
+/// `background` (JPEG has no transparency; Krita fills with white by default). Colour is
+/// not subsampled (4:4:4), which keeps sharp coloured lines clean.
+pub fn encode_jpeg(img: &Rgba8, quality: u8, background: [u8; 3], dpi: f64) -> Result<Vec<u8>, String> {
+    let (w, h) = (u16::try_from(img.width).map_err(|_| "too wide for JPEG")?, u16::try_from(img.height).map_err(|_| "too tall for JPEG")?);
+    let mut rgb = Vec::with_capacity(img.width as usize * img.height as usize * 3);
+    for p in img.data.as_chunks::<4>().0 {
+        let mut px = [background[0], background[1], background[2], 255];
+        crate::doc::over(&mut px, *p, 255);
+        rgb.extend_from_slice(&px[..3]);
+    }
+    let mut out = Vec::new();
+    let mut enc = jpeg_encoder::Encoder::new(&mut out, quality.clamp(1, 100));
+    enc.set_sampling_factor(jpeg_encoder::SamplingFactor::F_1_1);
+    enc.set_optimized_huffman_tables(true);
+    if dpi.is_finite() && dpi >= 1.0 {
+        enc.set_density(jpeg_encoder::PixelDensity::dpi(dpi.round().min(65535.0) as u16));
+    }
+    enc.encode(&rgb, w, h, jpeg_encoder::ColorType::Rgb).map_err(|e| format!("JPEG: {e}"))?;
+    Ok(out)
+}
+
 /// Largest picture accepted from a file (pixels), so a broken or hostile file cannot make
 /// Recedo allocate gigabytes.
 pub const MAX_PIXELS: u64 = 400_000_000;
@@ -122,6 +144,40 @@ mod tests {
             assert_eq!(back, img);
         }
         assert!(decode_png(b"not a png").is_err());
+    }
+
+    #[test]
+    fn jpeg_export() {
+        let mut img = Rgba8::new(96, 64);
+        for y in 0..64u32 {
+            for x in 0..96u32 {
+                let i = ((y * 96 + x) * 4) as usize;
+                // Left: colour gradient, right third: transparent.
+                let a = if x < 64 { 255 } else { 0 };
+                img.data[i..i + 4].copy_from_slice(&[(x * 4) as u8, (y * 4) as u8, 128, a]);
+            }
+        }
+        let jpg = encode_jpeg(&img, 95, [255, 255, 255], 300.0).unwrap();
+        let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&jpg));
+        let px = dec.decode().unwrap();
+        let info = dec.info().unwrap();
+        assert_eq!((info.width, info.height), (96, 64));
+        let mut worst = 0u8;
+        for y in 0..64usize {
+            for x in 0..96usize {
+                let i = (y * 96 + x) * 3;
+                let want = if x < 64 { [(x * 4) as u8, (y * 4) as u8, 128] } else { [255, 255, 255] };
+                // Skip the pixels next to the sharp edge, where JPEG rings.
+                if (60..68).contains(&x) {
+                    continue;
+                }
+                for c in 0..3 {
+                    worst = worst.max(px[i + c].abs_diff(want[c]));
+                }
+            }
+        }
+        assert!(worst <= 8, "JPEG at quality 95 off by {worst}");
+        assert!(encode_jpeg(&Rgba8::new(70_000, 1), 90, [0; 3], 72.0).is_err());
     }
 
     #[test]
