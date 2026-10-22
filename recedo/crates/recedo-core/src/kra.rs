@@ -152,11 +152,13 @@ enum Entry {
     },
 }
 
-/// Turns the tree into a flat layer list (top first). A group whose layers can simply be
-/// listed without changing the picture is listed (Normal at full opacity with only Normal
-/// layers inside, or pass-through at full opacity); any other group is merged into one
-/// layer exactly as Krita composites it (its layers together first, then the group with its
-/// opacity and blend mode), since Recedo has no groups yet.
+/// Turns the tree into a flat layer list (top first), keeping the picture as Krita shows it
+/// (Recedo has no groups yet):
+/// - a pass-through group's layers mix with the layers below it, and Krita applies the
+///   group's opacity and visibility to each of them, so they are listed with those folded in;
+/// - an isolated group (Krita's default) is composited on its own first and then faded and
+///   blended as a whole; it is listed only when that is the same picture (full opacity,
+///   Normal, only Normal layers inside), otherwise merged into one layer.
 fn resolve(tree: Vec<Entry>, decoded: &mut [Option<Layer>], warnings: &mut Vec<String>) -> Vec<Layer> {
     let mut out = Vec::new();
     for e in tree {
@@ -164,11 +166,14 @@ fn resolve(tree: Vec<Entry>, decoded: &mut [Option<Layer>], warnings: &mut Vec<S
             Entry::Paint(i) => out.extend(decoded[i].take()),
             Entry::Group { meta, passthrough, children } => {
                 let mut kids = resolve(children, decoded, warnings);
-                let listable = meta.opacity == 255 && (passthrough || (meta.blend == BlendMode::Normal && kids.iter().all(|k| k.blend == BlendMode::Normal)));
+                let listable = passthrough || (meta.opacity == 255 && meta.blend == BlendMode::Normal && kids.iter().all(|k| k.blend == BlendMode::Normal));
                 if listable {
                     push_warning(warnings, "Layer groups were opened as plain layers (the groups themselves are not kept).".into());
                     for k in &mut kids {
                         k.visible &= meta.visible;
+                        if passthrough {
+                            k.opacity = crate::doc::mul8(k.opacity, meta.opacity);
+                        }
                     }
                     out.extend(kids);
                 } else {
@@ -880,9 +885,11 @@ mod tests {
         assert_eq!(names, ["Under", "Red", "Blue"]);
         assert!(l.doc.layers[1..].iter().all(|l| !l.visible), "hidden with their group");
         assert!(l.warnings.iter().any(|w| w.contains("plain layers")));
-        // Pass-through at full opacity: listed too.
-        let l = load(&group_file(r#"opacity="255" passthrough="1" compositeop="normal""#)).unwrap();
+        // Pass-through: listed, the group's opacity applied to each layer (as Krita does:
+        // checked with Krita 5.2.2 in scripts/krita-interop.sh).
+        let l = load(&group_file(r#"opacity="128" passthrough="1" compositeop="normal""#)).unwrap();
         assert_eq!(l.doc.layers.len(), 3);
+        assert!(l.doc.layers[1..].iter().all(|l| l.opacity == 128));
     }
 
     #[test]

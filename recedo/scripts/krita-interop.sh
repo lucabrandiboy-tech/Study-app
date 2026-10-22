@@ -3,6 +3,8 @@
 #  1. Recedo writes a painting, Krita flattens it to PNG: it must match Recedo's flattening.
 #  2. Krita re-saves Recedo's file as .kra: Recedo must read back the same layers
 #     (names, visibility, opacity, lock) and the same pixels.
+#  4. Layer groups (faded, with a multiply layer inside, plain): Krita builds the .kra,
+#     Recedo opens it and must flatten it as Krita does.
 #  3. Every blend mode: Krita's flattening of a two-layer file using it must match
 #     Recedo's within 1/255 per channel (Krita 5.2.2: identical).
 # Needs `krita` on PATH (Linux: apt install krita). Uses Xvfb if there is no display.
@@ -41,4 +43,15 @@ for mode in $("$TOOL" modes); do
   printf '%-14s' "$mode"
   "$TOOL" diff "$OUT/blend-$mode-recedo.png" "$OUT/blend-$mode-krita.png" 1
 done
+echo "4. Layer groups: Krita writes a .kra with groups; Recedo opens it"
+python3 -I scripts/make-group-ora.py "$OUT/groups.ora"
+krita_export "$OUT/groups.ora" "$OUT/groups.kra"
+krita_export "$OUT/groups.kra" "$OUT/groups-krita.png"
+"$TOOL" flatten "$OUT/groups.kra" "$OUT/groups-recedo.png"
+"$TOOL" diff "$OUT/groups-recedo.png" "$OUT/groups-krita.png" 1
+echo "   the same groups isolated (Krita's default for new groups)"
+python3 -I scripts/kra-set-isolated.py "$OUT/groups.kra" "$OUT/groups-isolated.kra"
+krita_export "$OUT/groups-isolated.kra" "$OUT/groups-isolated-krita.png"
+"$TOOL" flatten "$OUT/groups-isolated.kra" "$OUT/groups-isolated-recedo.png"
+"$TOOL" diff "$OUT/groups-isolated-recedo.png" "$OUT/groups-isolated-krita.png" 1
 echo "Krita interop OK ($(krita --version 2>/dev/null | tail -n 1))"
