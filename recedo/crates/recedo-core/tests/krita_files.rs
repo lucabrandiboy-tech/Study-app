@@ -85,3 +85,20 @@ fn resaved_krita_file_keeps_its_pixels() {
         assert_eq!(again.doc, first, "{name}");
     }
 }
+
+/// `krita-5.2.2-16bit.kra`: Krita's conversion of a 16-bit PNG (a red-to-blue gradient
+/// fading to half transparency); `krita-5.2.2-16bit-export.png` is Krita's own 16-bit
+/// export of that file. Recedo opens 16-bit layers as 8-bit, with a warning.
+#[test]
+fn sixteen_bit_file_opens_as_8_bit() {
+    let loaded = kra::load(&fixture("krita-5.2.2-16bit.kra")).unwrap();
+    assert!(loaded.warnings.iter().any(|w| w.contains("16-bit")), "{:?}", loaded.warnings);
+    let ours = loaded.doc.flatten();
+    let krita = decode_png(&fixture("krita-5.2.2-16bit-export.png")).unwrap();
+    // Krita's 16-bit export, cut to 8 bits by the PNG reader, vs Recedo's rounding: within 1.
+    assert!(max_diff(&ours, &krita) <= 1, "differs by {}", max_diff(&ours, &krita));
+    let top = ours.pixel(10, 0);
+    assert!(top[0] > 240 && top[2] < 20 && top[3] == 255, "{top:?}");
+    let bottom = ours.pixel(10, 69);
+    assert!(bottom[2] > 230 && (125..=130).contains(&bottom[3]), "{bottom:?}");
+}

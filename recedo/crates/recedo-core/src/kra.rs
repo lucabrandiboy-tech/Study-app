@@ -138,6 +138,8 @@ struct Pending {
     data: Vec<u8>,
     offset: (i32, i32),
     max_tiles: usize,
+    /// Bytes per pixel in the file: 4 (8-bit RGBA) or 8 (16-bit RGBA).
+    pixel_size: usize,
 }
 
 /// The layer tree from maindoc.xml (top layer first), before the pixels are decoded.
@@ -204,7 +206,7 @@ fn decode_parallel(pending: &[Pending]) -> Vec<Result<TiledLayer, String>> {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(p) = pending.get(i) else { break };
                     let mut pixels = TiledLayer::filled(p.layer.pixels.default);
-                    let r = read_tiles_limited(&p.data, &mut pixels, p.offset.0, p.offset.1, p.max_tiles).map(|()| pixels);
+                    let r = read_tiles_limited(&p.data, &mut pixels, p.offset.0, p.offset.1, p.max_tiles, p.pixel_size).map(|()| pixels);
                     done.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
                 }
             });
@@ -280,9 +282,12 @@ fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, pending: &mut 
         };
         match nodetype {
             "paintlayer" => match read_paint_layer(ctx, el) {
-                Ok((default, data, offset)) => {
+                Ok((default, data, offset, pixel_size)) => {
+                    if pixel_size == 8 {
+                        ctx.warn(format!("Layer \"{name}\" is 16-bit; Recedo opened it as 8-bit (saving keeps 8 bits per channel)."));
+                    }
                     out.push(Entry::Paint(pending.len()));
-                    pending.push(Pending { layer: Layer { pixels: TiledLayer::filled(default), ..meta }, data, offset, max_tiles: ctx.max_tiles });
+                    pending.push(Pending { layer: Layer { pixels: TiledLayer::filled(default), ..meta }, data, offset, max_tiles: ctx.max_tiles, pixel_size });
                 }
                 Err(e) => ctx.warn(format!("Layer \"{name}\" could not be opened: {e}")),
             },
@@ -297,14 +302,21 @@ fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, pending: &mut 
     out
 }
 
-/// The layer's default pixel, tile data and position.
-type PaintLayerData = ([u8; 4], Vec<u8>, (i32, i32));
+/// The layer's default pixel, tile data, position and bytes per pixel.
+type PaintLayerData = ([u8; 4], Vec<u8>, (i32, i32), usize);
+
+/// 16-bit to 8-bit, rounded.
+fn u16_to_u8(v: u16) -> u8 {
+    ((v as u32 * 255 + 32767) / 65535) as u8
+}
 
 fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<PaintLayerData, String> {
     let cs = el.attr("colorspacename").unwrap_or("RGBA");
-    if cs != "RGBA" {
-        return Err(format!("its colour model \"{cs}\" is not supported yet (only 8-bit RGB)"));
-    }
+    let pixel_size = match cs {
+        "RGBA" => 4,
+        "RGBA16" => 8,
+        _ => return Err(format!("its colour model \"{cs}\" is not supported yet (only 8- and 16-bit RGB)")),
+    };
     let file = el.attr("filename").ok_or("no pixel data named")?.to_string();
     let ox: i32 = el.attr("x").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
     let oy: i32 = el.attr("y").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
@@ -312,13 +324,18 @@ fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<P
         return Err(format!("its position ({ox}, {oy}) is out of range"));
     }
     let mut default = [0; 4];
-    if let Some(d) = ctx.layer_entry(&file, ".defaultpixel", 64)?
-        && let [b, g, r, a] = d[..]
-    {
-        default = [r, g, b, a];
+    if let Some(d) = ctx.layer_entry(&file, ".defaultpixel", 64)? {
+        match d[..] {
+            [b, g, r, a] if pixel_size == 4 => default = [r, g, b, a],
+            [b0, b1, g0, g1, r0, r1, a0, a1] if pixel_size == 8 => {
+                let c = |lo, hi| u16_to_u8(u16::from_le_bytes([lo, hi]));
+                default = [c(r0, r1), c(g0, g1), c(b0, b1), c(a0, a1)];
+            }
+            _ => {}
+        }
     }
     let data = ctx.layer_entry(&file, "", MAX_ENTRY)?.ok_or("its pixel data is missing")?;
-    Ok((default, data, (ox, oy)))
+    Ok((default, data, (ox, oy), pixel_size))
 }
 
 fn next_line<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a str, String> {
@@ -330,11 +347,12 @@ fn next_line<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a str, String> {
 
 /// Parses a tile file into `layer`, offset by the layer's position.
 pub fn read_tiles(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32) -> Result<(), String> {
-    read_tiles_limited(data, layer, ox, oy, usize::MAX)
+    read_tiles_limited(data, layer, ox, oy, usize::MAX, 4)
 }
 
-/// [`read_tiles`], refusing files with more than `max_tiles` tiles.
-fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max_tiles: usize) -> Result<(), String> {
+/// [`read_tiles`], refusing files with more than `max_tiles` tiles; `pixel_size` 8 reads
+/// 16-bit RGBA (converted to 8-bit).
+fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max_tiles: usize, pixel_size: usize) -> Result<(), String> {
     if ox.abs() > MAX_POSITION || oy.abs() > MAX_POSITION {
         return Err("layer position out of range".into());
     }
@@ -352,7 +370,7 @@ fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max
             _ => {}
         }
     };
-    if version.trim() != "2" || tw != TILE || th != TILE || ps != 4 {
+    if version.trim() != "2" || tw != TILE || th != TILE || ps != pixel_size as i32 {
         return Err(format!("unsupported layer data (version {version}, tiles {tw}x{th}, {ps} bytes per pixel)"));
     }
     if count > max_tiles {
@@ -374,23 +392,40 @@ fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max
         pos += size;
         let (&flag, body) = payload.split_first().ok_or("empty tile")?;
         let mut tile = Tile::filled([0; 4]);
-        match flag {
+        let bytes = TILE_PIXELS * pixel_size;
+        let raw: Vec<u8>;
+        // `planes`: compressed tiles store each byte position of the pixel as its own plane;
+        // raw tiles keep pixels together.
+        let (data, planes) = match flag {
             1 => {
-                let planar = lzf::decompress(body, TILE_BYTES).ok_or("a tile is corrupt")?;
-                let (b, g, r, a) = (&planar[..TILE_PIXELS], &planar[TILE_PIXELS..2 * TILE_PIXELS], &planar[2 * TILE_PIXELS..3 * TILE_PIXELS], &planar[3 * TILE_PIXELS..]);
-                for (i, px) in tile.0.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                raw = lzf::decompress(body, bytes).ok_or("a tile is corrupt")?;
+                (&raw[..], true)
+            }
+            0 if body.len() == bytes => (body, false),
+            0 => return Err("a raw tile has the wrong size".into()),
+            f => return Err(format!("unknown tile flag {f}")),
+        };
+        let out = tile.0.as_chunks_mut::<4>().0;
+        match (pixel_size, planes) {
+            (4, true) => {
+                let (b, g, r, a) = (&data[..TILE_PIXELS], &data[TILE_PIXELS..2 * TILE_PIXELS], &data[2 * TILE_PIXELS..3 * TILE_PIXELS], &data[3 * TILE_PIXELS..]);
+                for (i, px) in out.iter_mut().enumerate() {
                     *px = [r[i], g[i], b[i], a[i]];
                 }
             }
-            0 => {
-                if body.len() != TILE_BYTES {
-                    return Err("a raw tile has the wrong size".into());
-                }
-                for (px, &[b, g, r, a]) in tile.0.as_chunks_mut::<4>().0.iter_mut().zip(body.as_chunks::<4>().0) {
+            (4, false) => {
+                for (px, &[b, g, r, a]) in out.iter_mut().zip(data.as_chunks::<4>().0) {
                     *px = [r, g, b, a];
                 }
             }
-            f => return Err(format!("unknown tile flag {f}")),
+            _ => {
+                // 16-bit B, G, R, A, little-endian.
+                let byte = |i: usize, k: usize| if planes { data[k * TILE_PIXELS + i] } else { data[i * 8 + k] };
+                for (i, px) in out.iter_mut().enumerate() {
+                    let c = |k: usize| u16_to_u8(u16::from_le_bytes([byte(i, 2 * k), byte(i, 2 * k + 1)]));
+                    *px = [c(2), c(1), c(0), c(3)];
+                }
+            }
         }
         if x.abs() > MAX_POSITION || y.abs() > MAX_POSITION {
             return Err("a tile is out of range".into());
@@ -832,7 +867,7 @@ mod tests {
    </layer>
   </layers>
  </layer>
- <layer nodetype="paintlayer" name="Deep" filename="layer4" colorspacename="RGBA16"/>
+ <layer nodetype="paintlayer" name="Deep" filename="layer4" colorspacename="RGBAF32"/>
  <layer nodetype="paintlayer" name="Gone" filename="layer5" colorspacename="RGBA"/>
 </layers></IMAGE></DOC>"#;
         let bytes = kra_with(xml, &[("Pic/layers/layer3", &tiles)]);
@@ -844,7 +879,7 @@ mod tests {
         assert_eq!(g.pixels.pixel(1, 1), [255, 0, 0, 255]);
         assert_eq!(l.doc.dpi, 100.0);
         let all = l.warnings.join("\n");
-        for needle in ["Rec2020", "Lines", "vector layer", "\"G\" was merged", "Masks on layer \"Inside\"", "\"hue\"", "Deep", "RGBA16", "Gone"] {
+        for needle in ["Rec2020", "Lines", "vector layer", "\"G\" was merged", "Masks on layer \"Inside\"", "\"hue\"", "Deep", "RGBAF32", "Gone"] {
             assert!(all.contains(needle), "missing {needle:?} in:\n{all}");
         }
     }
