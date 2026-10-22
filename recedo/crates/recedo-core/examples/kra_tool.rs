@@ -150,6 +150,16 @@ fn run(args: &[String]) -> Result<(), String> {
                 h.record("Brush stroke", &doc);
             }
             println!("undo snapshot of this painting: {:.2?} each", t.elapsed() / 50);
+            for (radius, n) in [(5.0f32, 4000), (50.0, 1000), (250.0, 200)] {
+                let mut layer = TiledLayer::new();
+                let mut dirty = std::collections::HashSet::new();
+                let t = std::time::Instant::now();
+                for i in 0..n {
+                    let shape = recedo_core::dab::DabShape { cx: 100.0 + i as f32 * radius * 0.1, cy: 500.0, rx: radius, ry: radius, angle: 0.0, hardness: 0.5 };
+                    recedo_core::dab::paint_dab(&mut layer, &shape, [10, 20, 30], 0.8, false, &mut dirty);
+                }
+                println!("soft dab, {}px diameter: {:.1?} each", radius * 2.0, t.elapsed() / n);
+            }
             if back.doc != doc {
                 return Err("bench file did not read back the same".into());
             }
