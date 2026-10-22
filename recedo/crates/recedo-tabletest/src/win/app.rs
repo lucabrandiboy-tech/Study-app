@@ -705,26 +705,28 @@ impl App {
         let f = &mut self.model.frame;
         f.frames += 1;
         f.add_timing(work_ms, wait_ms);
+        // Updated only on frames that drew input, so after the pen stops the panel keeps
+        // showing the rate measured while drawing instead of decaying towards 0.
         if self.samples_since_frame > 0 {
             self.frame_times.push_back(t);
             f.samples_per_frame = f.samples_per_frame * 0.9 + self.samples_since_frame as f64 * 0.1;
             self.samples_since_frame = 0;
-        }
-        while self.frame_times.front().is_some_and(|&ft| t - ft > Duration::from_secs(1)) {
-            self.frame_times.pop_front();
-        }
-        f.fps = self.frame_times.len() as f64;
-        // Frame times between consecutive input frames (gaps over 100 ms are pauses in drawing).
-        let gaps: Vec<f64> = self
-            .frame_times
-            .iter()
-            .zip(self.frame_times.iter().skip(1))
-            .map(|(a, b)| (*b - *a).as_secs_f64() * 1000.0)
-            .filter(|&g| g < 100.0)
-            .collect();
-        if !gaps.is_empty() {
-            f.frame_ms_avg = gaps.iter().sum::<f64>() / gaps.len() as f64;
-            f.frame_ms_max = gaps.iter().copied().fold(0.0, f64::max);
+            while self.frame_times.front().is_some_and(|&ft| t - ft > Duration::from_secs(1)) {
+                self.frame_times.pop_front();
+            }
+            f.fps = self.frame_times.len() as f64;
+            // Frame times between consecutive input frames (gaps over 100 ms are pauses).
+            let gaps: Vec<f64> = self
+                .frame_times
+                .iter()
+                .zip(self.frame_times.iter().skip(1))
+                .map(|(a, b)| (*b - *a).as_secs_f64() * 1000.0)
+                .filter(|&g| g < 100.0)
+                .collect();
+            if !gaps.is_empty() {
+                f.frame_ms_avg = gaps.iter().sum::<f64>() / gaps.len() as f64;
+                f.frame_ms_max = gaps.iter().copied().fold(0.0, f64::max);
+            }
         }
         if let Some(recv) = self.newest_unpresented_recv.take() {
             f.input_age_ms = now_us().saturating_sub(recv) as f64 / 1000.0;
