@@ -114,6 +114,12 @@ impl TiledLayer {
         }
     }
 
+    /// Removes a tile and hands it over (to be put back with `put_tile`), so several tiles
+    /// can be changed at once on different threads.
+    pub fn take_tile(&mut self, k: TileKey) -> Option<Arc<Tile>> {
+        self.tiles.remove(&k)
+    }
+
     pub fn tile_keys(&self) -> impl Iterator<Item = TileKey> + '_ {
         self.tiles.keys().copied()
     }

@@ -6,9 +6,10 @@
 //! `hardness` x radius to the edge.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::doc::{mul8, over};
-use crate::tiles::{TILE, TILE_PIXELS, TileKey, TiledLayer};
+use crate::tiles::{TILE, TILE_PIXELS, Tile, TileKey, TiledLayer};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DabShape {
@@ -72,39 +73,98 @@ pub fn paint_dab(layer: &mut TiledLayer, shape: &DabShape, color: [u8; 3], alpha
     let x1 = (d.cx + hw).ceil() as i32;
     let y0 = (d.cy - hh).floor() as i32;
     let y1 = (d.cy + hh).ceil() as i32;
-    let a8_max = alpha * 255.0;
-    let mut mask: Vec<u8> = Vec::with_capacity(TILE_PIXELS);
+    let job = Job { d, cos, sin, aa, a8_max: alpha * 255.0, x0, x1, y0, y1, color, erase, default: layer.default };
+    // The tiles under the dab, taken out of the layer so each can be painted on its own
+    // thread; put back afterwards (tiles that stayed untouched are not created).
+    let mut jobs: Vec<(TileKey, Option<Arc<Tile>>, bool)> = Vec::new();
     for row in y0.div_euclid(TILE)..=(y1 - 1).div_euclid(TILE) {
         for col in x0.div_euclid(TILE)..=(x1 - 1).div_euclid(TILE) {
             let key = (col, row);
             if erase && layer.tile(key).is_none() && layer.default[3] == 0 {
                 continue;
             }
-            let (tx0, ty0) = (col * TILE, row * TILE);
-            let xs = x0.max(tx0)..x1.min(tx0 + TILE);
-            let ys = y0.max(ty0)..y1.min(ty0 + TILE);
-            // Coverage first, so tiles the dab only grazes with zero coverage are not created.
-            let w = (xs.end - xs.start).max(0) as usize;
-            mask.clear();
-            for y in ys.clone() {
-                let dy = y as f32 + 0.5 - d.cy;
-                mask.extend(xs.clone().map(|x| (coverage(x as f32 + 0.5 - d.cx, dy, &d, cos, sin, aa) * a8_max + 0.5) as u8));
-            }
-            if mask.iter().any(|&a| a != 0) {
-                let t = layer.tile_mut(key);
-                for (i, &a8) in mask.iter().enumerate().filter(|(_, a)| **a != 0) {
-                    let (px, py) = (xs.start - tx0 + (i % w) as i32, ys.start - ty0 + (i / w) as i32);
-                    let mut p = t.get(px, py);
-                    if erase {
-                        p[3] -= mul8(p[3], a8);
-                    } else {
-                        over(&mut p, [color[0], color[1], color[2], a8], 255);
-                    }
-                    t.set(px, py, p);
-                }
-                dirty.insert(key);
-            }
+            jobs.push((key, layer.take_tile(key), false));
         }
+    }
+    let workers = if jobs.len() >= PARALLEL_FROM_TILES { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) } else { 1 };
+    if workers > 1 {
+        let per = jobs.len().div_ceil(workers);
+        std::thread::scope(|s| {
+            for chunk in jobs.chunks_mut(per) {
+                let job = &job;
+                s.spawn(move || {
+                    let mut mask = Vec::with_capacity(TILE_PIXELS);
+                    for (key, tile, touched) in chunk {
+                        *touched = job.paint_tile(*key, tile, &mut mask);
+                    }
+                });
+            }
+        });
+    } else {
+        let mut mask = Vec::with_capacity(TILE_PIXELS);
+        for (key, tile, touched) in &mut jobs {
+            *touched = job.paint_tile(*key, tile, &mut mask);
+        }
+    }
+    for (key, tile, touched) in jobs {
+        if tile.is_some() {
+            layer.put_tile(key, tile);
+        }
+        if touched {
+            dirty.insert(key);
+        }
+    }
+}
+
+/// Dabs covering at least this many tiles are painted on several threads.
+const PARALLEL_FROM_TILES: usize = 9;
+
+/// One dab, ready to paint tile by tile.
+struct Job {
+    d: DabShape,
+    cos: f32,
+    sin: f32,
+    aa: f32,
+    a8_max: f32,
+    x0: i32,
+    x1: i32,
+    y0: i32,
+    y1: i32,
+    color: [u8; 3],
+    erase: bool,
+    default: [u8; 4],
+}
+
+impl Job {
+    /// Paints the dab's part in one tile; creates the tile (from the default pixel) only if
+    /// the dab covers some of it. Returns whether anything changed.
+    fn paint_tile(&self, key: TileKey, tile: &mut Option<Arc<Tile>>, mask: &mut Vec<u8>) -> bool {
+        let d = &self.d;
+        let (tx0, ty0) = (key.0 * TILE, key.1 * TILE);
+        let xs = self.x0.max(tx0)..self.x1.min(tx0 + TILE);
+        let ys = self.y0.max(ty0)..self.y1.min(ty0 + TILE);
+        // Coverage first, so tiles the dab only grazes with zero coverage are not created.
+        let w = (xs.end - xs.start).max(0) as usize;
+        mask.clear();
+        for y in ys.clone() {
+            let dy = y as f32 + 0.5 - d.cy;
+            mask.extend(xs.clone().map(|x| (coverage(x as f32 + 0.5 - d.cx, dy, d, self.cos, self.sin, self.aa) * self.a8_max + 0.5) as u8));
+        }
+        if mask.iter().all(|&a| a == 0) {
+            return false;
+        }
+        let t = Arc::make_mut(tile.get_or_insert_with(|| Arc::new(Tile::filled(self.default))));
+        for (i, &a8) in mask.iter().enumerate().filter(|(_, a)| **a != 0) {
+            let (px, py) = (xs.start - tx0 + (i % w) as i32, ys.start - ty0 + (i / w) as i32);
+            let mut p = t.get(px, py);
+            if self.erase {
+                p[3] -= mul8(p[3], a8);
+            } else {
+                over(&mut p, [self.color[0], self.color[1], self.color[2], a8], 255);
+            }
+            t.set(px, py, p);
+        }
+        true
     }
 }
 
@@ -175,6 +235,53 @@ mod tests {
         let mut empty = TiledLayer::new();
         paint_dab(&mut empty, &round(10.0, 10.0, 4.0, 1.0), [0, 0, 0], 1.0, true, &mut dirty);
         assert_eq!(empty.tile_count(), 0, "erasing nothing creates nothing");
+    }
+
+    #[test]
+    fn big_dabs_on_many_threads_match_small_tile_by_tile_painting() {
+        // The same big dab painted whole (threads) and as the union of its tiles' results
+        // painted one tile-sized window at a time must agree exactly.
+        let shape = DabShape { cx: 300.3, cy: 200.7, rx: 180.0, ry: 120.0, angle: 0.6, hardness: 0.3 };
+        let mut base = TiledLayer::new();
+        for y in (0..400).step_by(7) {
+            for x in (0..600).step_by(5) {
+                base.set_pixel(x, y, [x as u8, y as u8, 99, 200]);
+            }
+        }
+        let mut threaded = base.clone();
+        let mut dirty = HashSet::new();
+        paint_dab(&mut threaded, &shape, [10, 200, 30], 0.7, false, &mut dirty);
+        let job_tiles = dirty.len();
+        assert!(job_tiles >= PARALLEL_FROM_TILES, "{job_tiles}");
+        // Reference: one thread.
+        let mut single = base.clone();
+        let (sin, cos) = shape.angle.sin_cos();
+        let job = Job { d: shape, cos, sin, aa: 1.0 / 120.0, a8_max: 0.7 * 255.0, x0: -1000, x1: 1000, y0: -1000, y1: 1000, color: [10, 200, 30], erase: false, default: [0; 4] };
+        let mut mask = Vec::new();
+        for &key in &dirty {
+            let mut t = single.take_tile(key);
+            job.paint_tile(key, &mut t, &mut mask);
+            single.put_tile(key, t);
+        }
+        assert_eq!(threaded, single);
+        assert_eq!(threaded.pixel(300, 200)[1], over_px([0, 0, 0, 0], 0.7)[1]);
+    }
+
+    #[test]
+    fn big_hard_dab_area() {
+        let mut l = TiledLayer::new();
+        let mut dirty = HashSet::new();
+        paint_dab(&mut l, &round(0.0, 0.0, 150.0, 1.0), [0, 0, 0], 1.0, false, &mut dirty);
+        let area = total_alpha(&l, -160, -160, 160, 160);
+        let expected = std::f64::consts::PI * 150.0 * 150.0;
+        assert!((area - expected).abs() / expected < 0.005, "area {area} vs {expected}");
+        assert_eq!(dirty.len(), l.tile_count(), "every created tile reported");
+        assert!(l.tile_count() <= 36);
+    }
+
+    fn over_px(mut p: [u8; 4], a: f32) -> [u8; 4] {
+        over(&mut p, [10, 200, 30, (a * 255.0 + 0.5) as u8], 255);
+        p
     }
 
     #[test]
