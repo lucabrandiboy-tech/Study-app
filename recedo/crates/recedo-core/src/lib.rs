@@ -12,5 +12,6 @@ pub mod kra;
 pub mod lzf;
 pub mod stabilizer;
 pub mod tiles;
+pub mod view;
 
 pub use stabilizer::{PaintInfo, Stabilizer, StabilizerSettings};
