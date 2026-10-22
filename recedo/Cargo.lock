@@ -998,6 +998,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "recedo-render"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "pollster",
+ "recedo-core",
+ "wgpu",
+]
+
+[[package]]
 name = "recedo-tablet"
 version = "0.0.1"
 dependencies = [
