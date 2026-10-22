@@ -345,28 +345,35 @@ pub fn save_to<W: Write + Seek>(doc: &Document, w: W) -> Result<(), String> {
     zip.start_file("documentinfo.xml", deflated).map_err(err)?;
     zip.write_all(documentinfo_xml().as_bytes()).map_err(ioerr)?;
 
-    let (merged_png, preview_png, tiles) = encode_parallel(doc)?;
+    let encoded = encode_parallel(doc)?;
     zip.start_file("preview.png", stored).map_err(err)?;
-    zip.write_all(&preview_png).map_err(ioerr)?;
+    zip.write_all(&encoded.preview_png).map_err(ioerr)?;
 
-    for (i, (l, data)) in doc.layers.iter().zip(tiles).enumerate() {
+    for (i, (l, data)) in doc.layers.iter().zip(&encoded.tiles).enumerate() {
         let file = layer_file(i);
         zip.start_file(format!("{IMAGE_NAME}/layers/{file}"), stored).map_err(err)?;
-        zip.write_all(&data).map_err(ioerr)?;
+        zip.write_all(data).map_err(ioerr)?;
         zip.start_file(format!("{IMAGE_NAME}/layers/{file}.defaultpixel"), stored).map_err(err)?;
         let [r, g, b, a] = l.pixels.default;
         zip.write_all(&[b, g, r, a]).map_err(ioerr)?;
     }
 
     zip.start_file("mergedimage.png", stored).map_err(err)?;
-    zip.write_all(&merged_png).map_err(ioerr)?;
+    zip.write_all(&encoded.merged_png).map_err(ioerr)?;
     zip.finish().map_err(err)?;
     Ok(())
 }
 
+struct Encoded {
+    merged_png: Vec<u8>,
+    preview_png: Vec<u8>,
+    /// Each layer's tile file, in layer order.
+    tiles: Vec<Vec<u8>>,
+}
+
 /// The slow parts of saving, spread over the CPU cores: the flattened picture and its
 /// preview, and each layer's compressed tiles.
-fn encode_parallel(doc: &Document) -> Result<(Vec<u8>, Vec<u8>, Vec<Vec<u8>>), String> {
+fn encode_parallel(doc: &Document) -> Result<Encoded, String> {
     let next = AtomicUsize::new(0);
     let done: Mutex<Vec<Option<Vec<u8>>>> = Mutex::new(vec![None; doc.layers.len()]);
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
@@ -389,7 +396,7 @@ fn encode_parallel(doc: &Document) -> Result<(Vec<u8>, Vec<u8>, Vec<Vec<u8>>), S
     })?;
     let tiles = done.into_inner().unwrap_or_else(|e| e.into_inner());
     let tiles = tiles.into_iter().collect::<Option<Vec<_>>>().ok_or("Saving failed (a layer could not be encoded)")?;
-    Ok((pngs.0, pngs.1, tiles))
+    Ok(Encoded { merged_png: pngs.0, preview_png: pngs.1, tiles })
 }
 
 fn layer_file(index: usize) -> String {
