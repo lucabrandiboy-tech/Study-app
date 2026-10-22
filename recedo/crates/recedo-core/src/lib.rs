@@ -13,6 +13,7 @@ pub mod import;
 pub mod kra;
 pub mod lzf;
 pub mod ops;
+pub mod paint;
 pub mod projection;
 pub mod stabilizer;
 pub mod tiles;
