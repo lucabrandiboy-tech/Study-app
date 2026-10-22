@@ -5,6 +5,7 @@
 //!   kra_tool flatten <in.kra> <out.png>     flatten a .kra the way Recedo does
 //!   kra_tool same <a.kra> <b.kra>           do two files hold the same layers and pixels?
 //!   kra_tool diff <a.png> <b.png> <max>     are two pictures within <max> per channel?
+//!   kra_tool brushes <out.kra>              strokes with each brush mode, to look at
 //!   kra_tool bench <dir>                    time saving and opening a 3840 x 2160, 6-layer painting
 
 use std::path::Path;
@@ -105,6 +106,36 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             println!("  largest channel difference: {worst}");
             if worst > max { Err(format!("pictures differ by up to {worst}")) } else { Ok(()) }
+        }
+        ["brushes", out] => {
+            use recedo_core::brush::{Brush, PaintMode, StrokePainter};
+            use recedo_core::curve::Curve;
+            let mut doc = Document::new(800, 500, Some([255, 255, 255, 255]));
+            let loop_pts = |cx: f64, cy: f64| -> Vec<(f64, f64, f32)> {
+                (0..=200).map(|i| {
+                    let t = i as f64 / 200.0 * std::f64::consts::TAU * 1.5;
+                    (cx + 70.0 * t.cos() + i as f64 * 0.4, cy + 50.0 * (2.0 * t).sin(), (i as f32 / 200.0 * std::f32::consts::PI).sin().max(0.05))
+                }).collect()
+            };
+            type Stroke = (Brush, [u8; 3], bool, Vec<(f64, f64, f32)>);
+            let strokes: Vec<Stroke> = vec![
+                (Brush { size: 24.0, opacity: 0.5, size_curve: None, ..Default::default() }, [30, 60, 200], false, loop_pts(120.0, 120.0)),
+                (Brush { size: 24.0, opacity: 0.5, size_curve: None, mode: PaintMode::BuildUp, ..Default::default() }, [30, 60, 200], false, loop_pts(420.0, 120.0)),
+                (Brush { size: 40.0, flow: 0.15, hardness: 0.0, ..Default::default() }, [200, 40, 40], false, loop_pts(120.0, 340.0)),
+                (Brush { size: 30.0, size_curve: Some(Curve::from_points(&[(0.0, 0.0), (0.5, 0.2), (1.0, 1.0)])), opacity_curve: Some(Curve::linear()), ..Default::default() }, [20, 20, 20], false, loop_pts(420.0, 340.0)),
+                (Brush { size: 30.0, opacity: 0.8, size_curve: None, ..Default::default() }, [0, 0, 0], true, (0..=100).map(|i| (60.0 + i as f64 * 6.8, 250.0, 1.0)).collect()),
+            ];
+            for (brush, color, erase, pts) in strokes {
+                let mut p = StrokePainter::new(brush, color, erase);
+                let mut dirty = std::collections::HashSet::new();
+                let layer = &mut doc.layers[1].pixels;
+                for (x, y, pressure) in pts {
+                    p.add(layer, recedo_core::PaintInfo { x, y, pressure, tilt_x: 0.0, tilt_y: 0.0, rotation: 0.0 }, &mut dirty);
+                }
+            }
+            kra::save_file(&doc, Path::new(out))?;
+            let png = Path::new(out).with_extension("png");
+            std::fs::write(&png, encode_png(&doc.flatten(), false)?).map_err(|e| e.to_string())
         }
         ["bench", dir] => {
             let mut doc = Document::new(3840, 2160, Some([255, 255, 255, 255]));

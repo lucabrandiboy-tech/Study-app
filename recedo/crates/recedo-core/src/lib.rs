@@ -2,6 +2,8 @@
 //!
 //! Portable (no Win32, no GPU), so all of it is unit tested on any OS.
 
+pub mod brush;
+pub mod curve;
 pub mod dab;
 pub mod doc;
 pub mod history;
