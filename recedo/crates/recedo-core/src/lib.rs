@@ -10,6 +10,7 @@ pub mod history;
 pub mod image;
 pub mod kra;
 pub mod lzf;
+pub mod ops;
 pub mod stabilizer;
 pub mod tiles;
 pub mod view;
