@@ -157,7 +157,7 @@ PARTIAL ("engine only") until they are usable in the app.
 | Navigator / minimap | NOT STARTED | 7 |
 | Second view of the same canvas | NOT STARTED | 7 |
 | Smooth zoom, pixel grid at high zoom | PARTIAL: mipmaps when zoomed out (fine detail averages instead of shimmering), sharp pixels from 200 % (GPU-tested). No pixel grid yet | 1 |
-| New canvas dialog: presets (3840×2160, 1280×720, …), custom size/DPI, background, depth, custom presets | NOT STARTED | 1 |
+| New canvas dialog: presets (3840×2160, 1280×720, …), custom size/DPI, background, depth, custom presets | PARTIAL: engine only (`canvas.rs`: built-in presets with your two sizes first, size/resolution checks with plain messages, background white/black/transparent/colour, memory per layer, custom presets save and load; tested). No dialog yet; 8-bit only | 1 |
 | Canvas resize, image resize, crop | NOT STARTED | not assigned by the spec; proposed for 5 |
 
 ## Undo and history (Phase 1)

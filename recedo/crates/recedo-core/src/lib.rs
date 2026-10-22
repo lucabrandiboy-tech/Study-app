@@ -5,6 +5,7 @@
 pub mod autosave;
 pub mod blend;
 pub mod brush;
+pub mod canvas;
 pub mod curve;
 pub mod dab;
 pub mod doc;
