@@ -106,6 +106,15 @@ impl BlendMode {
         let div = |a: u8, b: u8| ((a as u32 * 255 + b as u32 / 2) / b as u32).min(255) as u8;
         match self {
             BlendMode::Exclusion => (s as i32 + d as i32 - 2 * crate::doc::mul8(s, d) as i32).clamp(0, 255) as u8,
+            BlendMode::ColorDodge => {
+                if d == 0 {
+                    0
+                } else if 255 - s < d {
+                    255
+                } else {
+                    div(d, 255 - s)
+                }
+            }
             BlendMode::Divide => {
                 if s == 0 {
                     if d == 0 { 0 } else { 255 }
@@ -195,10 +204,9 @@ pub fn blend(dst: &mut [u8; 4], src: [u8; 4], opacity: u8, mode: BlendMode) {
         crate::doc::over(dst, src, opacity);
         return;
     }
+    // Unlike Normal, Krita's other modes also visit fully transparent source pixels (inside
+    // the layer's tiles), which re-rounds a semi-transparent destination; do the same.
     let sa = crate::doc::mul8(src[3], opacity);
-    if sa == 0 {
-        return;
-    }
     let da = dst[3];
     let na = sa as u32 + da as u32 - crate::doc::mul8(sa, da) as u32;
     if na == 0 {
@@ -245,6 +253,19 @@ mod tests {
         check(BlendMode::Subtract, [0, 50, 200]);
         // Overlay = hard light with the layers swapped: d < 0.5 gives 2*s*d, else screen.
         check(BlendMode::Overlay, [157, 127, 247]);
+    }
+
+    #[test]
+    fn krita_integer_rounding_cases() {
+        // Values where the exact formula and Krita's integer one round differently.
+        assert_eq!(BlendMode::ColorDodge.f8(45, 7), 9);
+        // A fully transparent pixel of a Multiply layer still re-rounds what is below it.
+        let mut px = [0, 176, 200, 128];
+        blend(&mut px, [9, 9, 9, 0], 255, BlendMode::Multiply);
+        assert_eq!(px, [0, 175, 199, 128]);
+        let mut px = [0, 176, 200, 128];
+        blend(&mut px, [9, 9, 9, 0], 255, BlendMode::Normal);
+        assert_eq!(px, [0, 176, 200, 128], "Normal leaves it alone");
     }
 
     #[test]

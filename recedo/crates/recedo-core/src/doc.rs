@@ -22,6 +22,13 @@ pub struct Layer {
 }
 
 impl Layer {
+    /// Whether the layer takes part in the picture. A hidden layer never does; a layer at
+    /// opacity 0 does only with a blend mode other than Normal, which (as in Krita) still
+    /// re-rounds the semi-transparent pixels under it.
+    pub fn shows(&self) -> bool {
+        self.visible && (self.opacity > 0 || self.blend != BlendMode::Normal)
+    }
+
     pub fn new(name: &str) -> Layer {
         Layer { name: name.to_string(), visible: true, opacity: 255, locked: false, blend: BlendMode::Normal, uuid: new_uuid(), pixels: TiledLayer::new() }
     }
@@ -57,7 +64,7 @@ impl Document {
     /// The visible layers composited inside the canvas.
     pub fn flatten(&self) -> Rgba8 {
         let mut out = Rgba8::new(self.width, self.height);
-        let layers: Vec<&Layer> = self.layers.iter().filter(|l| l.visible && l.opacity > 0).collect();
+        let layers: Vec<&Layer> = self.layers.iter().filter(|l| l.shows()).collect();
         let w = self.width as usize;
         // One band = one row of tiles. Bands are split between the CPU cores.
         let band = w * TILE as usize * 4;
@@ -144,7 +151,7 @@ pub fn composite_band(rows: &mut [u8], width: usize, row: i32, layer: &TiledLaye
             let src = &tile.0[ty * TILE as usize * 4..][..cols * 4];
             let start = (ty * width + x0) * 4;
             for (d, s) in rows[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
-                if s[3] != 0 {
+                if s[3] != 0 || mode != BlendMode::Normal {
                     blend(d, *s, opacity, mode);
                 }
             }

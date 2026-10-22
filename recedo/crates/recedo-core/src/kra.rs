@@ -81,10 +81,12 @@ pub fn load_from<R: Read + Seek>(r: R) -> Result<Loaded, String> {
         return Err(format!("Canvas size {width} x {height} is not supported (1 to {MAX_SIDE} pixels a side)"));
     }
     let dpi = img.attr("x-res").and_then(|v| v.trim().parse::<f64>().ok()).filter(|d| d.is_finite() && *d > 0.0).unwrap_or(72.0);
-    if let Some(p) = img.attr("profile")
-        && !p.to_ascii_lowercase().contains("srgb")
-    {
-        warnings.push(format!("The image's colour profile \"{p}\" is treated as sRGB."));
+    if let Some(p) = img.attr("profile") {
+        let lower = p.to_ascii_lowercase();
+        // Krita's linear-light profiles are named like "sRGB-elle-V2-g10.icc".
+        if !lower.contains("srgb") || lower.contains("g10") || lower.contains("linear") {
+            warnings.push(format!("The image's colour profile \"{p}\" is treated as ordinary sRGB, so colours may look different from Krita."));
+        }
     }
     let image_name = img.attr("name").unwrap_or(IMAGE_NAME).to_string();
     let names: Vec<String> = zip.file_names().map(String::from).collect();
@@ -174,7 +176,8 @@ fn resolve(tree: Vec<Entry>, decoded: &mut [Option<Layer>], warnings: &mut Vec<S
                     for k in &mut kids {
                         k.visible &= meta.visible;
                         if passthrough {
-                            k.opacity = crate::doc::mul8(k.opacity, meta.opacity);
+                            // Krita rounds down here (checked against Krita 5.2.2).
+                            k.opacity = (k.opacity as u32 * meta.opacity as u32 / 255) as u8;
                         }
                     }
                     out.extend(kids);
@@ -320,7 +323,7 @@ fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<P
     let file = el.attr("filename").ok_or("no pixel data named")?.to_string();
     let ox: i32 = el.attr("x").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
     let oy: i32 = el.attr("y").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
-    if ox.abs() > MAX_POSITION || oy.abs() > MAX_POSITION {
+    if ox.unsigned_abs() > MAX_POSITION as u32 || oy.unsigned_abs() > MAX_POSITION as u32 {
         return Err(format!("its position ({ox}, {oy}) is out of range"));
     }
     let mut default = [0; 4];
@@ -353,7 +356,7 @@ pub fn read_tiles(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32) -> Resu
 /// [`read_tiles`], refusing files with more than `max_tiles` tiles; `pixel_size` 8 reads
 /// 16-bit RGBA (converted to 8-bit).
 fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max_tiles: usize, pixel_size: usize) -> Result<(), String> {
-    if ox.abs() > MAX_POSITION || oy.abs() > MAX_POSITION {
+    if ox.unsigned_abs() > MAX_POSITION as u32 || oy.unsigned_abs() > MAX_POSITION as u32 {
         return Err("layer position out of range".into());
     }
     let mut pos = 0;
@@ -427,7 +430,7 @@ fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max
                 }
             }
         }
-        if x.abs() > MAX_POSITION || y.abs() > MAX_POSITION {
+        if x.unsigned_abs() > MAX_POSITION as u32 || y.unsigned_abs() > MAX_POSITION as u32 {
             return Err("a tile is out of range".into());
         }
         // Krita rounds a tile's position down to the 64-pixel grid.
@@ -953,6 +956,15 @@ mod tests {
         };
         assert!(all.contains("far more than its canvas"), "{all}");
         assert!(all.contains("out of range"), "{all}");
+        // The most negative position cannot slip past the range check.
+        let xml = r#"<DOC><IMAGE name="P" width="64" height="64"><layers>
+ <layer nodetype="paintlayer" name="Min" filename="m" colorspacename="RGBA" x="-2147483648"/>
+</layers></IMAGE></DOC>"#;
+        assert!(load(&kra_with(xml, &[("P/layers/m", &small)])).err().unwrap().contains("out of range"));
+        let mut l = TiledLayer::new();
+        let mut tile = b"VERSION 2\nTILEWIDTH 64\nTILEHEIGHT 64\nPIXELSIZE 4\nDATA 1\n-2147483648,0,LZF,16385\n\x00".to_vec();
+        tile.extend(std::iter::repeat_n(0u8, TILE_BYTES));
+        assert!(read_tiles(&tile, &mut l, 0, 0).unwrap_err().contains("out of range"));
     }
 
     #[test]

@@ -50,7 +50,7 @@ impl Projection {
                 let start = ((y as usize + row) * w + x as usize) * 4;
                 self.image.data[start..start + tw as usize * 4].fill(0);
             }
-            for l in doc.layers.iter().filter(|l| l.visible && l.opacity > 0) {
+            for l in doc.layers.iter().filter(|l| l.shows()) {
                 let tile = l.pixels.tile(key);
                 if tile.is_none() && l.pixels.default[3] == 0 {
                     continue;
@@ -60,7 +60,7 @@ impl Projection {
                     let dst = &mut self.image.data[start..start + tw as usize * 4];
                     for (i, d) in dst.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                         let s = tile.map_or(l.pixels.default, |t| t.get(i as i32, row as i32));
-                        if s[3] != 0 {
+                        if s[3] != 0 || l.blend != crate::blend::BlendMode::Normal {
                             blend(d, s, l.opacity, l.blend);
                         }
                     }

@@ -75,7 +75,7 @@ pub fn merge_down(doc: &mut Document, index: usize) -> Result<usize, String> {
 /// Composites layers (bottom first; hidden ones skipped) onto transparency, with their
 /// opacity and blend modes, into one set of pixels.
 pub fn merge_layers(layers: &[&Layer]) -> TiledLayer {
-    let layers: Vec<&&Layer> = layers.iter().filter(|l| l.visible && l.opacity > 0).collect();
+    let layers: Vec<&&Layer> = layers.iter().filter(|l| l.shows()).collect();
     let mut default = [0u8; 4];
     for l in &layers {
         blend(&mut default, l.pixels.default, l.opacity, l.blend);
@@ -87,9 +87,15 @@ pub fn merge_layers(layers: &[&Layer]) -> TiledLayer {
         let out = merged.tile_mut(k);
         out.0.fill(0);
         for (l, d) in layers.iter().zip(&defaults) {
-            let src = l.pixels.tile(k).map_or(d, |t| &**t);
+            // Like Krita, a layer only acts where it has tiles (or a visible default pixel).
+            let src = match l.pixels.tile(k) {
+                Some(t) => &**t,
+                None if l.pixels.default[3] != 0 => d,
+                None => continue,
+            };
+            let normal = l.blend == BlendMode::Normal;
             for (o, s) in out.0.as_chunks_mut::<4>().0.iter_mut().zip(src.0.as_chunks::<4>().0) {
-                if s[3] != 0 {
+                if s[3] != 0 || !normal {
                     blend(o, *s, l.opacity, l.blend);
                 }
             }

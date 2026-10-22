@@ -7,6 +7,7 @@
 //! normally deletes the copy. A copy still there at start-up means Recedo did not close
 //! normally, and is offered back.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -19,59 +20,54 @@ pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Decides when to autosave. Two separate questions: does the painting differ from its
 /// file (`has_unsaved_changes`, cleared only by a real save), and does the recovery copy lag
-/// behind the painting (`due`, cleared by an autosave of a snapshot taken after the last
-/// change).
+/// behind the painting (`due`: a full interval after the oldest change the copy lacks).
 #[derive(Clone, Debug)]
 pub struct Autosaver {
     pub interval: Duration,
-    /// When the oldest change not in the painting's file was made.
-    dirty_since: Option<Instant>,
-    /// When the latest change was made.
-    last_change: Option<Instant>,
-    /// When the snapshot of the latest finished autosave (or the latest save) was taken.
-    covered_until: Option<Instant>,
+    /// Times of the changes not in the recovery copy (or the file), oldest first.
+    uncovered: VecDeque<Instant>,
+    /// Times of the changes not in the painting's own file, oldest first.
+    unsaved: VecDeque<Instant>,
 }
 
 impl Autosaver {
     pub fn new(interval: Duration) -> Autosaver {
-        Autosaver { interval, dirty_since: None, last_change: None, covered_until: None }
+        Autosaver { interval, uncovered: VecDeque::new(), unsaved: VecDeque::new() }
     }
 
     /// Call after every change to the painting.
     pub fn changed(&mut self, now: Instant) {
-        self.dirty_since.get_or_insert(now);
-        self.last_change = Some(now);
+        self.uncovered.push_back(now);
+        self.unsaved.push_back(now);
     }
 
-    /// Call when the user saved the painting to its file (the snapshot written was taken
-    /// at `snapshot`). Changes made while the save ran stay unsaved.
+    /// Call when the painting was saved to its own file, from a snapshot taken at
+    /// `snapshot`. Changes made while the save ran stay unsaved.
     pub fn saved(&mut self, snapshot: Instant) {
-        if self.last_change.is_none_or(|c| c <= snapshot) {
-            self.dirty_since = None;
-        }
-        self.covered_until = Some(self.covered_until.map_or(snapshot, |c| c.max(snapshot)));
+        drop_until(&mut self.unsaved, snapshot);
+        drop_until(&mut self.uncovered, snapshot);
     }
 
     /// Call when an autosave of a snapshot taken at `snapshot` finished. The painting still
     /// has unsaved changes (its own file was not written).
     pub fn autosaved(&mut self, snapshot: Instant) {
-        self.covered_until = Some(self.covered_until.map_or(snapshot, |c| c.max(snapshot)));
+        drop_until(&mut self.uncovered, snapshot);
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        self.dirty_since.is_some()
+        !self.unsaved.is_empty()
     }
 
     /// True when an autosave should start now. `busy` (a stroke in progress, or a save
     /// already running) postpones it.
     pub fn due(&self, now: Instant, busy: bool) -> bool {
-        let (Some(since), Some(last)) = (self.dirty_since, self.last_change) else { return false };
-        if busy || self.covered_until.is_some_and(|c| c >= last) {
-            return false;
-        }
-        // A full interval after the oldest change the recovery copy does not have yet.
-        let base = self.covered_until.map_or(since, |c| c.max(since));
-        now.duration_since(base) >= self.interval
+        !busy && self.uncovered.front().is_some_and(|&oldest| now.duration_since(oldest) >= self.interval)
+    }
+}
+
+fn drop_until(changes: &mut VecDeque<Instant>, snapshot: Instant) {
+    while changes.front().is_some_and(|&c| c <= snapshot) {
+        changes.pop_front();
     }
 }
 
@@ -174,7 +170,21 @@ mod tests {
         a.changed(s(6002));
         a.saved(s(6001));
         assert!(a.has_unsaved_changes());
-        assert!(a.due(s(6302), false));
+        assert!(!a.due(s(6301), false));
+        assert!(a.due(s(6302), false), "a full interval after the change the save missed");
+    }
+
+    #[test]
+    fn a_quiet_spell_does_not_make_the_next_stroke_due_at_once() {
+        let t0 = Instant::now();
+        let s = |secs| t0 + Duration::from_secs(secs);
+        let mut a = Autosaver::new(Duration::from_secs(300));
+        a.changed(s(0));
+        a.autosaved(s(300));
+        a.changed(s(1000));
+        assert!(!a.due(s(1000), false));
+        assert!(!a.due(s(1299), false));
+        assert!(a.due(s(1300), false));
     }
 
     #[test]

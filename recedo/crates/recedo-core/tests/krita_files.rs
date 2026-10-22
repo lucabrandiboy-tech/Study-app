@@ -102,3 +102,32 @@ fn sixteen_bit_file_opens_as_8_bit() {
     let bottom = ours.pixel(10, 69);
     assert!(bottom[2] > 230 && (125..=130).contains(&bottom[3]), "{bottom:?}");
 }
+
+/// Each `.kra` in `krita-groups/` (layer groups: pass-through, isolated, nested, hidden,
+/// zero opacity, with blend modes) and `krita-blend/` (all 16 blend modes over a grid of
+/// alpha values, top layer at opacity 77) next to the `.png` the real Krita 5.2.2 flattened
+/// it to. Recedo must flatten them identically, except where it opens an isolated group of
+/// Normal layers as separate layers (to keep them editable): 8-bit Normal compositing is not
+/// associative, so that differs by 1 on some semi-transparent pixels.
+#[test]
+fn group_and_blend_cases_match_krita() {
+    let mut checked = 0;
+    for dir in ["krita-groups", "krita-blend"] {
+        let path = format!("{}/tests/fixtures/{dir}", env!("CARGO_MANIFEST_DIR"));
+        let mut names: Vec<String> = std::fs::read_dir(&path)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter_map(|n| n.strip_suffix(".kra").map(String::from))
+            .collect();
+        names.sort();
+        for name in names {
+            let doc = kra::load(&fixture(&format!("{dir}/{name}.kra"))).unwrap().doc;
+            let krita = decode_png(&fixture(&format!("{dir}/{name}.png"))).unwrap();
+            let allowed = if name == "iso_outer_pt_inner_normal" { 1 } else { 0 };
+            let d = max_diff(&doc.flatten(), &krita);
+            assert!(d <= allowed, "{dir}/{name}: differs from Krita by {d}");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 26 + 16);
+}
