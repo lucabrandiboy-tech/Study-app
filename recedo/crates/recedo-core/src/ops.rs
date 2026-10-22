@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use crate::blend::{BlendMode, blend};
-use crate::doc::{Document, Layer, mul8, new_uuid};
+use crate::doc::{Document, Layer, new_uuid};
 use crate::tiles::{Tile, TiledLayer};
 
 /// Adds an empty layer above `index` (or at the bottom of an empty document); returns its index.
@@ -65,27 +65,38 @@ pub fn merge_down(doc: &mut Document, index: usize) -> Result<usize, String> {
     if lower.blend != BlendMode::Normal {
         return Err(format!("Set \"{}\" to the Normal blend mode before merging into it", lower.name));
     }
-    let bake = |px: [u8; 4], op: u8| [px[0], px[1], px[2], mul8(px[3], op)];
-    let mut default = bake(lower.pixels.default, lower.opacity);
-    blend(&mut default, upper.pixels.default, upper.opacity, upper.blend);
-    let mut merged = TiledLayer::filled(default);
-    let keys: HashSet<_> = lower.pixels.tile_keys().chain(upper.pixels.tile_keys()).collect();
-    let (lo_def, up_def) = (Tile::filled(lower.pixels.default), Tile::filled(upper.pixels.default));
-    for k in keys {
-        let lo = lower.pixels.tile(k).map_or(&lo_def, |t| &**t);
-        let up = upper.pixels.tile(k).map_or(&up_def, |t| &**t);
-        let out = merged.tile_mut(k);
-        for ((o, l), u) in out.0.as_chunks_mut::<4>().0.iter_mut().zip(lo.0.as_chunks::<4>().0).zip(up.0.as_chunks::<4>().0) {
-            let mut p = bake(*l, lower.opacity);
-            blend(&mut p, *u, upper.opacity, upper.blend);
-            *o = p;
-        }
-    }
-    merged.compact();
+    let merged = merge_layers(&[lower, upper]);
     let result = Layer { name: lower.name.clone(), visible: true, opacity: 255, locked: lower.locked, blend: BlendMode::Normal, uuid: lower.uuid.clone(), pixels: merged };
     doc.layers[index - 1] = result;
     doc.layers.remove(index);
     Ok(index - 1)
+}
+
+/// Composites layers (bottom first; hidden ones skipped) onto transparency, with their
+/// opacity and blend modes, into one set of pixels.
+pub fn merge_layers(layers: &[&Layer]) -> TiledLayer {
+    let layers: Vec<&&Layer> = layers.iter().filter(|l| l.visible && l.opacity > 0).collect();
+    let mut default = [0u8; 4];
+    for l in &layers {
+        blend(&mut default, l.pixels.default, l.opacity, l.blend);
+    }
+    let mut merged = TiledLayer::filled(default);
+    let keys: HashSet<_> = layers.iter().flat_map(|l| l.pixels.tile_keys()).collect();
+    let defaults: Vec<Tile> = layers.iter().map(|l| Tile::filled(l.pixels.default)).collect();
+    for k in keys {
+        let out = merged.tile_mut(k);
+        out.0.fill(0);
+        for (l, d) in layers.iter().zip(&defaults) {
+            let src = l.pixels.tile(k).map_or(d, |t| &**t);
+            for (o, s) in out.0.as_chunks_mut::<4>().0.iter_mut().zip(src.0.as_chunks::<4>().0) {
+                if s[3] != 0 {
+                    blend(o, *s, l.opacity, l.blend);
+                }
+            }
+        }
+    }
+    merged.compact();
+    merged
 }
 
 /// Clears a layer to transparent.

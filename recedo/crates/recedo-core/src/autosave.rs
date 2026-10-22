@@ -17,29 +17,45 @@ use crate::kra;
 
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-/// Decides when to autosave.
+/// Decides when to autosave. Two separate questions: does the painting differ from its
+/// file (`has_unsaved_changes`, cleared only by a real save), and does the recovery copy lag
+/// behind the painting (`due`, cleared by an autosave of a snapshot taken after the last
+/// change).
 #[derive(Clone, Debug)]
 pub struct Autosaver {
     pub interval: Duration,
-    /// When the oldest unsaved change was made (`None` = nothing unsaved).
+    /// When the oldest change not in the painting's file was made.
     dirty_since: Option<Instant>,
-    last_save: Option<Instant>,
+    /// When the latest change was made.
+    last_change: Option<Instant>,
+    /// When the snapshot of the latest finished autosave (or the latest save) was taken.
+    covered_until: Option<Instant>,
 }
 
 impl Autosaver {
     pub fn new(interval: Duration) -> Autosaver {
-        Autosaver { interval, dirty_since: None, last_save: None }
+        Autosaver { interval, dirty_since: None, last_change: None, covered_until: None }
     }
 
     /// Call after every change to the painting.
     pub fn changed(&mut self, now: Instant) {
         self.dirty_since.get_or_insert(now);
+        self.last_change = Some(now);
     }
 
-    /// Call when the painting was saved (by the user or by an autosave).
-    pub fn saved(&mut self, now: Instant) {
-        self.dirty_since = None;
-        self.last_save = Some(now);
+    /// Call when the user saved the painting to its file (the snapshot written was taken
+    /// at `snapshot`). Changes made while the save ran stay unsaved.
+    pub fn saved(&mut self, snapshot: Instant) {
+        if self.last_change.is_none_or(|c| c <= snapshot) {
+            self.dirty_since = None;
+        }
+        self.covered_until = Some(self.covered_until.map_or(snapshot, |c| c.max(snapshot)));
+    }
+
+    /// Call when an autosave of a snapshot taken at `snapshot` finished. The painting still
+    /// has unsaved changes (its own file was not written).
+    pub fn autosaved(&mut self, snapshot: Instant) {
+        self.covered_until = Some(self.covered_until.map_or(snapshot, |c| c.max(snapshot)));
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
@@ -49,12 +65,12 @@ impl Autosaver {
     /// True when an autosave should start now. `busy` (a stroke in progress, or a save
     /// already running) postpones it.
     pub fn due(&self, now: Instant, busy: bool) -> bool {
-        let Some(since) = self.dirty_since else { return false };
-        if busy {
+        let (Some(since), Some(last)) = (self.dirty_since, self.last_change) else { return false };
+        if busy || self.covered_until.is_some_and(|c| c >= last) {
             return false;
         }
-        // Wait a full interval after the first unsaved change, and after the last save.
-        let base = self.last_save.map_or(since, |l| l.max(since));
+        // A full interval after the oldest change the recovery copy does not have yet.
+        let base = self.covered_until.map_or(since, |c| c.max(since));
         now.duration_since(base) >= self.interval
     }
 }
@@ -74,8 +90,11 @@ pub struct Recoverable {
 }
 
 fn paths(dir: &Path, id: &str) -> (PathBuf, PathBuf) {
-    let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-    (dir.join(format!("{safe}.recovery.kra")), dir.join(format!("{safe}.recovery.json")))
+    // Readable part plus a hash of the whole id, so different ids never share a file.
+    let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
+    let hash = id.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
+    let stem = format!("{safe}-{hash:016x}");
+    (dir.join(format!("{stem}.recovery.kra")), dir.join(format!("{stem}.recovery.json")))
 }
 
 /// Writes the recovery copy of a painting (`id` names it, e.g. the document's uuid).
@@ -140,12 +159,22 @@ mod tests {
         assert!(!a.due(s(299), false));
         assert!(a.due(s(300), false), "5 minutes after the first unsaved change");
         assert!(!a.due(s(300), true), "not during a stroke");
-        a.saved(s(301));
-        assert!(!a.has_unsaved_changes());
-        assert!(!a.due(s(2000), false));
-        a.changed(s(302));
+        // Autosave of a snapshot taken at 300; a stroke lands at 301 while it is written.
+        a.changed(s(301));
+        a.autosaved(s(300));
+        assert!(a.has_unsaved_changes(), "an autosave does not save the painting's file");
         assert!(!a.due(s(500), false));
-        assert!(a.due(s(602), false));
+        assert!(a.due(s(601), false), "the stroke made during the autosave is saved next time");
+        a.autosaved(s(601));
+        assert!(!a.due(s(5000), false), "nothing new since the last copy");
+        a.saved(s(5001));
+        assert!(!a.has_unsaved_changes());
+        // A change during a real save keeps the painting unsaved.
+        a.changed(s(6000));
+        a.changed(s(6002));
+        a.saved(s(6001));
+        assert!(a.has_unsaved_changes());
+        assert!(a.due(s(6302), false));
     }
 
     #[test]
@@ -158,7 +187,10 @@ mod tests {
         let original = PathBuf::from("C:\\Art\\cat.kra");
         let handle = spawn_recovery(dir.clone(), "{abc-123}".into(), doc.clone(), Some(original.clone()));
         let path = handle.join().unwrap().unwrap();
-        assert_eq!(path.file_name().unwrap(), "abc-123.recovery.kra");
+        assert!(path.file_name().unwrap().to_str().unwrap().starts_with("abc-123-"));
+        // Ids that clean up to the same letters still get different files.
+        assert_ne!(paths(&dir, "{abc}"), paths(&dir, "abc"));
+        assert_ne!(paths(&dir, "猫"), paths(&dir, "犬"));
         write_recovery(&dir, "other", &Document::new(5, 5, None), None).unwrap();
         // A half-written file from a crash during the save is not offered.
         std::fs::write(dir.join("x.recovery.kra.part"), b"junk").unwrap();

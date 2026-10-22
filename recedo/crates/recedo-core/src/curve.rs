@@ -4,10 +4,25 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RawCurve")]
 pub struct Curve {
     /// Control points (input, output), both 0..=1, sorted by input. Always includes
     /// input 0 and input 1.
     points: Vec<(f32, f32)>,
+}
+
+/// A curve as stored in a settings or preset file; cleaned by [`Curve::from_points`] when
+/// read, so a damaged file cannot produce a curve that breaks painting.
+#[derive(Deserialize)]
+struct RawCurve {
+    #[serde(default)]
+    points: Vec<(f32, f32)>,
+}
+
+impl From<RawCurve> for Curve {
+    fn from(r: RawCurve) -> Curve {
+        Curve::from_points(&r.points)
+    }
 }
 
 impl Default for Curve {
@@ -123,6 +138,20 @@ mod tests {
             let y = c.eval(i as f32 / 1000.0);
             assert!((y - 0.8).abs() < 1e-5, "{y} at {i}");
         }
+    }
+
+    #[test]
+    fn damaged_saved_curves_are_cleaned_when_read() {
+        for json in [r#"{"points":[[0.5,0.5]]}"#, r#"{"points":[]}"#, r#"{}"#, r#"{"points":[[0.9,0.1],[0.1,0.9],[0.1,0.2]]}"#] {
+            let c: Curve = serde_json::from_str(json).unwrap();
+            for i in 0..=100 {
+                let y = c.eval(i as f32 / 100.0);
+                assert!((0.0..=1.0).contains(&y), "{json}: {y}");
+            }
+        }
+        let c = Curve::from_points(&[(0.0, 0.0), (0.3, 0.1), (1.0, 1.0)]);
+        let back: Curve = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
     }
 
     #[test]

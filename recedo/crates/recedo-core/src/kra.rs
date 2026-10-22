@@ -40,6 +40,9 @@ pub const MIMETYPE: &str = "application/x-krita";
 const IMAGE_NAME: &str = "Unnamed";
 /// The profile Krita gives 8-bit sRGB images; Krita ships it, so the file need not.
 const SRGB_PROFILE: &str = "sRGB-elle-V2-srgbtrc.icc";
+/// Farthest a layer or tile may sit from the canvas origin, in pixels (keeps all the
+/// position arithmetic far from overflowing).
+const MAX_POSITION: i32 = 1 << 24;
 /// Biggest single file accepted from inside a `.kra` (a 30000 x 30000 layer is 3.6 GB raw,
 /// but compressed tiles of real paintings are far smaller).
 const MAX_ENTRY: u64 = 4 << 30;
@@ -86,19 +89,28 @@ pub fn load_from<R: Read + Seek>(r: R) -> Result<Loaded, String> {
     let image_name = img.attr("name").unwrap_or(IMAGE_NAME).to_string();
     let names: Vec<String> = zip.file_names().map(String::from).collect();
 
-    let mut ctx = Ctx { zip: &mut zip, names: &names, image_name: &image_name, warnings: &mut warnings };
-    let mut top_first = Vec::new();
-    if let Some(layers) = img.child("layers") {
-        read_layers(&mut ctx, layers, 255, true, &mut top_first);
-    }
+    // At most 4 canvases' worth of tiles per layer (plus some), so a small hostile file
+    // cannot make Recedo allocate gigabytes.
+    let max_tiles = 4 * (width.div_ceil(TILE as u32) as usize * height.div_ceil(TILE as u32) as usize) + 1024;
+    let mut ctx = Ctx { zip: &mut zip, names: &names, image_name: &image_name, warnings: &mut warnings, max_tiles };
+    let mut pending = Vec::new();
+    let tree = match img.child("layers") {
+        Some(layers) => read_layers(&mut ctx, layers, &mut pending),
+        None => Vec::new(),
+    };
     // Decoding the tiles is the slow part: spread the layers over the CPU cores.
-    let mut layers = Vec::new();
-    for (pending, decoded) in top_first.iter().zip(decode_parallel(&top_first)).rev() {
-        match decoded {
-            Ok(pixels) => layers.push(Layer { pixels, ..pending.layer.clone() }),
-            Err(e) => warnings.push(format!("Layer \"{}\" could not be opened: {e}", pending.layer.name)),
+    let mut decoded: Vec<Option<Layer>> = Vec::with_capacity(pending.len());
+    for (p, result) in pending.iter().zip(decode_parallel(&pending)) {
+        match result {
+            Ok(pixels) => decoded.push(Some(Layer { pixels, ..p.layer.clone() })),
+            Err(e) => {
+                warnings.push(format!("Layer \"{}\" could not be opened: {e}", p.layer.name));
+                decoded.push(None);
+            }
         }
     }
+    let mut layers = resolve(tree, &mut decoded, &mut warnings);
+    layers.reverse();
 
     if layers.is_empty() {
         if let Some(png) = entry(&mut zip, "mergedimage.png", MAX_ENTRY)? {
@@ -108,7 +120,12 @@ pub fn load_from<R: Read + Seek>(r: R) -> Result<Loaded, String> {
             layers.push(l);
             warnings.push("No layer could be opened, so the picture was opened flattened, as one layer.".into());
         } else {
-            return Err("The file has no layers Recedo can open.".into());
+            let mut e = String::from("The file has no layers Recedo can open.");
+            for w in &warnings {
+                e.push_str("\n- ");
+                e.push_str(w);
+            }
+            return Err(e);
         }
     }
     Ok(Loaded { doc: Document { width, height, dpi, layers }, warnings })
@@ -120,6 +137,55 @@ struct Pending {
     layer: Layer,
     data: Vec<u8>,
     offset: (i32, i32),
+    max_tiles: usize,
+}
+
+/// The layer tree from maindoc.xml (top layer first), before the pixels are decoded.
+enum Entry {
+    /// Index into the pending paint layers.
+    Paint(usize),
+    Group {
+        /// The group's own name, visibility, opacity and blend mode (no pixels).
+        meta: Layer,
+        passthrough: bool,
+        children: Vec<Entry>,
+    },
+}
+
+/// Turns the tree into a flat layer list (top first). A group whose layers can simply be
+/// listed without changing the picture is listed (Normal at full opacity with only Normal
+/// layers inside, or pass-through at full opacity); any other group is merged into one
+/// layer exactly as Krita composites it (its layers together first, then the group with its
+/// opacity and blend mode), since Recedo has no groups yet.
+fn resolve(tree: Vec<Entry>, decoded: &mut [Option<Layer>], warnings: &mut Vec<String>) -> Vec<Layer> {
+    let mut out = Vec::new();
+    for e in tree {
+        match e {
+            Entry::Paint(i) => out.extend(decoded[i].take()),
+            Entry::Group { meta, passthrough, children } => {
+                let mut kids = resolve(children, decoded, warnings);
+                let listable = meta.opacity == 255 && (passthrough || (meta.blend == BlendMode::Normal && kids.iter().all(|k| k.blend == BlendMode::Normal)));
+                if listable {
+                    push_warning(warnings, "Layer groups were opened as plain layers (the groups themselves are not kept).".into());
+                    for k in &mut kids {
+                        k.visible &= meta.visible;
+                    }
+                    out.extend(kids);
+                } else {
+                    push_warning(warnings, format!("Group \"{}\" was merged into one layer to keep its look (Recedo has no layer groups yet).", meta.name));
+                    let bottom_first: Vec<&Layer> = kids.iter().rev().collect();
+                    out.push(Layer { pixels: crate::ops::merge_layers(&bottom_first), ..meta });
+                }
+            }
+        }
+    }
+    out
+}
+
+fn push_warning(warnings: &mut Vec<String>, w: String) {
+    if !warnings.contains(&w) {
+        warnings.push(w);
+    }
 }
 
 fn decode_parallel(pending: &[Pending]) -> Vec<Result<TiledLayer, String>> {
@@ -133,7 +199,7 @@ fn decode_parallel(pending: &[Pending]) -> Vec<Result<TiledLayer, String>> {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(p) = pending.get(i) else { break };
                     let mut pixels = TiledLayer::filled(p.layer.pixels.default);
-                    let r = read_tiles(&p.data, &mut pixels, p.offset.0, p.offset.1).map(|()| pixels);
+                    let r = read_tiles_limited(&p.data, &mut pixels, p.offset.0, p.offset.1, p.max_tiles).map(|()| pixels);
                     done.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
                 }
             });
@@ -151,13 +217,12 @@ struct Ctx<'a, R: Read + Seek> {
     names: &'a [String],
     image_name: &'a str,
     warnings: &'a mut Vec<String>,
+    max_tiles: usize,
 }
 
 impl<R: Read + Seek> Ctx<'_, R> {
     fn warn(&mut self, w: String) {
-        if !self.warnings.contains(&w) {
-            self.warnings.push(w);
-        }
+        push_warning(self.warnings, w);
     }
 
     /// The zip entry for a layer file: `<image>/layers/<file>`, or any `*/layers/<file>`.
@@ -183,51 +248,48 @@ fn kind_name(nodetype: &str) -> &str {
     }
 }
 
-/// Reads `<layers>` (top layer first) into `out`, folding group opacity and visibility in.
-fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity: u8, parent_visible: bool, out: &mut Vec<Pending>) {
+/// Reads `<layers>` (top layer first): paint layers go to `pending` for decoding.
+fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, pending: &mut Vec<Pending>) -> Vec<Entry> {
+    let mut out = Vec::new();
     for el in node.children.iter().filter(|c| c.name == "layer") {
         let name = el.attr("name").unwrap_or("Layer").to_string();
         let nodetype = el.attr("nodetype").unwrap_or("");
-        let visible = parent_visible && el.attr("visible").is_none_or(|v| v.trim() != "0");
-        let own = el.attr("opacity").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(255.0).clamp(0.0, 255.0).round() as u8;
-        let opacity = crate::doc::mul8(own, parent_opacity);
+        let visible = el.attr("visible").is_none_or(|v| v.trim() != "0");
+        let opacity = el.attr("opacity").and_then(|v| v.trim().parse::<f64>().ok()).filter(|o| o.is_finite()).unwrap_or(255.0).clamp(0.0, 255.0).round() as u8;
         if el.child("masks").is_some_and(|m| !m.children.is_empty()) {
             ctx.warn(format!("Masks on layer \"{name}\" were left out."));
         }
         let op = el.attr("compositeop").unwrap_or("normal");
         let mode = BlendMode::from_krita_id(op);
-        if mode.is_none() && nodetype != "grouplayer" {
+        if mode.is_none() {
             ctx.warn(format!("Layer \"{name}\" uses the blend mode \"{op}\", which Recedo does not have yet; it is shown as Normal."));
         }
+        let meta = Layer {
+            name: name.clone(),
+            visible,
+            opacity,
+            locked: el.attr("locked").is_some_and(|v| v.trim() == "1"),
+            blend: mode.unwrap_or_default(),
+            uuid: el.attr("uuid").map_or_else(new_uuid, String::from),
+            pixels: TiledLayer::new(),
+        };
         match nodetype {
             "paintlayer" => match read_paint_layer(ctx, el) {
-                Ok((default, data, offset)) => out.push(Pending {
-                    layer: Layer {
-                        name,
-                        visible,
-                        opacity,
-                        locked: el.attr("locked").is_some_and(|v| v.trim() == "1"),
-                        blend: mode.unwrap_or_default(),
-                        uuid: el.attr("uuid").map_or_else(new_uuid, String::from),
-                        pixels: TiledLayer::filled(default),
-                    },
-                    data,
-                    offset,
-                }),
+                Ok((default, data, offset)) => {
+                    out.push(Entry::Paint(pending.len()));
+                    pending.push(Pending { layer: Layer { pixels: TiledLayer::filled(default), ..meta }, data, offset, max_tiles: ctx.max_tiles });
+                }
                 Err(e) => ctx.warn(format!("Layer \"{name}\" could not be opened: {e}")),
             },
             "grouplayer" => {
-                ctx.warn("Layer groups were opened as plain layers (the group itself is not kept).".into());
-                if op != "normal" {
-                    ctx.warn(format!("Group \"{name}\" uses the blend mode \"{op}\"; its layers are shown as Normal."));
-                }
-                if let Some(inner) = el.child("layers") {
-                    read_layers(ctx, inner, opacity, visible, out);
-                }
+                let passthrough = el.attr("passthrough").is_some_and(|v| matches!(v.trim(), "1" | "true"));
+                let children = el.child("layers").map_or_else(Vec::new, |inner| read_layers(ctx, inner, pending));
+                out.push(Entry::Group { meta, passthrough, children });
             }
             other => ctx.warn(format!("Layer \"{name}\" was left out: Recedo cannot open {}s yet.", kind_name(other))),
         }
     }
+    out
 }
 
 /// The layer's default pixel, tile data and position.
@@ -241,6 +303,9 @@ fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<P
     let file = el.attr("filename").ok_or("no pixel data named")?.to_string();
     let ox: i32 = el.attr("x").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
     let oy: i32 = el.attr("y").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+    if ox.abs() > MAX_POSITION || oy.abs() > MAX_POSITION {
+        return Err(format!("its position ({ox}, {oy}) is out of range"));
+    }
     let mut default = [0; 4];
     if let Some(d) = ctx.layer_entry(&file, ".defaultpixel", 64)?
         && let [b, g, r, a] = d[..]
@@ -260,6 +325,14 @@ fn next_line<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a str, String> {
 
 /// Parses a tile file into `layer`, offset by the layer's position.
 pub fn read_tiles(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32) -> Result<(), String> {
+    read_tiles_limited(data, layer, ox, oy, usize::MAX)
+}
+
+/// [`read_tiles`], refusing files with more than `max_tiles` tiles.
+fn read_tiles_limited(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32, max_tiles: usize) -> Result<(), String> {
+    if ox.abs() > MAX_POSITION || oy.abs() > MAX_POSITION {
+        return Err("layer position out of range".into());
+    }
     let mut pos = 0;
     let (mut version, mut tw, mut th, mut ps) = ("", 0, 0, 0);
     let count: usize = loop {
@@ -276,6 +349,9 @@ pub fn read_tiles(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32) -> Resu
     };
     if version.trim() != "2" || tw != TILE || th != TILE || ps != 4 {
         return Err(format!("unsupported layer data (version {version}, tiles {tw}x{th}, {ps} bytes per pixel)"));
+    }
+    if count > max_tiles {
+        return Err(format!("it has {count} tiles, far more than its canvas can hold ({max_tiles})"));
     }
     for _ in 0..count {
         let l = next_line(data, &mut pos)?;
@@ -311,7 +387,11 @@ pub fn read_tiles(data: &[u8], layer: &mut TiledLayer, ox: i32, oy: i32) -> Resu
             }
             f => return Err(format!("unknown tile flag {f}")),
         }
-        let (px, py) = (x.checked_add(ox).ok_or("tile out of range")?, y.checked_add(oy).ok_or("tile out of range")?);
+        if x.abs() > MAX_POSITION || y.abs() > MAX_POSITION {
+            return Err("a tile is out of range".into());
+        }
+        // Krita rounds a tile's position down to the 64-pixel grid.
+        let (px, py) = (x.div_euclid(TILE) * TILE + ox, y.div_euclid(TILE) * TILE + oy);
         if px.rem_euclid(TILE) == 0 && py.rem_euclid(TILE) == 0 {
             layer.put_tile((px.div_euclid(TILE), py.div_euclid(TILE)), Some(Arc::new(tile)));
         } else {
@@ -511,7 +591,8 @@ fn entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, limit: u64) -> Res
             if f.size() > limit {
                 return Err(format!("{name} is too large"));
             }
-            let mut v = Vec::with_capacity(f.size() as usize);
+            // The size in the zip header is only a claim: grow as data really arrives.
+            let mut v = Vec::with_capacity(f.size().min(16 << 20) as usize);
             f.take(limit + 1).read_to_end(&mut v).map_err(|e| format!("Could not read {name}: {e}"))?;
             if v.len() as u64 > limit {
                 return Err(format!("{name} is too large"));
@@ -522,6 +603,10 @@ fn entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, limit: u64) -> Res
         Err(e) => Err(format!("Could not read {name}: {e}")),
     }
 }
+
+/// Deepest element nesting accepted in maindoc.xml (Krita files nest a few levels per
+/// layer group; this allows groups about 40 deep and keeps the recursive code safe).
+const MAX_XML_DEPTH: usize = 128;
 
 /// Just enough XML tree for maindoc.xml.
 #[derive(Debug, Default)]
@@ -559,7 +644,12 @@ fn parse_xml(s: &str) -> Result<Node, String> {
     let mut stack = vec![Node::default()];
     loop {
         match r.read_event().map_err(|e| format!("maindoc.xml is damaged: {e}"))? {
-            Event::Start(e) => stack.push(node_from(&e)?),
+            Event::Start(e) => {
+                if stack.len() > MAX_XML_DEPTH {
+                    return Err("maindoc.xml is nested too deeply".into());
+                }
+                stack.push(node_from(&e)?);
+            }
             Event::Empty(e) => {
                 let n = node_from(&e)?;
                 stack.last_mut().expect("root").children.push(n);
@@ -722,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_content_is_reported_and_groups_are_flattened() {
+    fn unsupported_content_is_reported() {
         let mut paint = TiledLayer::new();
         paint.set_pixel(1, 1, [255, 0, 0, 255]);
         let tiles = write_tiles(&paint);
@@ -743,15 +833,95 @@ mod tests {
         let bytes = kra_with(xml, &[("Pic/layers/layer3", &tiles)]);
         let l = load(&bytes).unwrap();
         assert_eq!(l.doc.layers.len(), 1);
-        let inside = &l.doc.layers[0];
-        assert_eq!(inside.name, "Inside");
-        assert_eq!(inside.opacity, 128, "group opacity folded in");
-        assert_eq!(inside.pixels.pixel(1, 1), [255, 0, 0, 255]);
+        let g = &l.doc.layers[0];
+        assert_eq!(g.name, "G", "a faded group becomes one layer");
+        assert_eq!((g.opacity, g.blend), (128, BlendMode::Multiply));
+        assert_eq!(g.pixels.pixel(1, 1), [255, 0, 0, 255]);
         assert_eq!(l.doc.dpi, 100.0);
         let all = l.warnings.join("\n");
-        for needle in ["Rec2020", "Lines", "vector layer", "groups", "\"G\"", "multiply", "Masks on layer \"Inside\"", "\"hue\"", "Deep", "RGBA16", "Gone"] {
+        for needle in ["Rec2020", "Lines", "vector layer", "\"G\" was merged", "Masks on layer \"Inside\"", "\"hue\"", "Deep", "RGBA16", "Gone"] {
             assert!(all.contains(needle), "missing {needle:?} in:\n{all}");
         }
+    }
+
+    fn group_file(group_attrs: &str) -> Vec<u8> {
+        let (mut red, mut blue) = (TiledLayer::new(), TiledLayer::new());
+        for y in 0..8 {
+            for x in 0..8 {
+                red.set_pixel(x, y, [255, 0, 0, 255]);
+                blue.set_pixel(x + 4, y, [0, 0, 255, 255]);
+            }
+        }
+        let xml = format!(
+            r#"<DOC><IMAGE name="P" width="64" height="64"><layers>
+ <layer nodetype="grouplayer" name="G" {group_attrs}><layers>
+  <layer nodetype="paintlayer" name="Blue" filename="b" colorspacename="RGBA"/>
+  <layer nodetype="paintlayer" name="Red" filename="r" colorspacename="RGBA" visible="1"/>
+ </layers></layer>
+ <layer nodetype="paintlayer" name="Under" filename="u" colorspacename="RGBA"/>
+</layers></IMAGE></DOC>"#
+        );
+        kra_with(&xml, &[("P/layers/r", &write_tiles(&red)), ("P/layers/b", &write_tiles(&blue)), ("P/layers/u", &write_tiles(&TiledLayer::new()))])
+    }
+
+    #[test]
+    fn groups_keep_their_look() {
+        // A faded group: its layers are composited together first, then faded, as in Krita
+        // (checked with Krita 5.2.2: the overlap is [0, 0, 255, 128], not a blend of both).
+        let l = load(&group_file(r#"opacity="128" visible="1" compositeop="normal""#)).unwrap();
+        let names: Vec<_> = l.doc.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Under", "G"]);
+        let flat = l.doc.flatten();
+        assert_eq!(flat.pixel(5, 3), [0, 0, 255, 128], "overlap");
+        assert_eq!(flat.pixel(1, 3), [255, 0, 0, 128]);
+        // A plain group (Normal, full opacity, Normal layers) is opened as its layers.
+        let l = load(&group_file(r#"opacity="255" visible="0" compositeop="normal""#)).unwrap();
+        let names: Vec<_> = l.doc.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Under", "Red", "Blue"]);
+        assert!(l.doc.layers[1..].iter().all(|l| !l.visible), "hidden with their group");
+        assert!(l.warnings.iter().any(|w| w.contains("plain layers")));
+        // Pass-through at full opacity: listed too.
+        let l = load(&group_file(r#"opacity="255" passthrough="1" compositeop="normal""#)).unwrap();
+        assert_eq!(l.doc.layers.len(), 3);
+    }
+
+    #[test]
+    fn hostile_structure_is_refused_cleanly() {
+        // Groups nested thousands deep: an error, not a stack overflow.
+        let deep = format!(
+            "<DOC><IMAGE width=\"8\" height=\"8\"><layers>{}{}</layers></IMAGE></DOC>",
+            "<layer nodetype=\"grouplayer\" name=\"g\"><layers>".repeat(5000),
+            "</layers></layer>".repeat(5000)
+        );
+        assert!(load(&kra_with(&deep, &[])).err().unwrap().contains("nested too deeply"));
+        // More tiles than the canvas could hold: the layer is refused, not loaded.
+        let mut many = TiledLayer::new();
+        for i in 0..2000 {
+            many.set_pixel(i * 64, 0, [1, 1, 1, 255]);
+        }
+        let xml = r#"<DOC><IMAGE name="P" width="64" height="64"><layers>
+ <layer nodetype="paintlayer" name="Many" filename="m" colorspacename="RGBA"/>
+ <layer nodetype="paintlayer" name="Far" filename="f" colorspacename="RGBA" x="2147483600" y="0"/>
+</layers></IMAGE></DOC>"#;
+        let small = write_tiles(&TiledLayer::filled([0; 4]));
+        let r = load(&kra_with(xml, &[("P/layers/m", &write_tiles(&many)), ("P/layers/f", &small)]));
+        let all = match r {
+            Ok(l) => l.warnings.join("\n"),
+            Err(e) => e,
+        };
+        assert!(all.contains("far more than its canvas"), "{all}");
+        assert!(all.contains("out of range"), "{all}");
+    }
+
+    #[test]
+    fn tile_positions_snap_to_the_grid_like_krita() {
+        let mut l = TiledLayer::new();
+        let data = b"VERSION 2\nTILEWIDTH 64\nTILEHEIGHT 64\nPIXELSIZE 4\nDATA 1\n10,-5,LZF,16385\n\x00";
+        let mut v = data.to_vec();
+        v.extend(std::iter::repeat_n([9u8, 8, 7, 255], TILE_PIXELS).flatten());
+        read_tiles(&v, &mut l, 0, 0).unwrap();
+        assert_eq!(l.pixel(0, -64), [7, 8, 9, 255], "10,-5 lands on tile (0, -1)");
+        assert_eq!(l.pixel(0, 0), [0, 0, 0, 0]);
     }
 
     #[test]
