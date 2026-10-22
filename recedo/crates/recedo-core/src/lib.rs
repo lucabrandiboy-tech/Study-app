@@ -3,6 +3,7 @@
 //! Portable (no Win32, no GPU), so all of it is unit tested on any OS.
 
 pub mod doc;
+pub mod history;
 pub mod image;
 pub mod kra;
 pub mod lzf;

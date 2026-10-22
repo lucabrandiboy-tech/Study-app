@@ -144,6 +144,12 @@ fn run(args: &[String]) -> Result<(), String> {
                 let _ = kra::write_tiles(&l.pixels);
             }
             println!("tiles of all layers, one thread: {:.2?}", t.elapsed());
+            let t = std::time::Instant::now();
+            let mut h = recedo_core::history::History::default();
+            for _ in 0..50 {
+                h.record("Brush stroke", &doc);
+            }
+            println!("undo snapshot of this painting: {:.2?} each", t.elapsed() / 50);
             if back.doc != doc {
                 return Err("bench file did not read back the same".into());
             }
