@@ -91,7 +91,14 @@ pub fn load_from<R: Read + Seek>(r: R) -> Result<Loaded, String> {
     if let Some(layers) = img.child("layers") {
         read_layers(&mut ctx, layers, 255, true, &mut top_first);
     }
-    let mut layers: Vec<Layer> = top_first.into_iter().rev().collect();
+    // Decoding the tiles is the slow part: spread the layers over the CPU cores.
+    let mut layers = Vec::new();
+    for (pending, decoded) in top_first.iter().zip(decode_parallel(&top_first)).rev() {
+        match decoded {
+            Ok(pixels) => layers.push(Layer { pixels, ..pending.layer.clone() }),
+            Err(e) => warnings.push(format!("Layer \"{}\" could not be opened: {e}", pending.layer.name)),
+        }
+    }
 
     if layers.is_empty() {
         if let Some(png) = entry(&mut zip, "mergedimage.png", MAX_ENTRY)? {
@@ -105,6 +112,38 @@ pub fn load_from<R: Read + Seek>(r: R) -> Result<Loaded, String> {
         }
     }
     Ok(Loaded { doc: Document { width, height, dpi, layers }, warnings })
+}
+
+/// A paint layer whose tiles are not decoded yet.
+struct Pending {
+    /// Everything but the pixels (which hold only the default pixel).
+    layer: Layer,
+    data: Vec<u8>,
+    offset: (i32, i32),
+}
+
+fn decode_parallel(pending: &[Pending]) -> Vec<Result<TiledLayer, String>> {
+    let next = AtomicUsize::new(0);
+    let done: Mutex<Vec<Option<Result<TiledLayer, String>>>> = Mutex::new((0..pending.len()).map(|_| None).collect());
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16).min(pending.len());
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(p) = pending.get(i) else { break };
+                    let mut pixels = TiledLayer::filled(p.layer.pixels.default);
+                    let r = read_tiles(&p.data, &mut pixels, p.offset.0, p.offset.1).map(|()| pixels);
+                    done.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
+                }
+            });
+        }
+    });
+    done.into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .into_iter()
+        .map(|r| r.unwrap_or_else(|| Err("could not be decoded".to_string())))
+        .collect()
 }
 
 struct Ctx<'a, R: Read + Seek> {
@@ -145,7 +184,7 @@ fn kind_name(nodetype: &str) -> &str {
 }
 
 /// Reads `<layers>` (top layer first) into `out`, folding group opacity and visibility in.
-fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity: u8, parent_visible: bool, out: &mut Vec<Layer>) {
+fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity: u8, parent_visible: bool, out: &mut Vec<Pending>) {
     for el in node.children.iter().filter(|c| c.name == "layer") {
         let name = el.attr("name").unwrap_or("Layer").to_string();
         let nodetype = el.attr("nodetype").unwrap_or("");
@@ -162,14 +201,18 @@ fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity
         }
         match nodetype {
             "paintlayer" => match read_paint_layer(ctx, el) {
-                Ok(pixels) => out.push(Layer {
-                    name,
-                    visible,
-                    opacity,
-                    locked: el.attr("locked").is_some_and(|v| v.trim() == "1"),
-                    blend: mode.unwrap_or_default(),
-                    uuid: el.attr("uuid").map_or_else(new_uuid, String::from),
-                    pixels,
+                Ok((default, data, offset)) => out.push(Pending {
+                    layer: Layer {
+                        name,
+                        visible,
+                        opacity,
+                        locked: el.attr("locked").is_some_and(|v| v.trim() == "1"),
+                        blend: mode.unwrap_or_default(),
+                        uuid: el.attr("uuid").map_or_else(new_uuid, String::from),
+                        pixels: TiledLayer::filled(default),
+                    },
+                    data,
+                    offset,
                 }),
                 Err(e) => ctx.warn(format!("Layer \"{name}\" could not be opened: {e}")),
             },
@@ -187,7 +230,10 @@ fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity
     }
 }
 
-fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<TiledLayer, String> {
+/// The layer's default pixel, tile data and position.
+type PaintLayerData = ([u8; 4], Vec<u8>, (i32, i32));
+
+fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<PaintLayerData, String> {
     let cs = el.attr("colorspacename").unwrap_or("RGBA");
     if cs != "RGBA" {
         return Err(format!("its colour model \"{cs}\" is not supported yet (only 8-bit RGB)"));
@@ -195,15 +241,14 @@ fn read_paint_layer<R: Read + Seek>(ctx: &mut Ctx<'_, R>, el: &Node) -> Result<T
     let file = el.attr("filename").ok_or("no pixel data named")?.to_string();
     let ox: i32 = el.attr("x").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
     let oy: i32 = el.attr("y").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
-    let mut layer = TiledLayer::new();
+    let mut default = [0; 4];
     if let Some(d) = ctx.layer_entry(&file, ".defaultpixel", 64)?
         && let [b, g, r, a] = d[..]
     {
-        layer.default = [r, g, b, a];
+        default = [r, g, b, a];
     }
     let data = ctx.layer_entry(&file, "", MAX_ENTRY)?.ok_or("its pixel data is missing")?;
-    read_tiles(&data, &mut layer, ox, oy)?;
-    Ok(layer)
+    Ok((default, data, (ox, oy)))
 }
 
 fn next_line<'a>(data: &'a [u8], pos: &mut usize) -> Result<&'a str, String> {
