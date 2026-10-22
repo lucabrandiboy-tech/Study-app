@@ -3,6 +3,7 @@
 
 use std::hash::{BuildHasher, Hasher};
 
+use crate::blend::{BlendMode, blend};
 use crate::image::Rgba8;
 use crate::tiles::{TILE, Tile, TiledLayer};
 
@@ -13,6 +14,8 @@ pub struct Layer {
     /// 0 = invisible, 255 = fully opaque (Krita stores it the same way).
     pub opacity: u8,
     pub locked: bool,
+    /// How the layer mixes with the layers below.
+    pub blend: BlendMode,
     /// Krita's layer id, kept so a file saved back keeps its identity.
     pub uuid: String,
     pub pixels: TiledLayer,
@@ -20,7 +23,7 @@ pub struct Layer {
 
 impl Layer {
     pub fn new(name: &str) -> Layer {
-        Layer { name: name.to_string(), visible: true, opacity: 255, locked: false, uuid: new_uuid(), pixels: TiledLayer::new() }
+        Layer { name: name.to_string(), visible: true, opacity: 255, locked: false, blend: BlendMode::Normal, uuid: new_uuid(), pixels: TiledLayer::new() }
     }
 }
 
@@ -70,7 +73,7 @@ impl Document {
                 s.spawn(move || {
                     for (j, rows) in chunk.chunks_mut(band).enumerate() {
                         for l in layers {
-                            composite_band(rows, w, (k * per + j) as i32, &l.pixels, l.opacity);
+                            composite_band(rows, w, (k * per + j) as i32, &l.pixels, l.opacity, l.blend);
                         }
                     }
                 });
@@ -126,7 +129,7 @@ pub fn over(dst: &mut [u8; 4], src: [u8; 4], opacity: u8) {
 
 /// Composites tile row `row` of a layer over `rows`: the canvas pixels of that tile row
 /// (`width` pixels wide, up to 64 rows), one tile at a time so empty areas cost nothing.
-pub fn composite_band(rows: &mut [u8], width: usize, row: i32, layer: &TiledLayer, opacity: u8) {
+pub fn composite_band(rows: &mut [u8], width: usize, row: i32, layer: &TiledLayer, opacity: u8, mode: BlendMode) {
     let height = rows.len() / (width * 4);
     let default = (layer.default[3] != 0).then(|| Tile::filled(layer.default));
     for col in 0..width.div_ceil(TILE as usize) {
@@ -142,7 +145,7 @@ pub fn composite_band(rows: &mut [u8], width: usize, row: i32, layer: &TiledLaye
             let start = (ty * width + x0) * 4;
             for (d, s) in rows[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
                 if s[3] != 0 {
-                    over(d, *s, opacity);
+                    blend(d, *s, opacity, mode);
                 }
             }
         }

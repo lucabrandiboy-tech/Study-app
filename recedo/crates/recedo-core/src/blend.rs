@@ -100,6 +100,32 @@ impl BlendMode {
         }
     }
 
+    /// The blend function on 8-bit values. Where Krita's integer version rounds differently
+    /// from the exact formula, Krita's is used.
+    fn f8(self, s: u8, d: u8) -> u8 {
+        let div = |a: u8, b: u8| ((a as u32 * 255 + b as u32 / 2) / b as u32).min(255) as u8;
+        match self {
+            BlendMode::Exclusion => (s as i32 + d as i32 - 2 * crate::doc::mul8(s, d) as i32).clamp(0, 255) as u8,
+            BlendMode::Divide => {
+                if s == 0 {
+                    if d == 0 { 0 } else { 255 }
+                } else {
+                    div(d, s)
+                }
+            }
+            BlendMode::ColorBurn => {
+                if d == 255 {
+                    255
+                } else if s < 255 - d {
+                    0
+                } else {
+                    255 - div(255 - d, s)
+                }
+            }
+            _ => (self.f(s as f32 / 255.0, d as f32 / 255.0) * 255.0).round() as u8,
+        }
+    }
+
     /// The blend function on one channel, 0..=1 (`s` = this layer, `d` = below).
     fn f(self, s: f32, d: f32) -> f32 {
         let hard_light = |s: f32, d: f32| if s > 0.5 { let s2 = 2.0 * s - 1.0; s2 + d - s2 * d } else { 2.0 * s * d };
@@ -153,26 +179,37 @@ impl BlendMode {
     }
 }
 
+/// `a * b * c / 255²`, rounded, as Krita computes it for 8-bit channels (`UINT8_MULT3`).
+#[inline]
+fn mul3(a: u8, b: u8, c: u8) -> u32 {
+    let t = a as u32 * b as u32 * c as u32 + 0x7F5B;
+    ((t >> 7) + t) >> 16
+}
+
 /// Composites `src` (this layer's pixel, straight alpha) over `dst` with `opacity` using
-/// `mode`. Normal uses Krita's exact 8-bit arithmetic ([`crate::doc::over`]).
+/// `mode`, with Krita's 8-bit integer arithmetic (`KoCompositeOpGenericSC`), so results
+/// match Krita's, including its rounding on nearly transparent pixels.
 #[inline]
 pub fn blend(dst: &mut [u8; 4], src: [u8; 4], opacity: u8, mode: BlendMode) {
     if mode == BlendMode::Normal {
         crate::doc::over(dst, src, opacity);
         return;
     }
-    let sa = crate::doc::mul8(src[3], opacity) as f32 / 255.0;
-    if sa == 0.0 {
+    let sa = crate::doc::mul8(src[3], opacity);
+    if sa == 0 {
         return;
     }
-    let da = dst[3] as f32 / 255.0;
-    let a = sa + da - sa * da;
-    for c in 0..3 {
-        let (s, d) = (src[c] as f32 / 255.0, dst[c] as f32 / 255.0);
-        let v = (s * sa * (1.0 - da) + d * da * (1.0 - sa) + mode.f(s, d) * sa * da) / a;
-        dst[c] = (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    let da = dst[3];
+    let na = sa as u32 + da as u32 - crate::doc::mul8(sa, da) as u32;
+    if na == 0 {
+        return;
     }
-    dst[3] = (a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+    for c in 0..3 {
+        let f = mode.f8(src[c], dst[c]);
+        let mixed = mul3(255 - sa, da, dst[c]) + mul3(255 - da, sa, src[c]) + mul3(sa, da, f);
+        dst[c] = ((mixed * 255 + na / 2) / na).min(255) as u8;
+    }
+    dst[3] = na.min(255) as u8;
 }
 
 #[cfg(test)]

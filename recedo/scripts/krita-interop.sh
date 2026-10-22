@@ -3,6 +3,8 @@
 #  1. Recedo writes a painting, Krita flattens it to PNG: it must match Recedo's flattening.
 #  2. Krita re-saves Recedo's file as .kra: Recedo must read back the same layers
 #     (names, visibility, opacity, lock) and the same pixels.
+#  3. Every blend mode: Krita's flattening of a two-layer file using it must match
+#     Recedo's within 1/255 per channel (Krita 5.2.2: identical).
 # Needs `krita` on PATH (Linux: apt install krita). Uses Xvfb if there is no display.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,4 +33,12 @@ krita_export "$OUT/recedo.kra" "$OUT/krita.png"
 echo "2. Krita re-saves recedo.kra; Recedo reads it back"
 krita_export "$OUT/recedo.kra" "$OUT/krita-resaved.kra"
 "$TOOL" same "$OUT/recedo.kra" "$OUT/krita-resaved.kra"
+echo "3. Blend modes: Recedo writes one file per mode; Krita flattens each"
+for mode in $("$TOOL" modes); do
+  "$TOOL" blend-sample "$mode" "$OUT/blend-$mode.kra"
+  "$TOOL" flatten "$OUT/blend-$mode.kra" "$OUT/blend-$mode-recedo.png" 2>/dev/null
+  krita_export "$OUT/blend-$mode.kra" "$OUT/blend-$mode-krita.png"
+  printf '%-14s' "$mode"
+  "$TOOL" diff "$OUT/blend-$mode-recedo.png" "$OUT/blend-$mode-krita.png" 1
+done
 echo "Krita interop OK ($(krita --version 2>/dev/null | tail -n 1))"

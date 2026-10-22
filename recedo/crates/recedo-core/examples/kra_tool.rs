@@ -5,6 +5,8 @@
 //!   kra_tool flatten <in.kra> <out.png>     flatten a .kra the way Recedo does
 //!   kra_tool same <a.kra> <b.kra>           do two files hold the same layers and pixels?
 //!   kra_tool diff <a.png> <b.png> <max>     are two pictures within <max> per channel?
+//!   kra_tool modes                          list the blend modes' Krita ids
+//!   kra_tool blend-sample <mode> <out.kra>  two layers, the top one using that blend mode
 //!   kra_tool brushes <out.kra>              strokes with each brush mode, to look at
 //!   kra_tool bench <dir> [layers]           time saving, opening, flattening a 3840 x 2160 painting
 //!                                           (painted layers + background, default 5 + 1)
@@ -107,6 +109,32 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             println!("  largest channel difference: {worst}");
             if worst > max { Err(format!("pictures differ by up to {worst}")) } else { Ok(()) }
+        }
+        ["modes"] => {
+            for m in recedo_core::blend::BlendMode::ALL {
+                println!("{}", m.krita_id());
+            }
+            Ok(())
+        }
+        ["blend-sample", mode, out] => {
+            let mode = recedo_core::blend::BlendMode::from_krita_id(mode).ok_or("unknown blend mode")?;
+            let mut doc = Document::new(64, 64, None);
+            doc.layers[0].name = "Bottom".into();
+            let mut top = Layer::new("Top");
+            top.blend = mode;
+            top.opacity = 230;
+            for y in 0..64u32 {
+                for x in 0..64u32 {
+                    // Bottom: gradients; the last 8 columns transparent, the last 8 rows half.
+                    let ba = if x >= 56 { 0 } else if y >= 56 { 128 } else { 255 };
+                    doc.layers[0].pixels.set_pixel(x as i32, y as i32, [(x * 4) as u8, (y * 4) as u8, (255 - x * 2) as u8, ba]);
+                    // Top: other gradients, alpha falling off on the right half.
+                    let ta = if x < 32 { 255 } else { (255 - (x - 32) * 8) as u8 };
+                    top.pixels.set_pixel(x as i32, y as i32, [(y * 4) as u8, (255 - y * 3) as u8, (x * 3 + y) as u8, ta]);
+                }
+            }
+            doc.layers.push(top);
+            kra::save_file(&doc, Path::new(out))
         }
         ["brushes", out] => {
             use recedo_core::brush::{Brush, PaintMode, StrokePainter};

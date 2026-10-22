@@ -99,7 +99,7 @@ PARTIAL ("engine only") until they are usable in the app.
 | 15 layers at 4K comfortably | PARTIAL: engine benchmark below (15 fully painted 4K layers: flatten 0.26 s, undo snapshot 1.1 ms, save 1.7 s, open 1.4 s, about 500 MB of tiles); not yet in an app |
 | Paint, group, filter and text layers | NOT STARTED |
 | Opacity, visibility, lock, alpha lock, rename, drag to reorder, duplicate, merge down, merge selected, flatten | PARTIAL: engine only: opacity, visibility, lock, rename, add, delete, move, duplicate, merge down (picture unchanged, tested), clear, flatten. No alpha lock or merge selected yet; no panel |
-| Full Krita blend mode set | NOT STARTED |
+| Full Krita blend mode set | PARTIAL: engine only: 16 of Krita's modes (Normal, Multiply, Screen, Overlay, Hard Light, Soft Light (Photoshop), Color Dodge, Color Burn, Linear Dodge, Linear Burn, Darken, Lighten, Difference, Exclusion, Subtract, Divide) with Krita's 8-bit arithmetic; read from and written to `.kra`. Real Krita 5.2.2 flattens a two-layer file for each mode with **0** difference from Recedo (`scripts/krita-interop.sh`, on CI). Krita has about 100 modes; the rest (HSL modes, etc.) are not started |
 | Clipping masks, transparency masks, selection masks | NOT STARTED |
 | Layer panel: thumbnails, colour labels, multi-select | NOT STARTED |
 
@@ -171,7 +171,7 @@ PARTIAL ("engine only") until they are usable in the app.
 
 | Feature | Status | Phase |
 |---|---|---|
-| Native format compatible with Krita `.kra` (opens in Krita; Krita files open in Recedo, with warnings for unsupported parts) | PARTIAL (basic level done): 8-bit RGBA paint layers with name, visibility, opacity, lock, position. Checked against the real Krita 5.2.2 both ways (`scripts/krita-interop.sh`, also on CI): Krita's flattening of a Recedo file differs by 0; Krita re-saves it and Recedo reads the same layers and pixels; Krita-made files open with pixels identical to Krita's own. Groups open flattened into a list; vector/filter/fill/file/clone layers, masks, blend modes and other colour depths are listed in plain words and left out | 1 basic, 4 full, 9 animation |
+| Native format compatible with Krita `.kra` (opens in Krita; Krita files open in Recedo, with warnings for unsupported parts) | PARTIAL (basic level done): 8-bit RGBA paint layers with name, visibility, opacity, lock, position. Checked against the real Krita 5.2.2 both ways (`scripts/krita-interop.sh`, also on CI): Krita's flattening of a Recedo file differs by 0; Krita re-saves it and Recedo reads the same layers and pixels; Krita-made files open with pixels identical to Krita's own. Groups open flattened into a list; vector/filter/fill/file/clone layers, masks, blend modes Recedo lacks and other colour depths are listed in plain words and left out (shown as Normal for unknown blend modes) | 1 basic, 4 full, 9 animation |
 | Save (Ctrl+S), Save As | PARTIAL: engine only: safe save (written to a `.part` file, renamed over the old file only when complete) | 1 |
 | Autosave to a separate recovery file, crash recovery, interval setting | PARTIAL: engine only (`autosave.rs`: timing, background save from a snapshot, recovery files found at start-up; tested). No app yet | 1 |
 | Open PNG, JPG, `.kra` | PARTIAL: engine only: opens all three, recognised by content (`import.rs`; JPG grey/RGB/CMYK, tested). JPG photo rotation (EXIF) is not applied yet | 1 |

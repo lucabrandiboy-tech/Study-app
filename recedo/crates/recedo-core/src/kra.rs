@@ -29,6 +29,7 @@ use quick_xml::{Reader, XmlVersion};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::blend::BlendMode;
 use crate::doc::{Document, Layer, MAX_SIDE, new_uuid};
 use crate::image;
 use crate::lzf;
@@ -155,8 +156,9 @@ fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity
             ctx.warn(format!("Masks on layer \"{name}\" were left out."));
         }
         let op = el.attr("compositeop").unwrap_or("normal");
-        if op != "normal" && nodetype != "grouplayer" {
-            ctx.warn(format!("Layer \"{name}\" uses the blend mode \"{op}\"; it is shown as Normal."));
+        let mode = BlendMode::from_krita_id(op);
+        if mode.is_none() && nodetype != "grouplayer" {
+            ctx.warn(format!("Layer \"{name}\" uses the blend mode \"{op}\", which Recedo does not have yet; it is shown as Normal."));
         }
         match nodetype {
             "paintlayer" => match read_paint_layer(ctx, el) {
@@ -165,6 +167,7 @@ fn read_layers<R: Read + Seek>(ctx: &mut Ctx<'_, R>, node: &Node, parent_opacity
                     visible,
                     opacity,
                     locked: el.attr("locked").is_some_and(|v| v.trim() == "1"),
+                    blend: mode.unwrap_or_default(),
                     uuid: el.attr("uuid").map_or_else(new_uuid, String::from),
                     pixels,
                 }),
@@ -415,13 +418,14 @@ fn maindoc_xml(doc: &Document) -> String {
     s.push_str("  <layers>\n");
     for (i, l) in doc.layers.iter().enumerate().rev() {
         s.push_str(&format!(
-            "   <layer nodetype=\"paintlayer\" name=\"{}\" filename=\"{}\" uuid=\"{}\" visible=\"{}\" opacity=\"{}\" locked=\"{}\" compositeop=\"normal\" colorspacename=\"RGBA\" x=\"0\" y=\"0\" collapsed=\"0\" colorlabel=\"0\" channelflags=\"\" channellockflags=\"\" intimeline=\"0\" onionskin=\"0\"/>\n",
+            "   <layer nodetype=\"paintlayer\" name=\"{}\" filename=\"{}\" uuid=\"{}\" visible=\"{}\" opacity=\"{}\" locked=\"{}\" compositeop=\"{}\" colorspacename=\"RGBA\" x=\"0\" y=\"0\" collapsed=\"0\" colorlabel=\"0\" channelflags=\"\" channellockflags=\"\" intimeline=\"0\" onionskin=\"0\"/>\n",
             escape(l.name.as_str()),
             layer_file(i),
             escape(l.uuid.as_str()),
             u8::from(l.visible),
             l.opacity,
             u8::from(l.locked),
+            l.blend.krita_id(),
         ));
     }
     s.push_str("  </layers>\n");
@@ -683,7 +687,7 @@ mod tests {
  <layer nodetype="shapelayer" name="Lines" filename="layer9"/>
  <layer nodetype="grouplayer" name="G" opacity="128" visible="1" compositeop="multiply">
   <layers>
-   <layer nodetype="paintlayer" name="Inside" filename="layer3" opacity="255" compositeop="screen" colorspacename="RGBA">
+   <layer nodetype="paintlayer" name="Inside" filename="layer3" opacity="255" compositeop="hue" colorspacename="RGBA">
     <masks><mask nodetype="transparencymask" name="m"/></masks>
    </layer>
   </layers>
@@ -700,7 +704,7 @@ mod tests {
         assert_eq!(inside.pixels.pixel(1, 1), [255, 0, 0, 255]);
         assert_eq!(l.doc.dpi, 100.0);
         let all = l.warnings.join("\n");
-        for needle in ["Rec2020", "Lines", "vector layer", "groups", "\"G\"", "multiply", "Masks on layer \"Inside\"", "screen", "Deep", "RGBA16", "Gone"] {
+        for needle in ["Rec2020", "Lines", "vector layer", "groups", "\"G\"", "multiply", "Masks on layer \"Inside\"", "\"hue\"", "Deep", "RGBA16", "Gone"] {
             assert!(all.contains(needle), "missing {needle:?} in:\n{all}");
         }
     }

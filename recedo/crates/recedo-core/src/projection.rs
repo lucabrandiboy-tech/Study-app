@@ -3,7 +3,8 @@
 
 use std::collections::HashSet;
 
-use crate::doc::{Document, over};
+use crate::blend::blend;
+use crate::doc::Document;
 use crate::image::Rgba8;
 use crate::tiles::{TILE, TileKey};
 
@@ -60,7 +61,7 @@ impl Projection {
                     for (i, d) in dst.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                         let s = tile.map_or(l.pixels.default, |t| t.get(i as i32, row as i32));
                         if s[3] != 0 {
-                            over(d, s, l.opacity);
+                            blend(d, s, l.opacity, l.blend);
                         }
                     }
                 }

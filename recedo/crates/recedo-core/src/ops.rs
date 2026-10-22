@@ -3,7 +3,8 @@
 
 use std::collections::HashSet;
 
-use crate::doc::{Document, Layer, mul8, new_uuid, over};
+use crate::blend::{BlendMode, blend};
+use crate::doc::{Document, Layer, mul8, new_uuid};
 use crate::tiles::{Tile, TiledLayer};
 
 /// Adds an empty layer above `index` (or at the bottom of an empty document); returns its index.
@@ -48,8 +49,11 @@ pub fn move_layer(doc: &mut Document, index: usize, up: bool) -> Result<usize, S
     Ok(to)
 }
 
-/// Merges a layer into the one below it, keeping the picture exactly as it looked: both
-/// opacities are baked in and the result has full opacity. Returns the merged layer's index.
+/// Merges a layer into the one below it: both opacities and the upper layer's blend mode
+/// are baked in, and the result is a Normal layer at full opacity. The picture stays exactly
+/// the same when the upper layer is Normal (or the lower layer is opaque under it). A lower
+/// layer with a blend mode other than Normal is refused, as the result could not keep it.
+/// Returns the merged layer's index.
 pub fn merge_down(doc: &mut Document, index: usize) -> Result<usize, String> {
     if index == 0 || index >= doc.layers.len() {
         return Err("There is no layer below to merge into".into());
@@ -58,9 +62,12 @@ pub fn merge_down(doc: &mut Document, index: usize) -> Result<usize, String> {
     if !upper.visible || !lower.visible {
         return Err("Show both layers before merging them".into());
     }
+    if lower.blend != BlendMode::Normal {
+        return Err(format!("Set \"{}\" to the Normal blend mode before merging into it", lower.name));
+    }
     let bake = |px: [u8; 4], op: u8| [px[0], px[1], px[2], mul8(px[3], op)];
     let mut default = bake(lower.pixels.default, lower.opacity);
-    over(&mut default, upper.pixels.default, upper.opacity);
+    blend(&mut default, upper.pixels.default, upper.opacity, upper.blend);
     let mut merged = TiledLayer::filled(default);
     let keys: HashSet<_> = lower.pixels.tile_keys().chain(upper.pixels.tile_keys()).collect();
     let (lo_def, up_def) = (Tile::filled(lower.pixels.default), Tile::filled(upper.pixels.default));
@@ -70,12 +77,12 @@ pub fn merge_down(doc: &mut Document, index: usize) -> Result<usize, String> {
         let out = merged.tile_mut(k);
         for ((o, l), u) in out.0.as_chunks_mut::<4>().0.iter_mut().zip(lo.0.as_chunks::<4>().0).zip(up.0.as_chunks::<4>().0) {
             let mut p = bake(*l, lower.opacity);
-            over(&mut p, *u, upper.opacity);
+            blend(&mut p, *u, upper.opacity, upper.blend);
             *o = p;
         }
     }
     merged.compact();
-    let result = Layer { name: lower.name.clone(), visible: true, opacity: 255, locked: lower.locked, uuid: lower.uuid.clone(), pixels: merged };
+    let result = Layer { name: lower.name.clone(), visible: true, opacity: 255, locked: lower.locked, blend: BlendMode::Normal, uuid: lower.uuid.clone(), pixels: merged };
     doc.layers[index - 1] = result;
     doc.layers.remove(index);
     Ok(index - 1)
@@ -111,7 +118,7 @@ pub fn pick_color(doc: &Document, layer: Option<usize>, x: f64, y: f64, radius: 
                 None => {
                     let mut p = [0u8; 4];
                     for l in doc.layers.iter().filter(|l| l.visible) {
-                        over(&mut p, l.pixels.pixel(px, py), l.opacity);
+                        blend(&mut p, l.pixels.pixel(px, py), l.opacity, l.blend);
                     }
                     p
                 }
@@ -134,6 +141,7 @@ pub fn pick_color(doc: &Document, layer: Option<usize>, x: f64, y: f64, radius: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::doc::over;
 
     fn doc3() -> Document {
         let mut d = Document::new(128, 64, Some([255, 255, 255, 255]));
@@ -192,6 +200,21 @@ mod tests {
         let mut hidden = doc3();
         hidden.layers[2].visible = false;
         assert!(merge_down(&mut hidden, 2).is_err());
+    }
+
+    #[test]
+    fn merge_down_with_a_blend_mode() {
+        let mut d = doc3();
+        d.layers[2].blend = BlendMode::Multiply;
+        d.layers[2].pixels.set_pixel(50, 50, [128, 128, 128, 255]);
+        d.layers[1].pixels.set_pixel(50, 50, [200, 100, 0, 255]);
+        let before = d.flatten();
+        merge_down(&mut d, 2).unwrap();
+        assert_eq!(d.layers[1].blend, BlendMode::Normal);
+        assert_eq!(d.flatten().pixel(50, 50), before.pixel(50, 50), "opaque lower layer: unchanged");
+        let mut e = doc3();
+        e.layers[1].blend = BlendMode::Screen;
+        assert!(merge_down(&mut e, 2).unwrap_err().contains("Normal"));
     }
 
     #[test]
