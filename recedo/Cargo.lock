@@ -993,6 +993,7 @@ dependencies = [
  "png",
  "quick-xml",
  "serde",
+ "serde_json",
  "zip",
 ]
 
