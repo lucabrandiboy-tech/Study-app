@@ -21,6 +21,7 @@ Unicode-3.0, or a choice among these), all compatible with the GPL. Run
 | zip, flate2, miniz_oxide, quick-xml (Krita `.kra` files) | MIT / Apache-2.0 / Zlib |
 | zopfli (part of zip's deflate support) | Apache-2.0 |
 | jpeg-encoder (JPG export) | (MIT OR Apache-2.0) AND IJG, see below |
+| jpeg-decoder (opening JPG) | MIT OR Apache-2.0 |
 | self_cell (used by the UI's text shaping) | Apache-2.0 OR GPL-2.0-only, used under Apache-2.0 |
 
 JPG export: this software is based in part on the work of the Independent JPEG Group

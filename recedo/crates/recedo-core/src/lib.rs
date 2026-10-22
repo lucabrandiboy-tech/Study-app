@@ -9,6 +9,7 @@ pub mod dab;
 pub mod doc;
 pub mod history;
 pub mod image;
+pub mod import;
 pub mod kra;
 pub mod lzf;
 pub mod ops;
