@@ -63,7 +63,7 @@ PARTIAL ("engine only") until they are usable in the app.
 | Full brush editor (tip shape, size, opacity, flow, hardness, spacing, angle, roundness, rotation, scatter, texture, colour dynamics, blend mode, sensor curves for pressure/tilt/speed/random) | NOT STARTED |
 | Colour smudge engine (smearing, dulling, smudge length, colour rate) | NOT STARTED |
 | Built-in paper and canvas textures | NOT STARTED |
-| Brush size up to 1000 px | PARTIAL: engine dabs up to 20000 px; a 500 px soft dab takes 3 ms on one core, so big brushes need the multi-core painter planned for Phase 2 |
+| Brush size up to 1000 px | PARTIAL: engine dabs up to 20000 px, big ones painted on all cores (500 px soft dab: 2.4–2.8 ms on this 4-core container). Whether 1000 px feels lag-free needs the real PC |
 | Brush outline cursor at true size and shape, follows zoom and rotation | NOT STARTED |
 | Each preset remembers its size, opacity and settings | NOT STARTED |
 | Brush library with tags and favourites; save, rename, duplicate, delete | NOT STARTED |
@@ -96,7 +96,7 @@ PARTIAL ("engine only") until they are usable in the app.
 
 | Feature | Status |
 |---|---|
-| 15 layers at 4K comfortably | PARTIAL: engine benchmark below (15 fully painted 4K layers: flatten 0.26 s, undo snapshot 1.1 ms, save 1.7 s, open 1.4 s, about 500 MB of tiles); not yet in an app |
+| 15 layers at 4K comfortably | PARTIAL: engine benchmark below (15 fully painted 4K layers: flatten 0.26–0.57 s, undo snapshot 1.1 ms, save 1.7–2.1 s, open 1.2–1.4 s, about 500 MB of tiles); not yet in an app |
 | Paint, group, filter and text layers | NOT STARTED |
 | Opacity, visibility, lock, alpha lock, rename, drag to reorder, duplicate, merge down, merge selected, flatten | PARTIAL: engine only: opacity, visibility, lock, rename, add, delete, move, duplicate, merge down (picture unchanged, tested), clear, flatten. No alpha lock or merge selected yet; no panel |
 | Full Krita blend mode set | PARTIAL: engine only: 16 of Krita's modes (Normal, Multiply, Screen, Overlay, Hard Light, Soft Light (Photoshop), Color Dodge, Color Burn, Linear Dodge, Linear Burn, Darken, Lighten, Difference, Exclusion, Subtract, Divide) with Krita's 8-bit arithmetic; read from and written to `.kra`. Real Krita 5.2.2 flattens a two-layer file for each mode with **0** difference from Recedo (`scripts/krita-interop.sh`, on CI). Krita has about 100 modes; the rest (HSL modes, etc.) are not started |
@@ -228,8 +228,8 @@ here after every phase.
 | Target | Measured |
 |---|---|
 | All performance targets in the app | Not measured yet: the Recedo app does not exist yet |
-| Engine, 3840×2160, 15 fully painted layers (worst case: noise everywhere), 4-core container | Flatten 0.26 s; undo snapshot 1.1 ms; save 1.7 s (155 MB file); open 1.4 s. `cargo run --release -p recedo-core --example kra_tool -- bench <dir> 14` |
+| Engine, 3840×2160, 15 fully painted layers (worst case: noise everywhere), 4-core container | Flatten 0.26–0.57 s; undo snapshot 1.1 ms; save 1.7–2.1 s (155 MB file); open 1.2–1.4 s. `cargo run --release -p recedo-core --example kra_tool -- bench <dir> 14` |
 | Engine, 3840×2160, 6 layers | Flatten 0.18–0.22 s; save 0.85 s (62 MB); open 0.5 s |
-| Engine, one soft dab (CPU) | 10 px: 2.6 µs; 100 px: 0.14 ms; 500 px: 3.1 ms |
+| Engine, one soft dab (CPU) | 10 px: 2.6 µs; 100 px: 0.14–0.25 ms; 500 px: 2.4–2.8 ms on 4 cores (3.1–6 ms on one). This container is shared, so timings varied by up to 2× between runs |
 | Tablet sample rate on the Artist 12 (both APIs) | Waiting for the user's report |
 | Pen-to-screen time in the test app | Waiting for the user's report (shown in the panel) |
