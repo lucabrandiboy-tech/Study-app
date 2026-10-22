@@ -82,6 +82,17 @@ the end collects them for me.
 18. **Paste the report into the chat** (Ctrl+V). If you can, also attach the two files it
     saved: they are in your **Documents\Recedo** folder (**Open folder** opens it).
 
+## Optional extras (only if you have time)
+
+19. **Stabilizer preview:** open **Stabilizer (Phase 1 preview)**, tick **Use the
+    stabilizer**, and draw a slow wobbly line. *Expected:* the line comes out smoother and
+    trails a little behind the pen, then catches up when you lift it. With **Delay** ticked,
+    a blue circle around the pen and a line to the brush show while you draw (like Krita).
+    Say whether it feels like Krita's stabilizer at a similar distance.
+20. **Save drawing:** click **Save drawing (.kra for Krita + .png)**. If Krita is installed,
+    open the `.kra` from **Documents\Recedo** in Krita. *Expected:* it opens without
+    complaint and looks exactly like the canvas.
+
 ## What I need from you
 
 * Did **pressure** work with **Windows Ink**? With **Wintab**?
@@ -89,5 +100,6 @@ the end collects them for me.
 * Anything that looked wrong, in your own words (a screenshot helps).
 * The pasted report.
 
-When pressure and tilt work through both, say **go** and I'll start Phase 1 (the real
-canvas: brush with the stabilizer, layers, undo, saving `.kra` files).
+When pressure and tilt work through both, say **go** and I'll start Phase 1: the Recedo app
+itself (window, canvas, brush with the stabilizer, layers, undo, saving `.kra` files). Its
+engine was already started and tested while you slept; the app around it is next.

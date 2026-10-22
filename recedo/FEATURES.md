@@ -8,8 +8,15 @@ Every feature in the spec, with one status:
 * **NEEDS HARDWARE CHECK**: done and tested without the real tablet; needs the user's pen.
 * **NOT STARTED**: nothing yet. Never shown in the app as if it worked.
 
-Current phase: **0 (foundation and proof)**. Last updated at the end of the Phase 0 work.
+Current phase: **0 (foundation and proof), waiting for the user's pen check.** At the user's
+request ("get as much done as possible") work on the Phase 1 *engine* started early: the
+parts that do not depend on the pen results (tiles, brush, layers, undo, `.kra`, display).
+They live in `crates/recedo-core` and `crates/recedo-render` and are tested there, but the
+Recedo app itself (its window, panels and tools) is **not built yet**, so they are marked
+PARTIAL ("engine only") until they are usable in the app.
+
 "Test app" means the Phase 0 tablet test program (`recedo-tablet-test.exe`), not Recedo itself.
+"Engine only" means: implemented and tested in the engine, not yet reachable from an app.
 
 ## Phase 0 deliverables
 
@@ -25,14 +32,16 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 | Display scaling 125% / 150%, crisp UI | NEEDS HARDWARE CHECK | Per-monitor DPI awareness v2; panel rendered at the monitor's real pixel density; layout unit-tested at 150%. Only seen at 100% so far. |
 | Manual checklist for the user | WORKING | `PHASE0_CHECKLIST.md` (also in the download as `READ ME FIRST.txt`). |
 | Portable .exe | NEEDS HARDWARE CHECK | Self-contained, needs only Windows' own DLLs. Runs under Wine and on Windows CI. |
+| Test app extra: stabilizer preview | NEEDS HARDWARE CHECK | Krita's stabilizer (engine version) on the test brush, with Krita's delay leash. Self-test stroke through the live app (Wine and Windows CI); GPU test: a shaky line drawn ≥10 rows thick raw, ≤6 stabilized. |
+| Test app extra: Save drawing (.kra for Krita + .png) | WORKING | Self-test saves the test strokes and reads the `.kra` back identical to the canvas (Wine, and real Windows on CI). Krita 5.2.2 exports that file with no pixel difference from the PNG. |
 
 ## Tablet and input
 
 | Feature | Status | Notes |
 |---|---|---|
-| Pressure controls size and opacity, per brush | PARTIAL | Test app brush only (pressure→size, pressure→opacity switches). Per-brush settings: Phase 2. |
-| Tilt used by brushes | PARTIAL | Test app brush stretches with tilt. Real brushes: Phase 2. |
-| Pressure curve editor, global + per brush | NOT STARTED | Phase 2. |
+| Pressure controls size and opacity, per brush | PARTIAL | Test app brush: pressure→size, pressure→opacity switches. Engine only: each brush has pressure→size, →opacity and →flow curves (`brush.rs`, tested). |
+| Tilt used by brushes | PARTIAL | Test app brush stretches with tilt; engine brush has the same option (tested). Real brush engine options: Phase 2. |
+| Pressure curve editor, global + per brush | PARTIAL | Engine only: Krita-style curves (control points, smooth, never overshoot; `curve.rs`, tested). No editor window yet (Phase 2). |
 | Switch between Wintab and Windows Ink | NEEDS HARDWARE CHECK | Test app switches live. Recedo settings: Phase 1/7. |
 | Pen side buttons customisable | NOT STARTED | Phase 2. The test app shows what the buttons report. |
 | Eraser end switches to the eraser | NEEDS HARDWARE CHECK | Test app erases with the eraser end (GPU test with synthetic eraser samples). The Artist 12's pen may have no eraser end. |
@@ -42,8 +51,8 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 
 | Feature | Status | Notes |
 |---|---|---|
-| Krita-style stabilizer: distance, delay, finish line, smooth pressure | NOT STARTED | Phase 1. |
-| Off setting with shortcut and tool-option toggle | NOT STARTED | Phase 1. |
+| Krita-style stabilizer: distance, delay, finish line, smooth pressure | NEEDS HARDWARE CHECK | Re-implemented from Krita's algorithm (`stabilizer.rs`: per-millisecond resampling, moving average, delay dead zone, finish line, stabilized sensors, zoom-scaled distance; 15 tests). Usable now in the test app ("Stabilizer (Phase 1 preview)"); how it feels needs the pen. |
+| Off setting with shortcut and tool-option toggle | PARTIAL | Test app checkbox. Shortcut and tool options: with the Recedo app. |
 | Basic and weighted modes | NOT STARTED | Phase 1 (extras). |
 
 ## Brushes (Phase 2 unless noted)
@@ -54,7 +63,7 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 | Full brush editor (tip shape, size, opacity, flow, hardness, spacing, angle, roundness, rotation, scatter, texture, colour dynamics, blend mode, sensor curves for pressure/tilt/speed/random) | NOT STARTED |
 | Colour smudge engine (smearing, dulling, smudge length, colour rate) | NOT STARTED |
 | Built-in paper and canvas textures | NOT STARTED |
-| Brush size up to 1000 px | NOT STARTED |
+| Brush size up to 1000 px | PARTIAL: engine dabs up to 20000 px; a 500 px soft dab takes 3 ms on one core, so big brushes need the multi-core painter planned for Phase 2 |
 | Brush outline cursor at true size and shape, follows zoom and rotation | NOT STARTED |
 | Each preset remembers its size, opacity and settings | NOT STARTED |
 | Brush library with tags and favourites; save, rename, duplicate, delete | NOT STARTED |
@@ -67,7 +76,7 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 |---|---|
 | Colour wheel with triangle/square, HSV and RGB sliders, hex input | NOT STARTED |
 | Krita-style Advanced Colour Selector | NOT STARTED |
-| Eyedropper, current layer / all layers, Ctrl quick access | NOT STARTED (basic: Phase 1) |
+| Eyedropper, current layer / all layers, Ctrl quick access | PARTIAL: engine only (`ops::pick_color`, all layers or one, radius average, tested); no tool yet |
 | Palettes: create, edit, save, `.kpl` and `.gpl` import/export | NOT STARTED |
 | Recent colours | NOT STARTED |
 | Harmony helpers (complementary, analogous, triadic, split-complementary, tetradic) | NOT STARTED |
@@ -87,9 +96,9 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 
 | Feature | Status |
 |---|---|
-| 15 layers at 4K comfortably | NOT STARTED |
+| 15 layers at 4K comfortably | PARTIAL: engine benchmark below (15 fully painted 4K layers: flatten 0.26 s, undo snapshot 1.1 ms, save 1.7 s, open 1.4 s, about 500 MB of tiles); not yet in an app |
 | Paint, group, filter and text layers | NOT STARTED |
-| Opacity, visibility, lock, alpha lock, rename, drag to reorder, duplicate, merge down, merge selected, flatten | NOT STARTED |
+| Opacity, visibility, lock, alpha lock, rename, drag to reorder, duplicate, merge down, merge selected, flatten | PARTIAL: engine only: opacity, visibility, lock, rename, add, delete, move, duplicate, merge down (picture unchanged, tested), clear, flatten. No alpha lock or merge selected yet; no panel |
 | Full Krita blend mode set | NOT STARTED |
 | Clipping masks, transparency masks, selection masks | NOT STARTED |
 | Layer panel: thumbnails, colour labels, multi-select | NOT STARTED |
@@ -142,12 +151,12 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 
 | Feature | Status | Phase |
 |---|---|---|
-| Space+drag pan, wheel/middle-button zoom, remappable | NOT STARTED | 1 (remapping: 7) |
-| Free rotation, reset rotation | NOT STARTED | 1 |
-| Mirror view with M | NOT STARTED | 1 |
+| Space+drag pan, wheel/middle-button zoom, remappable | PARTIAL: engine only (`view.rs`: pan, zoom about the cursor, Krita's zoom steps; `recedo-render` draws it, GPU-tested). No input bindings yet | 1 (remapping: 7) |
+| Free rotation, reset rotation | PARTIAL: engine only (rotate about the cursor, reset; GPU-tested) | 1 |
+| Mirror view with M | PARTIAL: engine only (mirror about the cursor; GPU-tested) | 1 |
 | Navigator / minimap | NOT STARTED | 7 |
 | Second view of the same canvas | NOT STARTED | 7 |
-| Smooth zoom, pixel grid at high zoom | NOT STARTED | 1 |
+| Smooth zoom, pixel grid at high zoom | PARTIAL: mipmaps when zoomed out (fine detail averages instead of shimmering), sharp pixels from 200 % (GPU-tested). No pixel grid yet | 1 |
 | New canvas dialog: presets (3840×2160, 1280×720, …), custom size/DPI, background, depth, custom presets | NOT STARTED | 1 |
 | Canvas resize, image resize, crop | NOT STARTED | not assigned by the spec; proposed for 5 |
 
@@ -155,19 +164,19 @@ Current phase: **0 (foundation and proof)**. Last updated at the end of the Phas
 
 | Feature | Status |
 |---|---|
-| 50 undo steps (configurable), tiled so undo only stores changed tiles | NOT STARTED |
-| History panel, click to jump | NOT STARTED |
+| 50 undo steps (configurable), tiled so undo only stores changed tiles | PARTIAL: engine only (`history.rs`: tiles shared between steps, a stroke copies only the tiles it touches; 1.1 ms per step for 15 4K layers; tested) |
+| History panel, click to jump | PARTIAL: engine only (list of steps, jump to any; tested). No panel |
 
 ## Files
 
 | Feature | Status | Phase |
 |---|---|---|
-| Native format compatible with Krita `.kra` (opens in Krita; Krita files open in Recedo, with warnings for unsupported parts) | NOT STARTED | 1 basic, 4 full, 9 animation |
-| Save (Ctrl+S), Save As | NOT STARTED | 1 |
-| Autosave to a separate recovery file, crash recovery, interval setting | NOT STARTED | 1 |
-| Open PNG, JPG, `.kra` | NOT STARTED | 1 |
+| Native format compatible with Krita `.kra` (opens in Krita; Krita files open in Recedo, with warnings for unsupported parts) | PARTIAL (basic level done): 8-bit RGBA paint layers with name, visibility, opacity, lock, position. Checked against the real Krita 5.2.2 both ways (`scripts/krita-interop.sh`, also on CI): Krita's flattening of a Recedo file differs by 0; Krita re-saves it and Recedo reads the same layers and pixels; Krita-made files open with pixels identical to Krita's own. Groups open flattened into a list; vector/filter/fill/file/clone layers, masks, blend modes and other colour depths are listed in plain words and left out | 1 basic, 4 full, 9 animation |
+| Save (Ctrl+S), Save As | PARTIAL: engine only: safe save (written to a `.part` file, renamed over the old file only when complete) | 1 |
+| Autosave to a separate recovery file, crash recovery, interval setting | PARTIAL: engine only (`autosave.rs`: timing, background save from a snapshot, recovery files found at start-up; tested). No app yet | 1 |
+| Open PNG, JPG, `.kra` | PARTIAL: engine opens `.kra` and PNG; JPG opening not written yet | 1 |
 | Open WebP; paste clipboard image as a new layer | NOT STARTED | 8 |
-| Export PNG (transparency), JPG (quality) | NOT STARTED | 1 |
+| Export PNG (transparency), JPG (quality) | PARTIAL: engine only: PNG with transparency; JPG with quality, transparent areas filled with white (like Krita), full colour resolution (decoded again in a test) | 1 |
 | Export PDF | NOT STARTED | 8 |
 | Timelapse recording to MP4 (bundled ffmpeg) | NOT STARTED | 8 |
 
@@ -218,6 +227,9 @@ here after every phase.
 
 | Target | Measured |
 |---|---|
-| All performance targets | Not measured yet: no canvas engine in Phase 0 |
+| All performance targets in the app | Not measured yet: the Recedo app does not exist yet |
+| Engine, 3840×2160, 15 fully painted layers (worst case: noise everywhere), 4-core container | Flatten 0.26 s; undo snapshot 1.1 ms; save 1.7 s (155 MB file); open 1.4 s. `cargo run --release -p recedo-core --example kra_tool -- bench <dir> 14` |
+| Engine, 3840×2160, 6 layers | Flatten 0.18–0.22 s; save 0.85 s (62 MB); open 0.5 s |
+| Engine, one soft dab (CPU) | 10 px: 2.6 µs; 100 px: 0.14 ms; 500 px: 3.1 ms |
 | Tablet sample rate on the Artist 12 (both APIs) | Waiting for the user's report |
 | Pen-to-screen time in the test app | Waiting for the user's report (shown in the panel) |

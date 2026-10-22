@@ -4,9 +4,11 @@ A Krita-style painting app for Windows, built for an XP-Pen Artist 12 pen displa
 The spec is in the conversation that started it; decisions are in
 [`DECISIONS.md`](DECISIONS.md), the status of every feature in [`FEATURES.md`](FEATURES.md).
 
-**Current state: Phase 0.** What exists is the pen tablet test app
-(`recedo-tablet-test.exe`), which proves pressure, tilt and event rate through Wintab and
-Windows Ink. The user's checklist is [`PHASE0_CHECKLIST.md`](PHASE0_CHECKLIST.md).
+**Current state: Phase 0, waiting for the pen check.** What you can run is the pen tablet
+test app (`recedo-tablet-test.exe`), which proves pressure, tilt and event rate through
+Wintab and Windows Ink. The user's checklist is [`PHASE0_CHECKLIST.md`](PHASE0_CHECKLIST.md).
+The Phase 1 engine (tiles, brush, layers, undo, `.kra`, GPU display) has been started early
+in `recedo-core` and `recedo-render`; the Recedo app that uses it is not built yet.
 
 ## Layout
 
@@ -14,9 +16,12 @@ Windows Ink. The user's checklist is [`PHASE0_CHECKLIST.md`](PHASE0_CHECKLIST.md
 |---|---|
 | `crates/recedo-tablet` | Pen input: sample model, Wintab (`wintab.rs`, `wintab_abi.rs`), Windows Ink (`ink.rs`), tilt math, screen-mapping calibration, statistics, CSV recordings. Everything except the two Win32 modules is portable and unit-tested on Linux. |
 | `crates/recedo-tabletest` | The Phase 0 test app: Win32 window and message loop (`src/win/`), wgpu canvas (`gpu.rs`, `shaders.wgsl`), egui panel (`ui.rs`), brush and strokes, report, self-test (`src/win/selftest.rs`). |
+| `crates/recedo-core` | The painting engine, portable and unit-tested: tiles (`tiles.rs`), documents and Krita's compositing (`doc.rs`), brush and dabs (`brush.rs`, `dab.rs`, `curve.rs`), stabilizer, undo (`history.rs`), layer operations and eyedropper (`ops.rs`), view math (`view.rs`), projection, `.kra` files (`kra.rs`, `lzf.rs`), PNG/JPG (`image.rs`), autosave. `examples/kra_tool.rs`: command-line checks and benchmarks. |
+| `crates/recedo-render` | GPU display of the canvas (wgpu): tile uploads, view transform, mipmaps. |
 | `crates/wintab-mock` | Stand-in `Wintab32.dll` for tests. Never shipped. |
 | `scripts/wine-selftest.sh` | Runs the Windows build's self-test under Wine on a virtual screen. |
 | `scripts/package.sh` | Builds the release and the zip handed to the user. |
+| `scripts/krita-interop.sh` | Checks `.kra` files against the real Krita (needs `krita` installed): Recedo writes, Krita reads; Krita re-saves, Recedo reads. |
 | `../.github/workflows/recedo.yml` | CI: lint, tests and cross-compile on Linux; self-test on real Windows. |
 
 ## Build and test (Linux, cross-compiling to Windows)
@@ -32,6 +37,8 @@ RECEDO_REQUIRE_GPU=1 cargo test --workspace                                 # un
 cargo build --release --target x86_64-pc-windows-gnu -p recedo-tabletest -p wintab-mock
 scripts/wine-selftest.sh                                                     # end-to-end under Wine
 scripts/package.sh                                                           # dist/Recedo-TabletTest-Phase0.zip
+scripts/krita-interop.sh                                                     # .kra against real Krita
+cargo run --release -p recedo-core --example kra_tool -- bench /tmp 14       # engine benchmark, 15 4K layers
 ```
 
 `RECEDO_REQUIRE_GPU=1` turns "no GPU available" in the rendering tests from a skip into a
@@ -50,5 +57,5 @@ recedo-tablet-test.exe --replay <in.csv> <out.png>  draw a saved pen recording (
 Environment variables: `RECEDO_GPU_BACKEND=dx12|vulkan|gl` forces a GPU backend,
 `RECEDO_WINTAB_DLL=<path>` loads a different Wintab DLL.
 
-Files the test app writes: settings in `%APPDATA%\Recedo\tablet-test.json`; recordings and
-reports (only when asked) in `Documents\Recedo`.
+Files the test app writes: settings in `%APPDATA%\Recedo\tablet-test.json`; recordings,
+reports and saved drawings (`.kra` + `.png`, only when asked) in `Documents\Recedo`.

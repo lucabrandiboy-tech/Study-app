@@ -102,7 +102,9 @@ What has been verified, and how:
 | Drawing | GPU tests: pressure ramp gives thin→thick, no gaps on fast sparse samples, eraser end erases | pass |
 | **Real XP-Pen Artist 12, both APIs** | **The user's checklist** | **waiting** |
 
-Phase 1 does not start until the user confirms pressure and tilt through both APIs.
+Phase 1 (the Recedo app) does not start until the user confirms pressure and tilt through
+both APIs. At the user's request, engine work that does not depend on those results was done
+early; see section 6.
 
 ## 4. Scope: what is unrealistic or much bigger than it looks
 
@@ -127,7 +129,19 @@ longer than their one line in the spec suggests. Proposals:
 None of this is cut yet; these are the places where approximations are most likely. Any
 cut will be listed in `FEATURES.md` and agreed first.
 
-## 5. Licences
+## 6. Engine decisions (Phase 1 groundwork, done early)
+
+| Decision | Why | Verified by |
+|---|---|---|
+| Pixels live on the CPU in 64×64 tiles (8-bit RGBA, straight alpha); the GPU only shows them | Krita's design. Undo, saving, file I/O and filters work on plain memory; a tile is the unit of change, so a stroke touches a few tiles. GPU painting would make undo and `.kra` saving need read-backs. | Engine tests; benchmark: 10 px dab 2.6 µs, 100 px 0.14 ms |
+| Tiles shared through `Arc`, copied on first write | An undo step is the whole document "as it was", which costs only pointers; a stroke copies just the tiles it paints. One mechanism undoes everything, so there is no per-action undo code to get wrong. | History tests; 1.1 ms per step for 15 4K layers |
+| Compositing uses Krita's own 8-bit arithmetic (rounding included) | So a picture looks the same in Recedo and Krita, and `.kra` files flatten identically. | Krita-made files flatten with 0 difference from Krita's own `mergedimage.png` |
+| Wash painting mode by default (stroke coverage mask, redrawn from the pre-stroke tiles) | A stroke at 50 % stays at 50 % where it crosses itself, which is what Krita's Wash mode does and what artists expect from opacity; Build-up is the other option. | Brush tests (crossings exactly at the opacity) |
+| A projection (flattened picture) kept up to date per changed tile; the GPU draws it with the view transform, mipmaps when zoomed out, sharp pixels from 200 % | Krita's approach; the display cost does not grow with the number of layers. | `recedo-render` GPU tests compare rendered pixels with the view math |
+| `.kra` written in Krita 5.2's own layout (LZF tiles, planar BGRA), mimetype stored first, saved through a `.part` file renamed into place | Krita compatibility; a crash or full disk can never leave a half-written painting. | `scripts/krita-interop.sh` with the real Krita 5.2.2 (CI job) |
+| Things Recedo cannot open yet are listed in plain words, never silently dropped; if nothing can be read, the flattened picture opens as one layer | The spec's "warnings for unsupported parts". | Tests with vector, filter, group, mask, 16-bit and CMYK cases |
+
+## 7. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

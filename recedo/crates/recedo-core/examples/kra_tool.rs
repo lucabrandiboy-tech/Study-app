@@ -6,7 +6,8 @@
 //!   kra_tool same <a.kra> <b.kra>           do two files hold the same layers and pixels?
 //!   kra_tool diff <a.png> <b.png> <max>     are two pictures within <max> per channel?
 //!   kra_tool brushes <out.kra>              strokes with each brush mode, to look at
-//!   kra_tool bench <dir>                    time saving and opening a 3840 x 2160, 6-layer painting
+//!   kra_tool bench <dir> [layers]           time saving, opening, flattening a 3840 x 2160 painting
+//!                                           (painted layers + background, default 5 + 1)
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -137,11 +138,12 @@ fn run(args: &[String]) -> Result<(), String> {
             let png = Path::new(out).with_extension("png");
             std::fs::write(&png, encode_png(&doc.flatten(), false)?).map_err(|e| e.to_string())
         }
-        ["bench", dir] => {
+        ["bench", dir] | ["bench", dir, _] => {
+            let painted: u32 = args.get(2).map_or(Ok(5), |n| n.parse()).map_err(|_| "bad layer count")?;
             let mut doc = Document::new(3840, 2160, Some([255, 255, 255, 255]));
             doc.layers.clear();
             doc.layers.push(Layer { pixels: TiledLayer::filled([255, 255, 255, 255]), ..Layer::new("Background") });
-            for n in 0..5u32 {
+            for n in 0..painted {
                 let mut l = Layer::new(&format!("Painted {n}"));
                 // Soft gradients over the whole canvas with a little noise, like painted colour.
                 let mut seed = 0x9E37_79B9u32.wrapping_mul(n + 1);
@@ -151,7 +153,7 @@ fn run(args: &[String]) -> Result<(), String> {
                         seed ^= seed >> 17;
                         seed ^= seed << 5;
                         let noise = (seed & 3) as u8;
-                        l.pixels.set_pixel(x as i32, y as i32, [(x / 16) as u8 ^ noise, (y / 9) as u8, (n * 50) as u8, 128 + noise]);
+                        l.pixels.set_pixel(x as i32, y as i32, [(x / 16) as u8 ^ noise, (y / 9) as u8, (n * 50 % 256) as u8, 128 + noise]);
                     }
                 }
                 doc.layers.push(l);
@@ -194,7 +196,7 @@ fn run(args: &[String]) -> Result<(), String> {
             if back.doc != doc {
                 return Err("bench file did not read back the same".into());
             }
-            println!("3840x2160, 6 layers: save {save:.2?} ({:.1} MB), open {load:.2?}, flatten {flat:.2?}", size as f64 / 1e6);
+            println!("3840x2160, {} layers: save {save:.2?} ({:.1} MB), open {load:.2?}, flatten {flat:.2?}", painted + 1, size as f64 / 1e6);
             Ok(())
         }
         _ => Err("usage: kra_tool sample <out.kra> | flatten <in.kra> <out.png> | same <a.kra> <b.kra> | diff <a.png> <b.png> <max>".into()),
