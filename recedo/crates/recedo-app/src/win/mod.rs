@@ -60,6 +60,18 @@ pub fn set_dpi_awareness() {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 }
 
+/// The work area (screen minus taskbar) of the monitor under the mouse.
+pub fn work_area() -> Option<RECT> {
+    // SAFETY: out-parameter calls.
+    unsafe {
+        let mut p = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut p);
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        (GetMonitorInfoW(MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST), &mut mi) != 0).then_some(mi.rcWork)
+    }
+}
+
 /// Creates the main window. `placement`: saved (left, top, right, bottom, maximised).
 pub fn create_window(title: &str, placement: Option<(i32, i32, i32, i32, bool)>, topmost: bool) -> Result<HWND, String> {
     let class = sys::wide(CLASS);
@@ -89,20 +101,12 @@ pub fn create_window(title: &str, placement: Option<(i32, i32, i32, i32, bool)>,
         });
         let (x, y, w, h) = match saved {
             Some((l, t, r, b, _)) => (l, t, r - l, b - t),
-            None => {
-                // First run: the work area of the monitor under the mouse (the window is
-                // then shown maximised there).
-                let mut p = POINT { x: 0, y: 0 };
-                GetCursorPos(&mut p);
-                let mut mi: MONITORINFO = std::mem::zeroed();
-                mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-                if GetMonitorInfoW(MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST), &mut mi) != 0 {
-                    let r = mi.rcWork;
-                    (r.left, r.top, r.right - r.left, r.bottom - r.top)
-                } else {
-                    (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT)
-                }
-            }
+            // First run: the work area of the monitor under the mouse (the window is then
+            // shown maximised there).
+            None => match work_area() {
+                Some(r) => (r.left, r.top, r.right - r.left, r.bottom - r.top),
+                None => (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT),
+            },
         };
         let ex = if topmost { WS_EX_TOPMOST } else { 0 };
         let hwnd = CreateWindowExW(ex, class.as_ptr(), title.as_ptr(), WS_OVERLAPPEDWINDOW, x, y, w, h, std::ptr::null_mut(), std::ptr::null_mut(), hinst, std::ptr::null());

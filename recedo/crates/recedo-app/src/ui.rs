@@ -502,20 +502,23 @@ impl AppUi {
 
     fn color_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
         crate::widgets::color_selector(ui, &mut ed.color, &mut self.hsv);
-        ui.add_space(4.0);
-        for (i, name) in ["Red", "Green", "Blue"].into_iter().enumerate() {
-            ui.add(egui::Slider::new(&mut ed.color[i], 0..=255).text(name));
-        }
-        ui.horizontal(|ui| {
-            ui.label("Hex");
-            let current = format!("{:02X}{:02X}{:02X}", ed.color[0], ed.color[1], ed.color[2]);
-            let resp = ui.add(egui::TextEdit::singleline(&mut self.hex).desired_width(70.0).hint_text(&current));
-            if resp.lost_focus() {
-                if let Some(rgb) = parse_hex(&self.hex) {
-                    ed.color = rgb;
-                }
-                self.hex.clear();
+        ui.add_space(2.0);
+        // The numbers fold away: the square and the hue bar are what a pen uses.
+        egui::CollapsingHeader::new("Numbers (RGB, hex)").id_salt("colour numbers").default_open(false).show(ui, |ui| {
+            for (i, name) in ["Red", "Green", "Blue"].into_iter().enumerate() {
+                ui.add(egui::Slider::new(&mut ed.color[i], 0..=255).text(name));
             }
+            ui.horizontal(|ui| {
+                ui.label("Hex");
+                let current = format!("{:02X}{:02X}{:02X}", ed.color[0], ed.color[1], ed.color[2]);
+                let resp = ui.add(egui::TextEdit::singleline(&mut self.hex).desired_width(70.0).hint_text(&current));
+                if resp.lost_focus() {
+                    if let Some(rgb) = parse_hex(&self.hex) {
+                        ed.color = rgb;
+                    }
+                    self.hex.clear();
+                }
+            });
         });
     }
 
@@ -928,7 +931,8 @@ fn tools_panel(ui: &mut Ui, ed: &mut Editor) {
         let [r, g, b] = ed.color;
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 4.0, Color32::from_rgb(r, g, b));
-        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color), egui::StrokeKind::Inside);
+        // A light outline, so a dark colour still reads as a swatch on the dark panel.
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color), egui::StrokeKind::Inside);
     });
 }
 
@@ -961,40 +965,42 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor) {
                 ui.radio_value(&mut b.mode, PaintMode::Wash, "Wash").on_hover_text("A stroke never gets darker than its opacity where it crosses itself");
                 ui.radio_value(&mut b.mode, PaintMode::BuildUp, "Build up").on_hover_text("Overlapping parts of a stroke get darker");
             });
-            ui.separator();
-            ui.strong("Pen");
-            let mut size_p = b.size_curve.is_some();
-            if ui.checkbox(&mut size_p, "Pressure changes the size").changed() {
-                b.size_curve = size_p.then(Curve::linear);
-            }
-            if size_p {
-                let mut m = (b.min_size * 100.0).round();
-                if ui.add(egui::Slider::new(&mut m, 0.0..=100.0).text("Smallest size").suffix(" %").integer()).changed() {
-                    b.min_size = m / 100.0;
+            // Fold-out sections, so the panel stays short on a small screen.
+            egui::CollapsingHeader::new("Pen").id_salt("pen options").default_open(true).show(ui, |ui| {
+                let mut size_p = b.size_curve.is_some();
+                if ui.checkbox(&mut size_p, "Pressure changes the size").changed() {
+                    b.size_curve = size_p.then(Curve::linear);
                 }
-            }
-            let mut op_p = b.opacity_curve.is_some();
-            if ui.checkbox(&mut op_p, "Pressure changes the opacity").changed() {
-                b.opacity_curve = op_p.then(Curve::linear);
-            }
-            let mut flow_p = b.flow_curve.is_some();
-            if ui.checkbox(&mut flow_p, "Pressure changes the flow").changed() {
-                b.flow_curve = flow_p.then(Curve::linear);
-            }
-            ui.checkbox(&mut b.tilt_shape, "Tilt leans the brush");
-            ui.separator();
-            ui.strong("Stabilizer");
+                if size_p {
+                    let mut m = (b.min_size * 100.0).round();
+                    if ui.add(egui::Slider::new(&mut m, 0.0..=100.0).text("Smallest size").suffix(" %").integer()).changed() {
+                        b.min_size = m / 100.0;
+                    }
+                }
+                let mut op_p = b.opacity_curve.is_some();
+                if ui.checkbox(&mut op_p, "Pressure changes the opacity").changed() {
+                    b.opacity_curve = op_p.then(Curve::linear);
+                }
+                let mut flow_p = b.flow_curve.is_some();
+                if ui.checkbox(&mut flow_p, "Pressure changes the flow").changed() {
+                    b.flow_curve = flow_p.then(Curve::linear);
+                }
+                ui.checkbox(&mut b.tilt_shape, "Tilt leans the brush");
+            });
             let s = &mut ed.tools.stabilizer;
-            ui.checkbox(&mut s.enabled, "Smooth the line (Krita's stabilizer)");
-            ui.add_enabled_ui(s.enabled, |ui| {
-                ui.add(egui::Slider::new(&mut s.distance, 3.0..=500.0).logarithmic(true).text("Distance").max_decimals(0));
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut s.delay, "Delay");
-                    ui.add_enabled(s.delay, egui::Slider::new(&mut s.delay_distance, 1.0..=500.0).logarithmic(true).suffix(" px").max_decimals(0));
+            let title = if s.enabled { "Stabilizer (on)" } else { "Stabilizer (off)" };
+            egui::CollapsingHeader::new(title).id_salt("stabilizer options").default_open(false).show(ui, |ui| {
+                ui.checkbox(&mut s.enabled, "Smooth the line (Krita's stabilizer)");
+                ui.add_enabled_ui(s.enabled, |ui| {
+                    ui.add(egui::Slider::new(&mut s.distance, 3.0..=500.0).logarithmic(true).text("Distance").max_decimals(0));
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut s.delay, "Delay");
+                        ui.add_enabled(s.delay, egui::Slider::new(&mut s.delay_distance, 1.0..=500.0).logarithmic(true).suffix(" px").max_decimals(0));
+                    });
+                    ui.checkbox(&mut s.finish_line, "Finish line (catch up when the pen lifts)");
+                    ui.checkbox(&mut s.stabilize_sensors, "Smooth pressure and tilt too");
+                    ui.checkbox(&mut s.scalable_distance, "Distance follows the zoom");
                 });
-                ui.checkbox(&mut s.finish_line, "Finish line (catch up when the pen lifts)");
-                ui.checkbox(&mut s.stabilize_sensors, "Smooth pressure and tilt too");
-                ui.checkbox(&mut s.scalable_distance, "Distance follows the zoom");
             });
         }
         Tool::Eyedropper => {
@@ -1070,6 +1076,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Shift + Space + drag", "Rotate the view"),
     ("Ctrl + Space + drag", "Zoom"),
     ("Mouse wheel", "Zoom"),
+    ("Middle mouse button + drag", "Pan"),
     ("+  -", "Zoom in / out"),
     ("1", "Actual pixels (100 %)"),
     ("2", "Fit to window"),

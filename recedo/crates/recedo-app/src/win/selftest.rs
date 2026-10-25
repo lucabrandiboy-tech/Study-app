@@ -98,6 +98,15 @@ fn screen_of(hwnd: HWND, x: f64, y: f64) -> POINT {
     p
 }
 
+/// Is the whole client area on the screen?
+fn on_screen_whole(hwnd: HWND, w: u32, h: u32) -> bool {
+    let (tl, br) = (screen_of(hwnd, 0.0, 0.0), screen_of(hwnd, w as f64 - 1.0, h as f64 - 1.0));
+    // SAFETY: plain calls.
+    let (sx, sy, sw, sh) =
+        unsafe { (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN)) };
+    tl.x >= sx && tl.y >= sy && br.x < sx + sw && br.y < sy + sh
+}
+
 fn send(input: INPUT) -> u32 {
     // SAFETY: one valid INPUT.
     unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) }
@@ -658,7 +667,11 @@ pub fn run(out: Option<PathBuf>) -> i32 {
     let mut r = Results::default();
     // The settings a new user starts with (4K canvas, Windows Ink).
     let settings = Settings::default();
-    let hwnd = match create_window("Recedo self-test", Some((40, 40, 1440, 940, false)), true) {
+    // As big as the screen allows, up to 1400 x 900: every point the test clicks must be on
+    // the screen (Windows keeps the cursor on it, so a click below the screen's edge would
+    // land somewhere else).
+    let place = super::work_area().map_or((40, 40, 1440, 940, false), |w| (w.left, w.top, w.left + (w.right - w.left).min(1400), w.top + (w.bottom - w.top).min(900), false));
+    let hwnd = match create_window("Recedo self-test", Some(place), true) {
         Ok(h) => h,
         Err(e) => {
             println!("FAIL  window: {e}");
@@ -720,7 +733,10 @@ pub fn run(out: Option<PathBuf>) -> i32 {
 
     let c = canvas_area();
     r.note(format!("canvas area {:.0}x{:.0} at ({:.0}, {:.0})", c.width(), c.height(), c.left, c.top));
-    if c.width() < 500.0 || c.height() < 400.0 {
+    let on_screen = on_screen_whole(hwnd, cw, ch);
+    if !on_screen {
+        r.check("layout: the window fits on the screen", false, format!("client area {cw}x{ch} is partly off the screen; the clicks would land elsewhere"));
+    } else if c.width() < 500.0 || c.height() < 400.0 {
         r.check("layout", false, format!("canvas area too small: {c:?}"));
     } else {
         r.check("layout: canvas area between the panels", true, format!("{:.0}x{:.0}", c.width(), c.height()));

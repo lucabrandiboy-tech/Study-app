@@ -33,6 +33,9 @@ impl Session {
         ed.autosaver.interval = std::time::Duration::from_secs(settings.autosave_minutes as u64 * 60);
         let egui = egui::Context::default();
         egui.set_theme(egui::Theme::Dark);
+        // Scroll bars that are always there when a panel has more than fits (egui's default
+        // ones only appear on hover, so nothing would show that a panel goes on).
+        egui.all_styles_mut(|s| s.spacing.scroll = egui::style::ScrollStyle::solid());
         Session { ed, ui: AppUi::new(settings), egui, canvas_rect: egui::Rect::NOTHING }
     }
 

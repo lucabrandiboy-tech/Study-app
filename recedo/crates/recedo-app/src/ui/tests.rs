@@ -11,8 +11,19 @@ use crate::settings::Settings;
 
 use super::*;
 
-const W: u32 = 1600;
-const H: u32 = 900;
+/// The screen the tests draw: width and height in pixels, and Windows' display scale.
+#[derive(Clone, Copy)]
+struct Screen {
+    w: u32,
+    h: u32,
+    scale: f32,
+}
+
+thread_local!(static SCREEN: std::cell::Cell<Screen> = const { std::cell::Cell::new(Screen { w: 1600, h: 900, scale: 1.0 }) });
+
+fn screen() -> Screen {
+    SCREEN.with(|s| s.get())
+}
 
 struct Gpu {
     device: wgpu::Device,
@@ -44,7 +55,16 @@ fn raw(events: Vec<Event>) -> RawInput {
         t.set(t.get() + 1.0);
         t.get()
     });
-    RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W as f32, H as f32))), events, time: Some(time), predicted_dt: 1.0, ..Default::default() }
+    let sc = screen();
+    let mut raw = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(sc.w as f32 / sc.scale, sc.h as f32 / sc.scale))),
+        events,
+        time: Some(time),
+        predicted_dt: 1.0,
+        ..Default::default()
+    };
+    raw.viewports.entry(raw.viewport_id).or_default().native_pixels_per_point = Some(sc.scale);
+    raw
 }
 
 fn click(at: Pos2) -> Vec<Event> {
@@ -75,9 +95,10 @@ fn quiet(g: &Gpu, r: &mut Renderer, s: &mut Session, events: Vec<Event>) -> Fram
 /// Renders a frame into an image (and saves it when RECEDO_SCREENSHOTS is set).
 fn shot(g: &Gpu, r: &mut Renderer, s: &mut Session, out: egui::FullOutput, name: &str) -> recedo_core::image::Rgba8 {
     let format = wgpu::TextureFormat::Rgba8Unorm;
+    let Screen { w, h, .. } = screen();
     let target = g.device.create_texture(&wgpu::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -87,7 +108,7 @@ fn shot(g: &Gpu, r: &mut Renderer, s: &mut Session, out: egui::FullOutput, name:
     });
     let view = target.create_view(&Default::default());
     r.sync(&g.device, &g.queue, &mut s.ed);
-    r.render(&g.device, &g.queue, crate::session::Target { view: &view, size: [W, H] }, &s.ed, &s.egui, out);
+    r.render(&g.device, &g.queue, crate::session::Target { view: &view, size: [w, h] }, &s.ed, &s.egui, out);
     let img = crate::session::read_texture(&g.device, &g.queue, &target).unwrap();
     if let Ok(dir) = std::env::var("RECEDO_SCREENSHOTS") {
         std::fs::create_dir_all(&dir).unwrap();
@@ -111,10 +132,10 @@ fn layout_canvas_and_painting_on_screen() {
     let c = f.canvas_rect;
     assert!(c.width() > 900.0 && c.height() > 700.0, "canvas area {c:?}");
     assert!(c.min.x > 50.0, "left dock");
-    assert!(c.max.x < W as f32 - 200.0, "right dock");
+    assert!(c.max.x < screen().w as f32 - 200.0, "right dock");
     assert!(s.over_canvas(c.center().x as f64, c.center().y as f64));
     assert!(!s.over_canvas(5.0, 5.0), "the menu bar is not canvas");
-    assert!(!s.over_canvas(W as f64 - 20.0, 300.0), "the right dock is not canvas");
+    assert!(!s.over_canvas(screen().w as f64 - 20.0, 300.0), "the right dock is not canvas");
     // The 1280 x 720 painting is fitted inside the canvas area.
     let (x0, y0) = s.ed.view.to_screen(0.0, 0.0);
     let (x1, y1) = s.ed.view.to_screen(1280.0, 720.0);
@@ -195,6 +216,23 @@ fn panels_float_and_close_from_the_window_menu() {
     assert!(!s.over_canvas(560.0, 260.0), "a floating panel is not canvas");
     shot(&g, &mut r, &mut s, out, "06-floating-panel");
     assert!(!s.ui.settings.dock.is_open(Panel::History));
+}
+
+/// The XP-Pen Artist 12 is 1920 x 1080 on 11.6 inches; Windows often scales such screens
+/// to 150 %, which leaves the interface 1280 x 720 points.
+#[test]
+fn small_screen_at_150_percent() {
+    let Some(g) = gpu() else { return };
+    SCREEN.with(|sc| sc.set(Screen { w: 1920, h: 1080, scale: 1.5 }));
+    let mut s = Session::new(Settings::default(), None);
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    let (out, f) = frames(&g, &mut r, &mut s, vec![]);
+    shot(&g, &mut r, &mut s, out, "07-1080p-at-150-percent");
+    let c = f.canvas_rect;
+    assert!(c.width() >= 700.0 && c.height() >= 560.0, "canvas area {c:?} of 1280 x 720 points");
+    // The canvas area in pixels is what the editor fits the painting into.
+    let (_, _, vw, vh) = s.ed.viewport;
+    assert!((vw - c.width() as f64 * 1.5).abs() < 1.0 && (vh - c.height() as f64 * 1.5).abs() < 1.0);
 }
 
 #[test]
