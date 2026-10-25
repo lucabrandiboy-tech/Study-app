@@ -20,8 +20,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Cursor, Read, Seek, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
@@ -198,27 +197,15 @@ fn push_warning(warnings: &mut Vec<String>, w: String) {
     }
 }
 
+/// Decodes the layers' tiles, spread over the CPU cores (one at a time in a browser).
 fn decode_parallel(pending: &[Pending]) -> Vec<Result<TiledLayer, String>> {
-    let next = AtomicUsize::new(0);
-    let done: Mutex<Vec<Option<Result<TiledLayer, String>>>> = Mutex::new((0..pending.len()).map(|_| None).collect());
-    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16).min(pending.len());
-    std::thread::scope(|s| {
-        for _ in 0..workers {
-            s.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(p) = pending.get(i) else { break };
-                    let mut pixels = TiledLayer::filled(p.layer.pixels.default);
-                    let r = read_tiles_limited(&p.data, &mut pixels, p.offset.0, p.offset.1, p.max_tiles, p.pixel_size).map(|()| pixels);
-                    done.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
-                }
-            });
-        }
-    });
-    done.into_inner()
-        .unwrap_or_else(|e| e.into_inner())
-        .into_iter()
-        .map(|r| r.unwrap_or_else(|| Err("could not be decoded".to_string())))
+    use rayon::prelude::*;
+    pending
+        .par_iter()
+        .map(|p| {
+            let mut pixels = TiledLayer::filled(p.layer.pixels.default);
+            read_tiles_limited(&p.data, &mut pixels, p.offset.0, p.offset.1, p.max_tiles, p.pixel_size).map(|()| pixels)
+        })
         .collect()
 }
 
@@ -542,31 +529,18 @@ struct Encoded {
     tiles: Vec<Vec<u8>>,
 }
 
-/// The slow parts of saving, spread over the CPU cores: the flattened picture and its
-/// preview, and each layer's compressed tiles.
+/// The slow parts of saving, spread over the CPU cores (one at a time in a browser): the
+/// flattened picture and its preview, and each layer's compressed tiles.
 fn encode_parallel(doc: &Document) -> Result<Encoded, String> {
-    let next = AtomicUsize::new(0);
-    let done: Mutex<Vec<Option<Vec<u8>>>> = Mutex::new(vec![None; doc.layers.len()]);
-    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
-    let pngs = std::thread::scope(|s| {
-        let merged = s.spawn(|| -> Result<(Vec<u8>, Vec<u8>), String> {
+    use rayon::prelude::*;
+    let (pngs, tiles) = rayon::join(
+        || -> Result<(Vec<u8>, Vec<u8>), String> {
             let m = doc.flatten();
             Ok((image::encode_png(&m, true)?, image::encode_png(&image::thumbnail(&m, 256), false)?))
-        });
-        for _ in 0..workers.min(doc.layers.len()) {
-            s.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(l) = doc.layers.get(i) else { break };
-                    let data = write_tiles(&l.pixels);
-                    done.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(data);
-                }
-            });
-        }
-        merged.join().map_err(|_| "Saving failed (picture encoder crashed)".to_string())?
-    })?;
-    let tiles = done.into_inner().unwrap_or_else(|e| e.into_inner());
-    let tiles = tiles.into_iter().collect::<Option<Vec<_>>>().ok_or("Saving failed (a layer could not be encoded)")?;
+        },
+        || doc.layers.par_iter().map(|l| write_tiles(&l.pixels)).collect::<Vec<_>>(),
+    );
+    let pngs = pngs?;
     Ok(Encoded { merged_png: pngs.0, preview_png: pngs.1, tiles })
 }
 
@@ -603,7 +577,7 @@ fn maindoc_xml(doc: &Document) -> String {
 }
 
 fn documentinfo_xml() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let now = iso_utc(secs);
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE document-info PUBLIC '-//KDE//DTD document-info 1.1//EN' 'http://www.calligra.org/DTD/document-info-1.1.dtd'>\n<document-info xmlns=\"http://www.calligra.org/DTD/document-info\">\n <about>\n  <title></title>\n  <editing-cycles>1</editing-cycles>\n  <date>{now}</date>\n  <creation-date>{now}</creation-date>\n </about>\n <author>\n  <full-name></full-name>\n </author>\n</document-info>\n"

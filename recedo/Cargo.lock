@@ -1038,6 +1038,7 @@ dependencies = [
  "recedo-win",
  "serde",
  "serde_json",
+ "web-time",
  "wgpu",
  "windows-sys",
 ]
@@ -1053,6 +1054,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "web-time",
  "zip",
 ]
 
@@ -1070,6 +1072,7 @@ dependencies = [
 name = "recedo-tablet"
 version = "0.0.1"
 dependencies = [
+ "web-time",
  "windows-sys",
 ]
 

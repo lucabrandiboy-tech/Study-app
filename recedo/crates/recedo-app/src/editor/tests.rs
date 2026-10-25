@@ -1,4 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use recedo_core::canvas::builtin_presets;
 use recedo_core::doc::Layer;

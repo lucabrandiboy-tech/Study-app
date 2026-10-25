@@ -66,24 +66,15 @@ impl Document {
         let mut out = Rgba8::new(self.width, self.height);
         let layers: Vec<&Layer> = self.layers.iter().filter(|l| l.shows()).collect();
         let w = self.width as usize;
-        // One band = one row of tiles. Bands are split between the CPU cores.
         let band = w * TILE as usize * 4;
         if out.data.is_empty() || layers.is_empty() {
             return out;
         }
-        let bands = out.data.len().div_ceil(band);
-        let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16).min(bands);
-        let per = bands.div_ceil(workers);
-        std::thread::scope(|s| {
-            for (k, chunk) in out.data.chunks_mut(band * per).enumerate() {
-                let layers = &layers;
-                s.spawn(move || {
-                    for (j, rows) in chunk.chunks_mut(band).enumerate() {
-                        for l in layers {
-                            composite_band(rows, w, (k * per + j) as i32, &l.pixels, l.opacity, l.blend);
-                        }
-                    }
-                });
+        // One band per row of tiles, spread over the CPU cores (one at a time in a browser).
+        use rayon::prelude::*;
+        out.data.par_chunks_mut(band).enumerate().for_each(|(row, rows)| {
+            for l in &layers {
+                composite_band(rows, w, row as i32, &l.pixels, l.opacity, l.blend);
             }
         });
         out
@@ -167,7 +158,7 @@ pub fn composite_tile(dst: &mut [u8], stride: usize, tile: &Tile, cols: usize, r
 /// A random (version 4) UUID in Krita's `{…}` form.
 pub fn new_uuid() -> String {
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    h.write_u128(web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
     let a = h.finish();
     h.write_u64(a);
     let b = h.finish();

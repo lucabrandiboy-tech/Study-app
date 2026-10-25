@@ -36,7 +36,7 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     use std::sync::OnceLock;
-    use std::time::Instant;
+    use web_time::Instant;
 
     fn start() -> Instant {
         static START: OnceLock<Instant> = OnceLock::new();

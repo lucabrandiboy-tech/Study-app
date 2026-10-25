@@ -9,7 +9,10 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
+
+// Like std's, and also works in a browser.
+use web_time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 

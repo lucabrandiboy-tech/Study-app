@@ -3,7 +3,7 @@
 //! frame, and the tests run it headless.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui::{Color32, Id, Key, KeyboardShortcut, Modifiers as EguiMods, RichText, Stroke, Ui, vec2};
 use recedo_core::autosave::Recoverable;
@@ -15,6 +15,7 @@ use recedo_core::curve::Curve;
 use crate::dock::Panel;
 use crate::editor::{Editor, ExportFormat, MAX_BRUSH, MIN_BRUSH, NoticeKind, Tool};
 use crate::settings::{Settings, TabletApi};
+use web_time::Instant;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -96,6 +97,9 @@ pub struct AppUi {
     hsv: crate::widgets::Hsv,
     /// Shown in the status bar: the tablet interface and whether it works.
     pub tablet_status: String,
+    /// Running in a web browser: no Quit, no recent files (no file paths), no choice of
+    /// tablet interface (the browser has its own).
+    pub web: bool,
 }
 
 const TOAST_TIME: Duration = Duration::from_secs(5);
@@ -113,6 +117,7 @@ impl AppUi {
             hex: String::new(),
             hsv: crate::widgets::Hsv(0.6, 0.8, 0.6),
             tablet_status: String::new(),
+            web: false,
         }
     }
 
@@ -258,7 +263,7 @@ impl AppUi {
         if hit(ctrl_shift, Key::S) || (hit(ctrl, Key::S) && !ed.save()) {
             requests.push(Request::SaveAsDialog);
         }
-        if hit(ctrl, Key::Q) && self.request_quit(ed) {
+        if !self.web && hit(ctrl, Key::Q) && self.request_quit(ed) {
             requests.push(Request::Quit);
         }
         if hit(ctrl, Key::J) {
@@ -349,7 +354,7 @@ impl AppUi {
                 self.guarded(ed, Then::OpenDialog, requests);
                 ui.close();
             }
-            let recent = self.settings.recent_files.clone();
+            let recent = if self.web { Vec::new() } else { self.settings.recent_files.clone() };
             ui.add_enabled_ui(!recent.is_empty(), |ui| {
                 ui.menu_button("Open recent", |ui| {
                     for p in recent {
@@ -380,12 +385,14 @@ impl AppUi {
                 self.dialog = Some(Dialog::JpegQuality);
                 ui.close();
             }
-            ui.separator();
-            if item(ui, "Quit", "Ctrl+Q") {
-                if self.request_quit(ed) {
-                    requests.push(Request::Quit);
+            if !self.web {
+                ui.separator();
+                if item(ui, "Quit", "Ctrl+Q") {
+                    if self.request_quit(ed) {
+                        requests.push(Request::Quit);
+                    }
+                    ui.close();
                 }
-                ui.close();
             }
         });
         ui.menu_button("Edit", |ui| {
@@ -886,20 +893,27 @@ impl AppUi {
     fn settings_ui(&mut self, ui: &mut Ui, requests: &mut Vec<Request>) -> bool {
         ui.heading("Settings");
         let mut keep = true;
+        let web = self.web;
         egui::Grid::new("settings").num_columns(2).show(ui, |ui| {
-            ui.label("Tablet");
-            ui.horizontal(|ui| {
-                for api in [TabletApi::Ink, TabletApi::Wintab] {
-                    if ui.radio(self.settings.tablet == api, api.label()).clicked() && self.settings.tablet != api {
-                        self.settings.tablet = api;
-                        requests.push(Request::SetTabletApi(api));
+            if web {
+                ui.label("Pen");
+                ui.weak("The browser's pen input (Windows Ink: pressure and tilt).");
+                ui.end_row();
+            } else {
+                ui.label("Tablet");
+                ui.horizontal(|ui| {
+                    for api in [TabletApi::Ink, TabletApi::Wintab] {
+                        if ui.radio(self.settings.tablet == api, api.label()).clicked() && self.settings.tablet != api {
+                            self.settings.tablet = api;
+                            requests.push(Request::SetTabletApi(api));
+                        }
                     }
-                }
-            });
-            ui.end_row();
-            ui.label("");
-            ui.weak("Windows Ink works with most drivers. Try Wintab if pressure or tilt is missing.");
-            ui.end_row();
+                });
+                ui.end_row();
+                ui.label("");
+                ui.weak("Windows Ink works with most drivers. Try Wintab if pressure or tilt is missing.");
+                ui.end_row();
+            }
             ui.label("Interface size");
             ui.add(egui::Slider::new(&mut self.settings.ui_scale, 0.75..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
             ui.end_row();
@@ -1054,7 +1068,7 @@ fn parse_hex(s: &str) -> Option<[u8; 3]> {
 }
 
 fn ago(secs_since_1970: u64) -> String {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let d = now.saturating_sub(secs_since_1970);
     match d {
         0..60 => "just now".into(),

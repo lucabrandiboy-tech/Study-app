@@ -5,7 +5,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Instant;
 
 use recedo_core::autosave::{self, Autosaver};
 use recedo_core::blend::BlendMode;
@@ -22,6 +21,8 @@ use recedo_core::view::View;
 use recedo_core::{import, kra, ops};
 use recedo_tablet::{Flags, PenSample, Source};
 use serde::{Deserialize, Serialize};
+// Like std's, and also works in a browser.
+use web_time::Instant;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tool {
@@ -795,6 +796,42 @@ impl Editor {
             self.notice(NoticeKind::Warning, w);
         }
         Ok(())
+    }
+
+    /// Opens a file from its bytes (the browser version: a file the user picked or dropped).
+    /// `name` is the file's name; the painting takes it as its title.
+    pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let loaded = import::open(bytes)?;
+        self.replace_document(loaded.doc);
+        self.file = None;
+        self.untitled_name = Path::new(name).file_stem().map_or_else(|| "Picture".into(), |s| s.to_string_lossy().into_owned());
+        for w in loaded.warnings {
+            self.notice(NoticeKind::Warning, w);
+        }
+        Ok(())
+    }
+
+    /// The painting as a `.kra` file's bytes (the browser version saves by downloading them).
+    pub fn encode_kra(&mut self) -> Result<Vec<u8>, String> {
+        self.finish_interaction();
+        kra::save(&self.doc)
+    }
+
+    /// The flattened picture as PNG or JPEG bytes.
+    pub fn encode_export(&mut self, format: ExportFormat) -> Result<Vec<u8>, String> {
+        self.finish_interaction();
+        let flat = self.doc.flatten();
+        match format {
+            ExportFormat::Png => image::encode_png(&flat, false),
+            ExportFormat::Jpeg(q) => image::encode_jpeg(&flat, q, [255, 255, 255], self.doc.dpi),
+        }
+    }
+
+    /// The bytes from [`Editor::encode_kra`] (taken at `snapshot`) were saved as `name`.
+    pub fn saved_elsewhere(&mut self, name: &str, snapshot: Instant) {
+        self.autosaver.saved(snapshot);
+        self.untitled_name = Path::new(name).file_stem().map_or_else(|| name.to_string(), |s| s.to_string_lossy().into_owned());
+        self.notice(NoticeKind::Info, format!("Saved {name}"));
     }
 
     /// Opens a crash-recovery copy: its pixels, unsaved, with the original's file name.
