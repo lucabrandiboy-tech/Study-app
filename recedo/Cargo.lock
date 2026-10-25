@@ -985,6 +985,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "recedo-app"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-wgpu",
+ "pollster",
+ "raw-window-handle",
+ "recedo-core",
+ "recedo-render",
+ "recedo-tablet",
+ "serde",
+ "serde_json",
+ "wgpu",
+ "windows-sys",
+]
+
+[[package]]
 name = "recedo-core"
 version = "0.0.1"
 dependencies = [

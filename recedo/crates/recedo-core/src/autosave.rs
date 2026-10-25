@@ -121,6 +121,14 @@ pub fn remove_recovery(dir: &Path, id: &str) {
     let _ = std::fs::remove_file(j);
 }
 
+/// Deletes one recovery copy found by [`find_recoverable`] (its `.kra` and note).
+pub fn remove_recovery_file(kra: &Path) {
+    if kra.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".recovery.kra")) {
+        let _ = std::fs::remove_file(kra.with_extension("json"));
+        let _ = std::fs::remove_file(kra);
+    }
+}
+
 /// Recovery copies left behind, newest first.
 pub fn find_recoverable(dir: &Path) -> Vec<Recoverable> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
