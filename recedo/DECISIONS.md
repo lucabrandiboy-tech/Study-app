@@ -141,7 +141,23 @@ cut will be listed in `FEATURES.md` and agreed first.
 | `.kra` written in Krita 5.2's own layout (LZF tiles, planar BGRA), mimetype stored first, saved through a `.part` file renamed into place | Krita compatibility; a crash or full disk can never leave a half-written painting. | `scripts/krita-interop.sh` with the real Krita 5.2.2 (CI job) |
 | Things Recedo cannot open yet are listed in plain words, never silently dropped; if nothing can be read, the flattened picture opens as one layer | The spec's "warnings for unsupported parts". | Tests with vector, filter, group, mask, 16-bit and CMYK cases |
 
-## 7. Licences
+## 7. App decisions (Phase 1)
+
+| Decision | Why | Verified by |
+|---|---|---|
+| Our own docking shell instead of `egui_dock` / `egui_tiles` | Both require an older egui (0.36) than the one the app and the test app use (0.37); two egui versions cannot share one window. The shell is small: left and right stacks of tabbed panels, drag a tab to another stack or a new group, drag separators, float a panel as a window, close/reopen from the Window menu, layout saved in the settings. | UI tests (off-screen GPU rendering, screenshots) |
+| The app is split into a portable part (editor, interface, renderer: `editor.rs`, `ui.rs`, `dock.rs`, `session.rs`) and a thin Windows shell (`win/`) | Everything except window messages runs in Linux tests: the editor with synthetic pen samples, the whole interface rendered off-screen and clicked through. The shell only turns messages into pen samples and egui input. | 32 app tests; the self-test runs the shell itself |
+| Pen input paints only from the chosen tablet interface (Windows Ink or Wintab); the mouse messages Windows makes from the pen drive the interface only | Ink marks its mouse messages, so they are dropped for painting. Wintab drivers move the cursor with ordinary-looking mouse messages: the mouse is ignored for painting the whole time the driver says the pen is in range (as Krita does), so a driver click arriving before the pen's own packet can never start a stroke without pressure. | Self-test: "no duplicate stroke from the driver's mouse messages" |
+| Space is tracked from its own key messages, not `GetKeyState` | Space typed into a text box must not pan, and Space must never press the focused button. (Under Wine `GetKeyState` also lost a held Space, which is how this came up.) | Self-test on Windows: Space+drag pans and does not paint |
+| Vsync (Fifo) with one frame queued; each frame waits for its swap-chain image *before* reading input | Lowest latency without tearing or burning power: Mailbox would redraw as fast as the GPU allows during a stroke for no visible gain. Same choice as the Phase 0 test app (measured there). | Self-test: no frames while idle, frames paced while painting |
+| File dialogs run outside the message handler | Windows' Open/Save dialogs run their own message loop and send messages back to the window; doing it inside the handler would re-enter the app. | Self-test saves/opens without dialogs; dialogs themselves are in the user checklist |
+| Autosave to `%LOCALAPPDATA%\Recedo\recovery`, offered at the next start; not offered while another Recedo runs (a named mutex says so); written at once when Windows shuts down | Local (not roaming) because copies can be hundreds of MB. Another running Recedo's copies are in use, not left over from a crash. | Self-test (written, removed on a normal close); start-up offer seen under Wine; emergency copy: editor test |
+| Escape (or a click outside) closes every dialog: Cancel for "Save changes?", "decide later" for recovery | What Windows users expect; nothing is lost by either. | Self-test on Windows |
+| The projection keeps the layers below a stroke combined, per tile, while the stroke lasts | Only the stroke's layer changes; recombining 15 layers per tile per frame was most of the cost of big brushes. Each cached tile holds (not just points at) the tiles and settings it was made from, so it can never be used after any of them changed; exactness is tested against a full flatten after every kind of change, and each check was removed in turn to see a test fail. | Benchmark: 1000 px stroke picture update 10.2 → 5.2 ms per frame |
+| A shared thread pool (`rayon`) for big dabs and picture updates | Starting threads for every dab cost more than the painting on Windows (thread creation is slow there). | Benchmark (Windows build under Wine): 200 px painting 8.1 → 2.6 ms per frame |
+| The interface fits a 1080p screen at 150 %: always-visible scroll bars, fold-out sections (Pen, Stabilizer, colour numbers) | The Artist 12 is 1920×1080 on 11.6", which Windows often scales to 150 %, leaving 1280×720 points. | UI test renders that case |
+
+## 8. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).
