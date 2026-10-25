@@ -4,8 +4,8 @@
 //! `win` is Windows-only.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
-// Off Windows only the tests use the editor.
-#![cfg_attr(not(windows), allow(dead_code))]
+// Until the Windows shell is added (next commits), nothing outside the tests uses the editor.
+#![allow(dead_code)]
 
 mod editor;
 
