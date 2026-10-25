@@ -10,7 +10,7 @@ use super::*;
 /// 800 x 600 viewport.
 fn editor() -> Editor {
     let mut e = Editor::new(Document::new(400, 300, Some([255, 255, 255, 255])), None);
-    e.set_viewport(800.0, 600.0);
+    e.set_viewport(0.0, 0.0, 800.0, 600.0);
     e.view = View::default();
     e.tools.brush = Brush { size: 10.0, hardness: 1.0, size_curve: None, ..Brush::default() };
     e.color = [0, 0, 0];
@@ -438,6 +438,9 @@ fn view_commands() {
     assert!((c.0 - c2.0).abs() < 1e-9 && (c.1 - c2.1).abs() < 1e-9);
     // A new painting is fitted into the viewport once its size is known.
     let mut f = Editor::new(Document::new(4000, 1000, None), None);
-    f.set_viewport(1048.0, 600.0);
+    f.set_viewport(100.0, 40.0, 1048.0, 600.0);
     assert!((f.view.zoom - 1000.0 / 4000.0).abs() < 1e-9);
+    // Centred in the canvas area, which starts at (100, 40).
+    let c = f.view.to_screen(2000.0, 500.0);
+    assert!((c.0 - 624.0).abs() < 1e-6 && (c.1 - 340.0).abs() < 1e-6, "{c:?}");
 }

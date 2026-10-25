@@ -7,7 +7,12 @@
 // Until the Windows shell is added (next commits), nothing outside the tests uses the editor.
 #![allow(dead_code)]
 
+mod dock;
 mod editor;
+mod session;
+mod settings;
+mod ui;
+mod widgets;
 
 fn main() {
     #[cfg(not(windows))]

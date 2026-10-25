@@ -155,8 +155,8 @@ pub struct Editor {
     pub history: History,
     pub projection: Projection,
     pub view: View,
-    /// Size of the canvas area on screen, in pixels.
-    pub viewport: (f64, f64),
+    /// The canvas area on screen (between the panels): left, top, width, height in pixels.
+    pub viewport: (f64, f64, f64, f64),
     /// Index of the selected layer (bottom = 0).
     pub active: usize,
     pub tool: Tool,
@@ -200,7 +200,7 @@ impl Editor {
             history: History::default(),
             projection,
             view: View::default(),
-            viewport: (800.0, 600.0),
+            viewport: (0.0, 0.0, 800.0, 600.0),
             active,
             tool: Tool::Brush,
             tools: ToolSettings::default(),
@@ -279,15 +279,15 @@ impl Editor {
 
     // ----- screen -----------------------------------------------------------------------
 
-    /// The canvas area's size on screen; fits a newly opened painting into it.
-    pub fn set_viewport(&mut self, w: f64, h: f64) {
-        if w < 1.0 || h < 1.0 {
+    /// Where the canvas area is on screen; fits a newly opened painting into it.
+    pub fn set_viewport(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        if w < 1.0 || h < 1.0 || ![x, y, w, h].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.viewport = (w, h);
+        self.viewport = (x, y, w, h);
         if self.fit_pending {
             self.fit_pending = false;
-            self.view.fit((self.doc.width, self.doc.height), self.viewport, 24.0);
+            self.fit_to_window();
         }
     }
 
@@ -488,7 +488,8 @@ impl Editor {
     }
 
     fn angle_from_centre(&self, at: (f64, f64)) -> f64 {
-        (at.1 - self.viewport.1 / 2.0).atan2(at.0 - self.viewport.0 / 2.0)
+        let c = self.centre();
+        (at.1 - c.1).atan2(at.0 - c.0)
     }
 
     fn pick(&mut self, s: &PenSample, all_layers: bool) {
@@ -509,7 +510,8 @@ impl Editor {
     // ----- view commands ------------------------------------------------------------------
 
     fn centre(&self) -> (f64, f64) {
-        (self.viewport.0 / 2.0, self.viewport.1 / 2.0)
+        let (x, y, w, h) = self.viewport;
+        (x + w / 2.0, y + h / 2.0)
     }
 
     pub fn zoom_in(&mut self) {
@@ -528,7 +530,9 @@ impl Editor {
     }
 
     pub fn fit_to_window(&mut self) {
-        self.view.fit((self.doc.width, self.doc.height), self.viewport, 24.0);
+        let (x, y, w, h) = self.viewport;
+        self.view.fit((self.doc.width, self.doc.height), (w, h), 24.0);
+        self.view.pan(x, y);
     }
 
     pub fn rotate_by_degrees(&mut self, degrees: f64) {
@@ -604,7 +608,8 @@ impl Editor {
     fn after_history_move(&mut self, before: &Document) {
         if (before.width, before.height) != (self.doc.width, self.doc.height) {
             self.fit_pending = true;
-            self.set_viewport(self.viewport.0, self.viewport.1);
+            let (x, y, w, h) = self.viewport;
+            self.set_viewport(x, y, w, h);
         }
         self.active = self.active.min(self.doc.layers.len().saturating_sub(1));
         self.refresh_from(before);
@@ -758,8 +763,8 @@ impl Editor {
         self.fit_pending = true;
         self.view = View::default();
         self.last_edit = None;
-        let vp = self.viewport;
-        self.set_viewport(vp.0, vp.1);
+        let (x, y, w, h) = self.viewport;
+        self.set_viewport(x, y, w, h);
     }
 
     /// File > New. The caller has asked about unsaved changes first.
