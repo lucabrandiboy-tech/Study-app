@@ -58,6 +58,11 @@ impl Autosaver {
         !self.unsaved.is_empty()
     }
 
+    /// The recovery copy (or the file) lacks some changes, however recent.
+    pub fn copy_is_behind(&self) -> bool {
+        !self.uncovered.is_empty()
+    }
+
     /// True when an autosave should start now. `busy` (a stroke in progress, or a save
     /// already running) postpones it.
     pub fn due(&self, now: Instant, busy: bool) -> bool {

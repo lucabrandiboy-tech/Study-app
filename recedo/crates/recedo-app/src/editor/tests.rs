@@ -402,6 +402,30 @@ fn autosave_writes_and_cleans_up_recovery_copies() {
 }
 
 #[test]
+fn emergency_autosave_writes_at_once_and_only_when_needed() {
+    let dir = temp_dir("emergency");
+    let mut e = editor();
+    e.recovery_dir = Some(dir.clone());
+    // Nothing changed: nothing written.
+    e.emergency_autosave();
+    assert!(autosave::find_recoverable(&dir).is_empty());
+    // A change, with the next autosave still an hour away: written now.
+    e.autosaver = Autosaver::new(Duration::from_secs(3600));
+    stroke(&mut e, 50.0, 20.0, 120.0);
+    e.emergency_autosave();
+    let found = autosave::find_recoverable(&dir);
+    assert_eq!(found.len(), 1);
+    let mut g = editor();
+    g.open_recovery(&found[0]).unwrap();
+    assert_eq!(g.doc.flatten(), e.doc.flatten());
+    // Still unsaved (only the recovery copy was written), and not written twice.
+    assert!(e.has_unsaved_changes() && !e.autosaver.copy_is_behind());
+    e.closing();
+    assert!(autosave::find_recoverable(&dir).is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn changed_tiles_spots_pixels_and_structure() {
     let mut a = Document::new(200, 200, None);
     a.layers.push(Layer::new("x"));

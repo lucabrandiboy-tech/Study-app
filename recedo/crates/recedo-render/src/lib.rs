@@ -6,6 +6,8 @@
 //! checkerboard where the picture is see-through. Canvases larger than the GPU's texture
 //! limit are split into several textures.
 
+pub mod gpu;
+
 use recedo_core::projection::Projection;
 use recedo_core::tiles::{TILE, TileKey};
 use recedo_core::view::View;

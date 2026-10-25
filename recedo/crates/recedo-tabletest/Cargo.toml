@@ -14,6 +14,8 @@ path = "src/main.rs"
 [dependencies]
 recedo-core = { path = "../recedo-core" }
 recedo-tablet = { path = "../recedo-tablet" }
+recedo-render = { path = "../recedo-render" }
+recedo-win = { path = "../recedo-win" }
 wgpu.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true

@@ -265,10 +265,6 @@ impl Editor {
         Some((at, (brush.size as f64 * 0.5 * self.view.zoom).max(1.0)))
     }
 
-    pub fn current_brush(&self) -> &Brush {
-        if self.tool == Tool::Eraser { &self.tools.eraser } else { &self.tools.brush }
-    }
-
     pub fn current_brush_mut(&mut self) -> &mut Brush {
         if self.tool == Tool::Eraser { &mut self.tools.eraser } else { &mut self.tools.brush }
     }
@@ -875,6 +871,25 @@ impl Editor {
                 }
                 (JobKind::Recovery, Err(e)) => self.notice(NoticeKind::Warning, format!("Autosave failed: {e}")),
             }
+        }
+    }
+
+    /// Windows is shutting down: writes the recovery copy now, if it lacks any change, and
+    /// waits for it (an autosave that is due in a minute would never happen).
+    pub fn emergency_autosave(&mut self) {
+        // Saves already running may write the same files; let them finish first.
+        while !self.jobs.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            self.poll_jobs();
+        }
+        let Some(dir) = self.recovery_dir.clone() else { return };
+        if !self.autosaver.copy_is_behind() {
+            return;
+        }
+        let snapshot = Instant::now();
+        match autosave::write_recovery(&dir, &self.doc_id, &self.doc, self.file.as_deref()) {
+            Ok(_) => self.autosaver.autosaved(snapshot),
+            Err(e) => self.notice(NoticeKind::Warning, format!("Autosave failed: {e}")),
         }
     }
 

@@ -113,8 +113,9 @@ impl Renderer {
         }
     }
 
-    /// Applies a frame's font and image updates without drawing it (a frame that is not
-    /// shown, e.g. while the window is minimised, must still hand these over).
+    /// Applies a frame's font and image updates without drawing it (the tests run frames
+    /// they do not draw; the app only runs the interface for frames it draws).
+    #[cfg(test)]
     pub fn skip_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, out: &mut egui::FullOutput) {
         let mut textures = std::mem::take(&mut out.textures_delta);
         for (id, deltas) in textures.set.drain() {
@@ -161,4 +162,47 @@ impl Renderer {
         }
         queue.submit(extra.into_iter().chain(std::iter::once(enc.finish())));
     }
+}
+
+/// Copies a texture back from the GPU as RGBA (for tests and the self-test). The texture
+/// needs `COPY_SRC` and an 8-bit RGBA or BGRA format.
+pub fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Result<recedo_core::image::Rgba8, String> {
+    let (w, h) = (texture.width(), texture.height());
+    let bgra = match texture.format() {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+        f => return Err(format!("cannot read back {f:?}")),
+    };
+    let padded = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (padded * h) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(h) } },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    queue.submit([enc.finish()]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buf.map_async(wgpu::MapMode::Read, .., move |r| {
+        let _ = tx.send(r);
+    });
+    device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    let data = buf.get_mapped_range(..).map_err(|e| format!("{e:?}"))?;
+    let mut img = recedo_core::image::Rgba8::new(w, h);
+    for y in 0..h as usize {
+        let row = &mut img.data[y * w as usize * 4..(y + 1) * w as usize * 4];
+        row.copy_from_slice(&data[y * padded as usize..][..(w * 4) as usize]);
+        if bgra {
+            for p in row.as_chunks_mut::<4>().0 {
+                p.swap(0, 2);
+            }
+        }
+    }
+    Ok(img)
 }

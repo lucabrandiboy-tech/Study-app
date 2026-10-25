@@ -88,31 +88,7 @@ fn shot(g: &Gpu, r: &mut Renderer, s: &mut Session, out: egui::FullOutput, name:
     let view = target.create_view(&Default::default());
     r.sync(&g.device, &g.queue, &mut s.ed);
     r.render(&g.device, &g.queue, crate::session::Target { view: &view, size: [W, H] }, &s.ed, &s.egui, out);
-    let padded = (W * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-    let buf = g.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: (padded * H) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut enc = g.device.create_command_encoder(&Default::default());
-    enc.copy_texture_to_buffer(
-        target.as_image_copy(),
-        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(H) } },
-        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
-    );
-    g.queue.submit([enc.finish()]);
-    let (tx, rx) = std::sync::mpsc::channel();
-    buf.map_async(wgpu::MapMode::Read, .., move |r| {
-        let _ = tx.send(r);
-    });
-    g.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    rx.recv().unwrap().unwrap();
-    let data = buf.get_mapped_range(..).unwrap();
-    let mut img = recedo_core::image::Rgba8::new(W, H);
-    for y in 0..H as usize {
-        img.data[y * W as usize * 4..(y + 1) * W as usize * 4].copy_from_slice(&data[y * padded as usize..][..(W * 4) as usize]);
-    }
+    let img = crate::session::read_texture(&g.device, &g.queue, &target).unwrap();
     if let Ok(dir) = std::env::var("RECEDO_SCREENSHOTS") {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(format!("{dir}/{name}.png"), recedo_core::image::encode_png(&img, true).unwrap()).unwrap();

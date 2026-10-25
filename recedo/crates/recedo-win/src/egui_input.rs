@@ -70,6 +70,12 @@ fn key_from_vk(vk: u16) -> Option<Key> {
     })
 }
 
+impl Default for EguiInput {
+    fn default() -> EguiInput {
+        EguiInput::new()
+    }
+}
+
 impl EguiInput {
     pub fn new() -> EguiInput {
         EguiInput { raw: RawInput::default(), start: std::time::Instant::now(), tracking_leave: false, buttons_down: 0, high_surrogate: None }
@@ -170,7 +176,7 @@ impl EguiInput {
                         0x43 => self.raw.events.push(Event::Copy),
                         0x58 => self.raw.events.push(Event::Cut),
                         0x56 => {
-                            if let Some(t) = super::sys::get_clipboard_text(hwnd) {
+                            if let Some(t) = crate::sys::get_clipboard_text(hwnd) {
                                 self.raw.events.push(Event::Paste(t));
                             }
                         }

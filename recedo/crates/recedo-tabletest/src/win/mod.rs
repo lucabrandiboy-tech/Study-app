@@ -6,9 +6,10 @@
 //! way: sizes are re-read every frame and pen/tablet input is always *posted*, never sent.
 
 pub mod app;
-pub mod egui_input;
 pub mod selftest;
 pub mod sys;
+
+pub use recedo_win::egui_input;
 
 use std::cell::RefCell;
 use std::time::Duration;

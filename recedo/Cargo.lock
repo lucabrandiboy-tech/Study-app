@@ -996,6 +996,7 @@ dependencies = [
  "recedo-core",
  "recedo-render",
  "recedo-tablet",
+ "recedo-win",
  "serde",
  "serde_json",
  "wgpu",
@@ -1043,10 +1044,21 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "recedo-core",
+ "recedo-render",
  "recedo-tablet",
+ "recedo-win",
  "serde",
  "serde_json",
  "wgpu",
+ "windows-sys",
+]
+
+[[package]]
+name = "recedo-win"
+version = "0.0.1"
+dependencies = [
+ "egui",
+ "recedo-tablet",
  "windows-sys",
 ]
 

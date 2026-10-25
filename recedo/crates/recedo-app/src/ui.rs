@@ -810,9 +810,9 @@ impl AppUi {
             }
         });
         // Escape or a click outside closes informational dialogs; questions need an answer.
-        let dismissable =
-            matches!(dialog, Dialog::Messages { .. } | Dialog::Shortcuts | Dialog::About | Dialog::JpegQuality | Dialog::Settings | Dialog::NewCanvas(_));
-        if modal.should_close() && dismissable {
+        // Escape or a click outside closes any dialog: Cancel for "Save changes?", "Decide
+        // later" for recovery (the copies are kept).
+        if modal.should_close() {
             keep = false;
         }
         if keep && self.dialog.is_none() {

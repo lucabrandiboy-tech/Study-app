@@ -43,11 +43,12 @@ jobs:
           RECEDO_REQUIRE_GPU: '1'
         run: cargo test --workspace
       - name: Build Windows binaries
-        run: cargo build --release --target x86_64-pc-windows-gnu -p recedo-tabletest -p wintab-mock
+        run: cargo build --release --target x86_64-pc-windows-gnu -p recedo-app -p recedo-tabletest -p wintab-mock
       - uses: actions/upload-artifact@v4
         with:
           name: recedo-windows
           path: |
+            recedo/target/x86_64-pc-windows-gnu/release/recedo.exe
             recedo/target/x86_64-pc-windows-gnu/release/recedo-tablet-test.exe
             recedo/target/x86_64-pc-windows-gnu/release/wintab_mock.dll
 
@@ -60,14 +61,22 @@ jobs:
         with:
           name: recedo-windows
           path: bin
-      - name: Run the self-test (mouse, Windows Ink injection, mock Wintab)
+      - name: Tablet test app self-test (mouse, Windows Ink injection, mock Wintab)
         shell: pwsh
         run: |
           $env:RECEDO_WINTAB_DLL = "$PWD\bin\wintab_mock.dll"
-          $p = Start-Process -FilePath "bin\recedo-tablet-test.exe" -ArgumentList '--selftest', "$PWD\out" -Wait -PassThru
-          if (Test-Path out\selftest-results.txt) { Get-Content out\selftest-results.txt } else { Write-Host "no results file" }
+          $p = Start-Process -FilePath "bin\recedo-tablet-test.exe" -ArgumentList '--selftest', "$PWD\out\tablet-test" -Wait -PassThru
+          if (Test-Path out\tablet-test\selftest-results.txt) { Get-Content out\tablet-test\selftest-results.txt } else { Write-Host "no results file" }
           Write-Host "----- app report -----"
-          if (Test-Path out\selftest-app-report.txt) { Get-Content out\selftest-app-report.txt }
+          if (Test-Path out\tablet-test\selftest-app-report.txt) { Get-Content out\tablet-test\selftest-app-report.txt }
+          exit $p.ExitCode
+      - name: Recedo self-test (painting with mouse, keyboard, Windows Ink and mock Wintab; files; screen)
+        if: always()
+        shell: pwsh
+        run: |
+          $env:RECEDO_WINTAB_DLL = "$PWD\bin\wintab_mock.dll"
+          $p = Start-Process -FilePath "bin\recedo.exe" -ArgumentList '--selftest', "$PWD\out\recedo" -Wait -PassThru
+          if (Test-Path out\recedo\selftest-results.txt) { Get-Content out\recedo\selftest-results.txt } else { Write-Host "no results file" }
           exit $p.ExitCode
       - uses: actions/upload-artifact@v4
         if: always()
