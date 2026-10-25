@@ -102,6 +102,12 @@ impl Renderer {
     /// Uploads what changed in the painting since the last frame.
     pub fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, ed: &mut Editor) {
         let refresh = ed.take_refresh();
+        self.apply(device, queue, ed, refresh);
+    }
+
+    /// The second half of [`Renderer::sync`]: uploads the tiles the editor's picture update
+    /// returned (separate so the benchmark can time the two halves).
+    pub fn apply(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, ed: &Editor, refresh: Refresh) {
         if (ed.doc.width, ed.doc.height) != self.canvas_size {
             // A painting of another size: new textures.
             self.display = CanvasDisplay::new(device, ed.doc.width, ed.doc.height, self.format);

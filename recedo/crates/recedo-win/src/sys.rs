@@ -247,7 +247,8 @@ pub fn os_version() -> String {
     format!("{family} {edition} {display} (build {build}.{ubr})")
 }
 
-pub fn open_folder(path: &std::path::Path) {
+/// Opens a file or folder the way double-clicking it would (its default program, or Explorer).
+pub fn shell_open(path: &std::path::Path) {
     let w = wide(&path.to_string_lossy());
     let verb = wide("open");
     // SAFETY: valid wide strings.

@@ -2,7 +2,7 @@
 
 **Recedo** is licensed GPL-3.0-or-later (personal use; GPL so that code from Krita, which is
 GPL, may be studied and ported). Any code ported from Krita will be listed below with the
-Krita file it came from. As of Phase 0, no Krita code has been copied; the Wintab context
+Krita file it came from. As of Phase 1, no Krita code has been copied; the Wintab context
 setup and the tilt formula follow the publicly documented behaviour of Qt and Krita and
 were written from scratch.
 
@@ -18,6 +18,7 @@ Unicode-3.0, or a choice among these), all compatible with the GPL. Run
 | egui, epaint, emath, ecolor, egui-wgpu (UI) | MIT OR Apache-2.0 |
 | windows-sys (Win32 bindings) | MIT OR Apache-2.0 |
 | raw-window-handle, bytemuck, pollster, serde, serde_json, png | MIT / Apache-2.0 / Zlib |
+| rayon, rayon-core, crossbeam-deque/-epoch/-utils, either (thread pool for painting and compositing) | MIT OR Apache-2.0 |
 | zip, flate2, miniz_oxide, quick-xml (Krita `.kra` files) | MIT / Apache-2.0 / Zlib |
 | zopfli (part of zip's deflate support) | Apache-2.0 |
 | jpeg-encoder (JPG export) | (MIT OR Apache-2.0) AND IJG, see below |

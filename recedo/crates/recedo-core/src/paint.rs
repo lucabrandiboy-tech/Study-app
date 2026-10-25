@@ -18,6 +18,11 @@ pub struct PaintSession {
 }
 
 impl PaintSession {
+    /// The layer this stroke paints on.
+    pub fn layer(&self) -> usize {
+        self.layer
+    }
+
     /// Starts a stroke on `layer` at `first`. Records the undo step. Refuses (with a message
     /// for the user) on a locked or hidden layer, as Krita does.
     #[allow(clippy::too_many_arguments)]

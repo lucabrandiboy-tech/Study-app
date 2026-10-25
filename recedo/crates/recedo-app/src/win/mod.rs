@@ -324,11 +324,48 @@ pub fn fatal(msg: &str) -> i32 {
     1
 }
 
-/// Command line: `recedo.exe [file]` or `recedo.exe --selftest [output folder]`.
+/// `recedo.exe --benchmark`: asks first (it takes about a minute and a lot of memory), then
+/// saves the report in `Documents\Recedo` and opens it. With a folder
+/// (`--benchmark <folder>`, for scripts and CI) it asks nothing and writes
+/// `<folder>\benchmark.txt`.
+fn benchmark(folder: Option<PathBuf>) -> i32 {
+    install_crash_report(folder.is_none());
+    if folder.is_none() {
+        let title = sys::wide("Recedo benchmark");
+        let ask = sys::wide(
+            "Recedo will now time painting on a 3840 x 2160 picture with 15 layers (brushes up to 1000 px), undo, saving and opening.\r\n\r\n\
+             It takes about a minute and needs about 2 GB of free memory. Nothing shows while it runs; the results open in Notepad when it is done.",
+        );
+        // SAFETY: valid strings.
+        if unsafe { MessageBoxW(std::ptr::null_mut(), ask.as_ptr(), title.as_ptr(), MB_OKCANCEL | MB_ICONINFORMATION) } != IDOK {
+            return 0;
+        }
+    }
+    let dir = folder.clone().unwrap_or_else(output_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let (report, code) = match crate::bench::run(&dir) {
+        Ok(r) => (r, 0),
+        Err(e) => (format!("The benchmark did not finish:\n{e}"), 1),
+    };
+    let path = dir.join(if folder.is_some() { "benchmark.txt".to_string() } else { format!("benchmark-{}.txt", sys::timestamp()) });
+    let text = format!("{report}\nos: {}\n", sys::os_version()).replace('\n', "\r\n");
+    if let Err(e) = std::fs::write(&path, text) {
+        let msg = format!("Could not save the benchmark results to {}: {e}", path.display());
+        return if folder.is_some() { 1 } else { fatal(&msg) };
+    }
+    if folder.is_none() {
+        sys::shell_open(&path);
+    }
+    code
+}
+
+/// Command line: `recedo.exe [file]`, `recedo.exe --benchmark` or
+/// `recedo.exe --selftest [output folder]`.
 pub fn main() -> i32 {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     match args.first().and_then(|a| a.to_str()) {
         Some("--selftest") => selftest::run(args.get(1).map(PathBuf::from)),
+        Some("--benchmark") => benchmark(args.get(1).map(PathBuf::from)),
         _ => run(args.first().map(PathBuf::from)),
     }
 }

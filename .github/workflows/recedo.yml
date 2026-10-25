@@ -78,6 +78,13 @@ jobs:
           $p = Start-Process -FilePath "bin\recedo.exe" -ArgumentList '--selftest', "$PWD\out\recedo" -Wait -PassThru
           if (Test-Path out\recedo\selftest-results.txt) { Get-Content out\recedo\selftest-results.txt } else { Write-Host "no results file" }
           exit $p.ExitCode
+      - name: Recedo benchmark (CPU times are this machine's; its GPU is software)
+        if: always()
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "bin\recedo.exe" -ArgumentList '--benchmark', "$PWD\out\benchmark" -Wait -PassThru
+          if (Test-Path out\benchmark\benchmark.txt) { Get-Content out\benchmark\benchmark.txt } else { Write-Host "no benchmark report" }
+          exit $p.ExitCode
       - uses: actions/upload-artifact@v4
         if: always()
         with:

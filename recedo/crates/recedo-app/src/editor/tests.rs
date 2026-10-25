@@ -425,6 +425,46 @@ fn emergency_autosave_writes_at_once_and_only_when_needed() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The screen's picture during a stroke on a middle layer (where the projection keeps the
+/// layers below combined) is exactly the flattened painting, every frame, also around a
+/// layer edit in the middle (which ends that stroke; the pen, still down, starts another).
+#[test]
+fn picture_stays_exact_while_painting_between_layers() {
+    let mut e = editor();
+    // Background, four half-transparent painted layers; paint on the third.
+    for i in 0..4u8 {
+        let mut l = Layer::new(&format!("p{i}"));
+        for y in 0..300 {
+            for x in (i as i32..400).step_by(3) {
+                l.pixels.set_pixel(x, y, [i * 60, 255 - i * 50, (x % 256) as u8, 100 + i * 30]);
+            }
+        }
+        e.doc.layers.push(l);
+    }
+    // 0 background, 1 the new document's empty layer, 2..=5 the painted ones.
+    assert_eq!(e.doc.layers.len(), 6);
+    e.active = 3;
+    e.tools.brush.size = 40.0;
+    e.take_refresh();
+    e.projection.rebuild(&e.doc);
+    for i in 0..=30 {
+        let x = 20.0 + i as f64 * 12.0;
+        e.pen(&pt(i, x, 150.0 + (i as f64 * 0.4).sin() * 60.0, true), true, Modifiers::default());
+        if i == 15 {
+            // A layer below changes while the pen is down (e.g. its opacity slider).
+            e.set_layer_opacity(2, 40);
+        }
+        e.take_refresh();
+        assert!(e.projection.image == e.doc.flatten(), "frame {i}");
+    }
+    e.pen(&pt(31, 380.0, 150.0, false), true, Modifiers::default());
+    e.take_refresh();
+    assert!(e.projection.image == e.doc.flatten(), "after the stroke");
+    e.undo();
+    e.take_refresh();
+    assert!(e.projection.image == e.doc.flatten(), "after undo");
+}
+
 #[test]
 fn changed_tiles_spots_pixels_and_structure() {
     let mut a = Document::new(200, 200, None);

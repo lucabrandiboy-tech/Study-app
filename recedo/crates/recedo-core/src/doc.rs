@@ -146,14 +146,19 @@ pub fn composite_band(rows: &mut [u8], width: usize, row: i32, layer: &TiledLaye
             (None, None) => continue,
         };
         let x0 = col * TILE as usize;
-        let cols = (TILE as usize).min(width - x0);
-        for ty in 0..height {
-            let src = &tile.0[ty * TILE as usize * 4..][..cols * 4];
-            let start = (ty * width + x0) * 4;
-            for (d, s) in rows[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
-                if s[3] != 0 || mode != BlendMode::Normal {
-                    blend(d, *s, opacity, mode);
-                }
+        composite_tile(&mut rows[x0 * 4..], width, tile, (TILE as usize).min(width - x0), height, opacity, mode);
+    }
+}
+
+/// Composites the top-left `cols` x `rows` pixels of `tile` over `dst`, whose rows are
+/// `stride` pixels apart.
+pub fn composite_tile(dst: &mut [u8], stride: usize, tile: &Tile, cols: usize, rows: usize, opacity: u8, mode: BlendMode) {
+    for ty in 0..rows {
+        let src = &tile.0[ty * TILE as usize * 4..][..cols * 4];
+        let start = ty * stride * 4;
+        for (d, s) in dst[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+            if s[3] != 0 || mode != BlendMode::Normal {
+                blend(d, *s, opacity, mode);
             }
         }
     }

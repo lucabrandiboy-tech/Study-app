@@ -86,20 +86,11 @@ pub fn paint_dab(layer: &mut TiledLayer, shape: &DabShape, color: [u8; 3], alpha
             jobs.push((key, layer.take_tile(key), false));
         }
     }
-    let workers = if jobs.len() >= PARALLEL_FROM_TILES { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) } else { 1 };
-    if workers > 1 {
-        let per = jobs.len().div_ceil(workers);
-        std::thread::scope(|s| {
-            for chunk in jobs.chunks_mut(per) {
-                let job = &job;
-                s.spawn(move || {
-                    let mut mask = Vec::with_capacity(TILE_PIXELS);
-                    for (key, tile, touched) in chunk {
-                        *touched = job.paint_tile(*key, tile, &mut mask);
-                    }
-                });
-            }
-        });
+    if jobs.len() >= PARALLEL_FROM_TILES {
+        // On the shared thread pool: starting threads for every dab would cost more than
+        // the painting on Windows.
+        use rayon::prelude::*;
+        jobs.par_iter_mut().for_each_init(|| Vec::with_capacity(TILE_PIXELS), |mask, (key, tile, touched)| *touched = job.paint_tile(*key, tile, mask));
     } else {
         let mut mask = Vec::with_capacity(TILE_PIXELS);
         for (key, tile, touched) in &mut jobs {

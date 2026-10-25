@@ -781,7 +781,7 @@ impl App {
                     Err(e) => self.model.log(format!("Could not copy the report: {e}")),
                 }
             }
-            Action::OpenFolder => sys::open_folder(&sys::output_dir()),
+            Action::OpenFolder => sys::shell_open(&sys::output_dir()),
             Action::MoveToMonitor(i) => {
                 if let Some(m) = self.monitors.get(i) {
                     self.deferred.push(Deferred::MoveAndMaximize(m.work));

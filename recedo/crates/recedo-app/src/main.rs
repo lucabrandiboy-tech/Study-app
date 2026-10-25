@@ -7,6 +7,7 @@
 // Elsewhere the program is only a stub and the app's code is used by its tests alone.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+mod bench;
 mod dock;
 mod editor;
 mod session;
@@ -24,7 +25,20 @@ fn main() {
     std::process::exit(win::main());
     #[cfg(not(windows))]
     {
-        eprintln!("Recedo runs on Windows. On this system only its tests run (cargo test). Build {GIT_HASH}.");
+        // The benchmark needs no window, so it runs anywhere: `recedo --benchmark [folder]`.
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if args.first().map(String::as_str) == Some("--benchmark") {
+            let dir = args.get(1).map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+            match bench::run(&dir) {
+                Ok(report) => println!("{report}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        eprintln!("Recedo runs on Windows. On this system only its tests and --benchmark run. Build {GIT_HASH}.");
         std::process::exit(1);
     }
 }

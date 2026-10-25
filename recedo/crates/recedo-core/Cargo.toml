@@ -12,6 +12,7 @@ jpeg-decoder = { version = "0.3", default-features = false }
 jpeg-encoder = "0.7"
 png = "0.18"
 quick-xml = "0.42.0"
+rayon = "1"
 serde.workspace = true
 serde_json.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }

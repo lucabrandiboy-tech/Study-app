@@ -289,6 +289,12 @@ impl Editor {
 
     /// Brings the projection up to date and says what the screen must re-upload.
     pub fn take_refresh(&mut self) -> Refresh {
+        // While a stroke paints one layer, the projection keeps the layers below it combined.
+        let stroke_layer = match &self.interaction {
+            Interaction::Stroke(s) => Some(s.layer()),
+            _ => None,
+        };
+        self.projection.set_stroke_layer(stroke_layer);
         if self.refresh_all {
             self.refresh_all = false;
             self.dirty.clear();
