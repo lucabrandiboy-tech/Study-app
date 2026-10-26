@@ -24,6 +24,7 @@ Unicode-3.0, or a choice among these), all compatible with the GPL. Run
 | jpeg-encoder (JPG export) | (MIT OR Apache-2.0) AND IJG, see below |
 | jpeg-decoder (opening JPG) | MIT OR Apache-2.0 |
 | self_cell (used by the UI's text shaping) | Apache-2.0 OR GPL-2.0-only, used under Apache-2.0 |
+| skrifa, read-fonts, font-types (font outlines for the UI and the text tool) | MIT OR Apache-2.0 |
 
 JPG export: this software is based in part on the work of the Independent JPEG Group
 (the `jpeg-encoder` crate is derived from the IJG's libjpeg).
@@ -32,6 +33,9 @@ JPG export: this software is based in part on the work of the Independent JPEG G
 Krita ships that profile itself.
 
 ### Fonts (from `epaint_default_fonts`, embedded in the .exe)
+
+The text tool paints with Ubuntu Light and Hack; both licences allow using them to make
+pictures.
 
 | Font | Licence |
 |---|---|

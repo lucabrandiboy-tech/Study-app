@@ -23,8 +23,9 @@ are for `recedo.exe` unless a row says otherwise.
 * "Self-test" means `recedo.exe --selftest`: it drives the real Recedo window with injected
   input (mouse, keyboard, a Windows Ink pen with pressure, the stand-in Wintab driver) and
   checks the painting, the screen and the files. On real Windows (CI): 31 passed, 0 failed,
-  0 skipped. Under Wine: 26 passed, 3 skipped (no pen injection or screen read-back there, and
-  Wine drops keys held with SendInput when the mouse is pressed).
+  0 skipped before the new tools' checks were added (result with them: see the tools rows).
+  Under Wine: 33 passed, 3 skipped (no pen injection or screen read-back there, and Wine
+  drops keys held with SendInput when the mouse is pressed).
 * "UI tests" render the whole interface off-screen on a GPU and click through it.
 * "Editor tests" drive the app's editor (everything between the input and the screen) with
   synthetic pen samples.
@@ -54,7 +55,13 @@ are for `recedo.exe` unless a row says otherwise.
 | Benchmark | WORKING | `recedo.exe --benchmark`; numbers at the end of this file. |
 | Interface at 125 % / 150 % display scaling | NEEDS HARDWARE CHECK | Per-monitor DPI aware; rendered at 1080p and 150 % in a UI test (panels scroll, sections fold). Only seen at 100 % on a screen. |
 | Browser version, installable as an app (for PCs that block `.exe` files) | NEEDS HARDWARE CHECK | Browser tests: loads with no errors; pen strokes with pressure (thin to thick); mouse strokes; every tool below; pinch zoom; autosave into the browser's storage and restore after a reload; display scaling 125 / 150 / 200 % (strokes where the pen went, no stray copies when zoomed in or out). The offline worker registers. Not yet seen on the user's PC with the pen. |
-| Toolbar with big buttons (undo, redo, every tool, brush size, zoom, fit) | WORKING | UI tests (the layout still fits 1080p at 150 %); browser test clicks the tool buttons. |
+| Toolbar with big buttons (undo, redo, all tools, brush size, zoom, fit) | WORKING | The tools themselves moved to the side bar (next row); the toolbar shows the current tool and opens the "All tools" window. UI tests (the layout still fits 1080p at 150 %); browser test. |
+| Side bar of your choice, and an "All tools" window with 31 tools | WORKING | The side bar on the left shows the tools you picked, in your order (kept in the settings; the standard set has 15). "All tools…" at its top, or "All tools" in the toolbar, lists every tool in six groups: click one to use it, tick "On bar" to keep it on the side bar, Up / Down / Remove to order it, "Back to the standard tools". A tool that is not on the bar shows at its end while you use it. UI tests (every tool listed without scrolling at 1600×900, ticking and ordering, the window keeps its size, nothing on the canvas draws over it); browser test (Spray and others added from the window and used). |
+| Retouch tools: smudge, blur, sharpen, dodge, burn, sponge, recolour, clone, push, spray | WORKING; pressure NEEDS HARDWARE CHECK | One soft round brush for all of them (size, strength, hardness; smudge length; spray dots and dot size); pen pressure sets the strength. Engine tests (12): each changes only what is under the brush and is stronger with more strength; blur reaches further with a bigger brush (its reach is an eighth of the size, so it shows on a 4K canvas); sharpen leaves no halo at the edge of paint; smudge drags paint along; clone copies exactly (Ctrl+click sets where from); push moves pixels the way the brush goes; spray stays inside the brush. Editor tests: one undo step each, nothing on a locked layer, the eraser end still erases. Self-test under Wine: S picks smudge, a mouse stroke drags paint, one undo step. Browser test: every one of them on screenshots. |
+| Selections: rectangle, ellipse, lasso, magic wand; add, take away, keep the overlap; select all, deselect, invert; marching ants | WORKING | Shift when starting a selection adds to it, Alt takes away, both keep the overlap (or the buttons in Tool options). Painting, fills, shapes, retouching, text, Delete and Backspace stay inside the selection; copy or cut it to a new layer; crop to it. Selections are undo steps. Engine and editor tests; self-test under Wine: R, a drag, Delete clears inside it only, Ctrl+Z, Ctrl+D; browser test (rectangle with a brush stroke across it, wand + Backspace, ellipse + fill, lasso + Delete). Shift/Alt held at a real mouse press: editor tests only (Wine drops held keys there). **In the browser, Ctrl+Shift+I opens the browser's developer tools instead of inverting: use the Invert button.** |
+| Move, crop, text | WORKING | Move: drag, or the arrow keys (Shift: 10 px); moves the selected pixels when there is a selection, else the whole layer. Crop: drag, then Enter or Crop; Escape cancels. Text: click, type, then Ctrl+Enter or "Place text"; Sans or Mono (the interface's own fonts), size, bold, line spacing, in the colour; a click elsewhere moves it; picking another tool places it; Escape cancels. Self-test under Wine: C and Enter crop, Ctrl+Z undoes; Right / Shift+Right move the layer 1 / 10 px; T, a click, typing "hi", Ctrl+Enter paints the text. UI tests: after a click that moves the text, typing still goes into it, and letters are never shortcuts while writing. Limits: text is painted into the layer (not editable afterwards); its preview does not turn with a rotated view. |
+| Lasso fill, magic eraser, zoom tool, rotate-view tool, measure | WORKING | Editor tests; browser test (lasso fill, zoom clicks, rotating by dragging and 5 to straighten, a measured line of 1374 px at -14°). |
+| Speed of the new tools at 3840×2160 | NEEDS HARDWARE CHECK | Browser test, software graphics: the longest pause is 0.14 s for the magic wand on most of the canvas, 0.15 s to fill that selection, 0.2-0.3 s to clear it, 0.4 s to move everything at once, 0.1 s to crop and 0.3 s to undo it, under 0.1 s per frame for a 300 px blur stroke, 0.04 s to place 400 px text. |
 | Fill (paint bucket), line, rectangle, ellipse and gradient tools | WORKING | Editor tests: each is one undo step and paints where it was dragged; fill stays inside a drawn outline with no gap at the line's soft edge; Shift gives 15° angles, squares and circles; locked layers refuse with a message; the pen's eraser end still erases with these tools. Browser test: rectangle + fill, Shift line, ellipse, gradient on a new layer and its undo, checked on screenshots. Options: see "Fill and gradient" and "Shapes". Speed (browser test, software graphics, 3840×2160): filling the whole canvas holds the app for 0.6 s, its undo 0.5 s, a gradient 0.4 s (they were 1.6 / 1.3 / 0.7 s before the fill, picture-update and upload code was sped up). |
 | Brush presets (10) and flat brush tips (roundness, angle) | WORKING | Paint brush, Pencil, Ink pen, Fine liner, Felt-tip, Marker, Highlighter, Calligraphy, Watercolour, Airbrush set the round brush's settings (Tool options). Roundness/angle: engine tests (dab shape; a 5 %-round tip leaves no gap or stripe going along, across or diagonally, because dabs are spaced by the tip's width in the direction of travel, as in Krita); browser test draws with the highlighter and calligraphy presets. |
 
@@ -102,9 +109,9 @@ are for `recedo.exe` unless a row says otherwise.
 |---|---|
 | Built-in presets: pencil, inking pens, oil, acrylic, gouache, airbrush, soft round, watercolour, markers, erasers | PARTIAL: 10 presets of the round brush (Paint brush, Pencil, Ink pen, Fine liner, Felt-tip, Marker, Highlighter, Calligraphy, Watercolour, Airbrush) in Tool options. Oil, acrylic and gouache need the smudge and texture engines (not started); erasers have no presets yet |
 | Full brush editor (tip shape, size, opacity, flow, hardness, spacing, angle, roundness, rotation, scatter, texture, colour dynamics, blend mode, sensor curves for pressure/tilt/speed/random) | PARTIAL: size, opacity, flow, hardness, spacing, roundness and tip angle in Tool options. The rest NOT STARTED |
-| Colour smudge engine (smearing, dulling, smudge length, colour rate) | NOT STARTED |
+| Colour smudge engine (smearing, dulling, smudge length, colour rate) | PARTIAL: the smudge tool smears with Krita's smudge length, strength and hardness. It is a tool of its own, not a brush engine; no dulling or colour rate |
 | Built-in paper and canvas textures | NOT STARTED |
-| Brush size up to 1000 px | NEEDS HARDWARE CHECK: Recedo's size slider goes to 1000 px ([ and ] step it). Benchmark on this 4-core container, 15-layer 4K painting: a fast 1000 px stroke costs 7-9 ms of painting + 5-7 ms of picture update per frame (median), within a 60 Hz frame in 56-87 % of frames. The real PC's numbers: `--benchmark` |
+| Brush size up to 1000 px | NEEDS HARDWARE CHECK: Recedo's size slider goes to 1000 px ([ and ] step it; in `recedo.exe` those two keys did nothing until now, the self-test checks them). Benchmark on this 4-core container, 15-layer 4K painting: a fast 1000 px stroke costs 7-9 ms of painting + 5-7 ms of picture update per frame (median), within a 60 Hz frame in 56-87 % of frames. The real PC's numbers: `--benchmark` |
 | Brush outline cursor at true size and shape, follows zoom and rotation | PARTIAL: circle at the true size, follows zoom; not the shape of tilted/leaned dabs yet |
 | Each preset remembers its size, opacity and settings | NOT STARTED |
 | Brush library with tags and favourites; save, rename, duplicate, delete | NOT STARTED |
@@ -148,7 +155,7 @@ are for `recedo.exe` unless a row says otherwise.
 
 | Feature | Status |
 |---|---|
-| Gaussian blur, motion blur, sharpen/unsharp mask, levels, curves, HSV/HSL, colour balance, desaturate, add noise, pixelate | NOT STARTED |
+| Gaussian blur, motion blur, sharpen/unsharp mask, levels, curves, HSV/HSL, colour balance, desaturate, add noise, pixelate | NOT STARTED as filters. Blur, sharpen and desaturate exist as brushes (retouch tools) |
 | Live on-canvas preview | NOT STARTED |
 | Each filter as destructive filter and as filter layer | NOT STARTED |
 
@@ -156,18 +163,18 @@ are for `recedo.exe` unless a row says otherwise.
 
 | Feature | Status |
 |---|---|
-| Rectangle, ellipse, freehand lasso, polygon lasso, magic wand, select by colour | NOT STARTED |
-| Replace / add / subtract / intersect with Krita's modifier keys | NOT STARTED |
-| Feather, grow, shrink, invert, select all, deselect, marching ants | NOT STARTED |
+| Rectangle, ellipse, freehand lasso, polygon lasso, magic wand, select by colour | PARTIAL (done early): rectangle, ellipse, freehand lasso, magic wand (one connected area, in the visible picture or the layer, with a tolerance). No polygon lasso or select by colour |
+| Replace / add / subtract / intersect with Krita's modifier keys | WORKING (done early): Shift adds, Alt takes away, Shift+Alt keeps the overlap, or the buttons (editor tests) |
+| Feather, grow, shrink, invert, select all, deselect, marching ants | PARTIAL (done early): invert, select all, deselect, marching ants. No feather, grow or shrink |
 
 ## Transform (Phase 5)
 
 | Feature | Status |
 |---|---|
-| Move, scale, rotate, flip | NOT STARTED |
+| Move, scale, rotate, flip | PARTIAL (done early): the move tool moves a layer or the selected pixels (drag, arrow keys). No scale, rotate or flip |
 | Perspective and free distort | NOT STARTED |
 | Warp and mesh | NOT STARTED |
-| Liquify (push, grow, shrink, swirl, undo brush) | NOT STARTED |
+| Liquify (push, grow, shrink, swirl, undo brush) | PARTIAL: the push brush (like liquify's move). No grow, shrink, swirl or undo brush |
 | On layers, groups and selections | NOT STARTED |
 
 ## Shapes and drawing aids (Phase 6)
@@ -184,7 +191,7 @@ are for `recedo.exe` unless a row says otherwise.
 
 | Feature | Status |
 |---|---|
-| Editable text layers (font, size, colour, alignment, line spacing), convert to paint layer | NOT STARTED |
+| Editable text layers (font, size, colour, alignment, line spacing), convert to paint layer | PARTIAL (done early): the text tool paints text into the layer: two fonts, size, bold, colour, line spacing. Not editable afterwards (no text layers), no alignment, no other fonts |
 | Comic panel/frame tool with gutters and border thickness | NOT STARTED |
 | Reference board: from file or clipboard, move, scale, rotate, opacity, saved with the document | NOT STARTED |
 
@@ -193,13 +200,13 @@ are for `recedo.exe` unless a row says otherwise.
 | Feature | Status | Phase |
 |---|---|---|
 | Space+drag pan, wheel/middle-button zoom, remappable | WORKING (not remappable yet): Space+drag and middle-button drag pan, wheel zooms about the pointer, Ctrl+Space+drag zooms, +/- and 1/2 (self-test on Windows, editor tests) | 1 (remapping: 7) |
-| Free rotation, reset rotation | WORKING: Shift+Space+drag, 4/6 by 15°, 5 resets; painting stays under the pen when rotated (editor tests) | 1 |
+| Free rotation, reset rotation | WORKING: Shift+Space+drag or the rotate-view tool, 4/6 by 15°, 5 resets; painting stays under the pen when rotated (editor tests, browser test) | 1 |
 | Mirror view with M | WORKING (editor tests: painting stays under the pen when mirrored) | 1 |
 | Navigator / minimap | NOT STARTED | 7 |
 | Second view of the same canvas | NOT STARTED | 7 |
 | Smooth zoom, pixel grid at high zoom | PARTIAL: mipmaps when zoomed out (fine detail averages instead of shimmering), computed on the CPU only where tiles changed (a GPU test checks every level against a reference after full and partial updates); sharp pixels from 200 % (GPU-tested). No pixel grid yet | 1 |
 | New canvas dialog: presets (3840×2160, 1280×720, …), custom size/DPI, background, depth, custom presets | PARTIAL: File > New with the built-in presets (your two sizes first), custom size and resolution, background, memory estimate (UI tests). 8-bit only; saving your own presets is in the engine but not in the dialog yet | 1 |
-| Canvas resize, image resize, crop | NOT STARTED | not assigned by the spec; proposed for 5 |
+| Canvas resize, image resize, crop | PARTIAL (done early): crop, with the crop tool or to a selection (an undo step). No resizing | not assigned by the spec; proposed for 5 |
 
 ## Undo and history (Phase 1)
 
@@ -240,9 +247,9 @@ are for `recedo.exe` unless a row says otherwise.
 | Dark theme | WORKING | Recedo and the test app are dark. |
 | Light theme, accent colour | NOT STARTED | 7 |
 | Adjustable UI scale | WORKING | Edit > Settings > Interface size (75-200 %), on top of Windows' display scaling. |
-| Krita default shortcuts, remappable, conflict warnings, import/export | NOT STARTED | 7 |
+| Krita default shortcuts, remappable, conflict warnings, import/export | PARTIAL: fixed one-key shortcuts for 13 tools and the selection, crop and text keys (Help > Keyboard shortcuts), Krita's where Krita has one. Not remappable | 7 |
 | Tab: canvas-only focus mode | NOT STARTED | 7 |
-| Tool options panel | WORKING | Brush/eraser presets, size, opacity, flow, hardness, spacing, roundness, tip angle, mode, pen and stabilizer options; eyedropper, fill, shape and gradient options. More with each phase. |
+| Tool options panel | WORKING | Options for every tool (UI test draws each one): brush/eraser presets, size, opacity, flow, hardness, spacing, roundness, tip angle, mode, pen and stabilizer options; eyedropper, fill, shape, gradient, retouch, selection, crop, text, measure. |
 | Fingers on a touch screen (browser version) | NEEDS HARDWARE CHECK | One finger pans, two pan and pinch-zoom, fingers never paint (browser test with injected touches: pinch 4× zooms 4× with no paint). Not tried on a real touch screen. |
 | Settings window (tablet API, pressure curve, pen buttons, autosave, undo steps, theme, UI scale, shortcuts, performance) | PARTIAL | Edit > Settings: tablet interface, interface size, autosave interval. The rest: Phase 7. |
 

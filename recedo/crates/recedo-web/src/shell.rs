@@ -320,6 +320,15 @@ impl App {
     fn modifiers(&self) -> Modifiers {
         Modifiers { ctrl: self.mods.ctrl || self.mods.mac_cmd, shift: self.mods.shift, alt: self.mods.alt, space: self.space_held }
     }
+
+    /// Records the keys held, and tells the interface when they change (egui knows which
+    /// are held only from these events; Ctrl+Enter in the text box needs it).
+    fn set_mods(&mut self, m: egui::Modifiers) {
+        if m != self.mods {
+            self.events.push(egui::Event::ModifiersChanged(m));
+        }
+        self.mods = m;
+    }
 }
 
 fn num(v: &JsValue, name: &str) -> f64 {
@@ -409,7 +418,7 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
                 return;
             }
             // Keys held, as the event reports them (also a key pressed before the page had focus).
-            app.mods = egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() };
+            app.set_mods(egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() });
             // Touching from pointerdown (pen tip or eraser, mouse left or middle button) to
             // pointerup or pointercancel.
             let id = e.pointer_id();
@@ -511,7 +520,7 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
         add(&w, name, false, move |e: KeyboardEvent| {
             let mut app = a.borrow_mut();
             let pressed = e.type_() == "keydown";
-            app.mods = egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() };
+            app.set_mods(egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() });
             let typing = app.session.egui.egui_wants_keyboard_input();
             let key = e.key();
             app.frame_wanted = true;
@@ -533,8 +542,9 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
                 app.events.push(egui::Event::Text(key.clone()));
             }
             // Keep the browser's own shortcuts (Ctrl+S saves the page, Ctrl+O opens a file,
-            // Ctrl+Z, Tab, …) from acting while Recedo uses them.
-            if mods.ctrl || mods.mac_cmd || key == "Tab" || (!typing && (key == "Backspace" || key.starts_with('F') && key.len() > 1)) {
+            // Ctrl+D bookmarks, Backspace goes back, Tab, …) from acting while Recedo uses
+            // them. (A few, such as Ctrl+Shift+I for the developer tools, the browser keeps.)
+            if mods.ctrl || mods.mac_cmd || key == "Tab" || (!typing && (key == "Backspace" || key.starts_with("Arrow") || key.starts_with('F') && key.len() > 1)) {
                 e.prevent_default();
             }
         })?;
@@ -544,7 +554,7 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
         add(&w, "blur", true, move |_e: web_sys::Event| {
             let mut app = a.borrow_mut();
             app.space_held = false;
-            app.mods = egui::Modifiers::NONE;
+            app.set_mods(egui::Modifiers::NONE);
         })?;
     }
     // Leaving with unsaved changes: the browser asks first.

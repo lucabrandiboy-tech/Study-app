@@ -42,6 +42,9 @@ pub struct Document {
     pub dpi: f64,
     /// Bottom layer first.
     pub layers: Vec<Layer>,
+    /// The selection, if any: tools only change pixels inside it. Part of the painting so
+    /// undo takes it back too; shared, so undo steps that keep it cost nothing.
+    pub selection: Option<std::sync::Arc<crate::fill::Mask>>,
 }
 
 /// Largest canvas side Recedo creates or opens.
@@ -58,7 +61,7 @@ impl Document {
             layers.push(l);
         }
         layers.push(Layer::new("Layer 1"));
-        Document { width, height, dpi: 300.0, layers }
+        Document { width, height, dpi: 300.0, layers, selection: None }
     }
 
     /// The visible layers composited inside the canvas.

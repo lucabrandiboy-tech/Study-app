@@ -1,8 +1,9 @@
 # Recedo Phase 1: setting it up and trying it
 
 This is the first version of **Recedo itself**: a real painting window with a round brush,
-eraser, eyedropper, layers, undo, Krita files, PNG/JPEG export and autosave. Brush presets,
-selections, filters and the rest come in later phases (list at the end).
+eraser, eyedropper, layers, undo, Krita files, PNG/JPEG export and autosave, and since then
+31 tools in all (fill, shapes, gradient, smudge and other retouch brushes, selections, move,
+crop, text; part 5). Filters and the rest come in later phases (list at the end).
 
 ## 1. Get it running (5 minutes)
 
@@ -91,7 +92,30 @@ Each step says what you should see. If something is different, note the step num
    Then set autosave back to 5 min.
 6. Close Recedo with unsaved changes. *Expected:* "Save changes?" asks first.
 
-## 5. What to send back
+## 5. The other tools (10 minutes)
+
+1. Click **All tools…** at the top of the tools on the left. *Expected:* a window lists 31
+   tools in groups. Tick **On bar** next to **Spray** and close the window: Spray is now at
+   the bottom of the side bar. (**Up** / **Down** / **Remove** order the bar; **Back to the
+   standard tools** resets it.)
+2. **Smudge** (**S**): paint two colours side by side, then smudge across them, pressing
+   lightly, then harder. *Expected:* the paint is dragged along; pressing harder drags more.
+3. **Blur** (on the side bar): go over the edge of a stroke a few times. *Expected:* the edge
+   gets soft.
+4. **Rectangle select** (**R**): drag a box over part of a stroke, then paint across it with
+   the brush. *Expected:* paint only inside the box (the moving dashed line shows the
+   selection). **Delete** clears inside it, **Ctrl+D** deselects. Holding **Shift** when you
+   start a new selection adds to it, **Alt** takes away.
+5. **Magic wand** (**W**): click inside a filled area; **Backspace** fills it with the colour.
+6. **Text** (**T**): click on the canvas, type, click somewhere else to move it, type more,
+   then **Ctrl+Enter**. *Expected:* the letters always go into the text (never change the
+   tool), and Ctrl+Enter paints it in the colour.
+7. **Crop** (**C**): drag over the part to keep, press **Enter**. **Ctrl+Z** brings the whole
+   painting back.
+8. **Move** (on the side bar): drag the painting around; the arrow keys move it 1 px,
+   **Shift** + arrow 10 px. **Ctrl+Z** undoes.
+
+## 6. What to send back
 
 * The step numbers that did not behave as expected, and what happened instead.
 * Which pen system felt better (Windows Ink or Wintab), and the status-bar text for each.
@@ -111,9 +135,10 @@ To remove Recedo: delete its folder and the two `Recedo` folders above.
 
 ## Not in this version yet
 
-Brush presets and the brush editor, smudge brushes, textures, the radial pop-up palette,
-pen button settings, pressure curve editor (Phase 2); palettes, colour wheel styles,
-16-bit painting, colour management (Phase 3); groups, masks, filters, alpha lock,
-thumbnails (Phase 4); selections, transform, fill, gradient (Phase 5); shapes, assistants,
-symmetry, text, reference images (Phase 6); shortcut editor, workspaces, light theme,
-navigator (Phase 7); WebP, PDF, timelapse (Phase 8); animation (Phase 9); installer (Phase 10).
+The brush editor, textures, the radial pop-up palette, pen button settings, pressure curve
+editor (Phase 2); palettes, colour wheel styles, 16-bit painting, colour management
+(Phase 3); groups, masks, filters, alpha lock, thumbnails (Phase 4); polygon lasso, feather /
+grow / shrink, scaling and rotating, radial gradients (Phase 5); polygon and Bézier shapes,
+assistants, symmetry, text that stays editable, reference images (Phase 6); shortcut editor,
+workspaces, light theme, navigator (Phase 7); WebP, PDF, timelapse (Phase 8); animation
+(Phase 9); installer (Phase 10).

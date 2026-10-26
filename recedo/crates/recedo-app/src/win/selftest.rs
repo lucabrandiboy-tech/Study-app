@@ -20,14 +20,15 @@ use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::UI::Controls::{HSYNTHETICPOINTERDEVICE, POINTER_FEEDBACK_MODE, POINTER_FEEDBACK_NONE, POINTER_TYPE_INFO};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
-    MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_INSERT, VK_SHIFT, VK_SPACE,
+    MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_DELETE, VK_ESCAPE, VK_INSERT, VK_OEM_4, VK_OEM_6,
+    VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
 };
 use windows_sys::Win32::UI::Input::Pointer::{POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::app::{App, client_size};
 use super::{create_window, install, install_crash_report, set_dpi_awareness, shutdown, step, with_app};
-use crate::editor::ExportFormat;
+use crate::editor::{ExportFormat, Tool};
 use crate::settings::{Settings, TabletApi};
 
 #[derive(Default)]
@@ -350,6 +351,135 @@ fn layer_tests(r: &mut Results, hwnd: HWND, c: Area) {
     let mid = (c.left + c.width() * 0.35, y);
     let (on_new, on_old) = with_app(|a| (painted_at(a, a1, mid, 2), painted_at(a, a0, mid, 2))).unwrap_or((false, true));
     r.check("layers: painting goes to the selected layer only", on_new && !on_old, format!("new layer painted: {on_new}, layer below painted: {on_old}"));
+}
+
+/// Painted pixels on `layer` in a canvas rectangle.
+fn ink_in(a: &App, layer: usize, (x0, y0): (i32, i32), (x1, y1): (i32, i32)) -> usize {
+    let Some(l) = a.session.ed.doc.layers.get(layer) else { return 0 };
+    (y0..y1).map(|y| (x0..x1).filter(|&x| l.pixels.pixel(x, y)[3] > 0).count()).sum()
+}
+
+/// The first painted canvas column on row `y` from `x0` on, if any within `len`.
+fn first_ink(a: &App, layer: usize, x0: i32, y: i32, len: i32) -> Option<i32> {
+    let l = a.session.ed.doc.layers.get(layer)?;
+    (x0..x0 + len).find(|&x| l.pixels.pixel(x, y)[3] > 0)
+}
+
+/// The new tools with real keys and mouse drags: picking tools by key, a selection and
+/// Delete, smudging, cropping with Enter, moving with the arrow keys, typing text, and the
+/// brush size keys.
+fn tool_tests(r: &mut Results, hwnd: HWND, c: Area) {
+    let layer = active_layer();
+    let tool = || with_app(|a| a.session.ed.tool).unwrap_or(Tool::Brush);
+    let canvas = |p: (f64, f64)| with_app(|a| a.session.ed.view.to_canvas(p.0, p.1)).unwrap_or((0.0, 0.0));
+    let doc_size = || with_app(|a| (a.session.ed.doc.width, a.session.ed.doc.height)).unwrap_or((0, 0));
+    // A line to work on, painted with the brush.
+    keys(&[b'B' as u16]);
+    let y = c.top + c.height() * 0.55;
+    let (x0, x1) = (c.left + 100.0, c.right - 100.0);
+    drag(hwnd, (x0, y), (x1, y), Button::Left, 40);
+    let third = (x1 - x0) / 3.0;
+    let (left, mid, right) = ((x0 + third * 0.5, y), (x0 + third * 1.5, y), (x0 + third * 2.5, y));
+
+    // R picks rectangle select; Delete clears inside the selection only.
+    keys(&[b'R' as u16]);
+    let picked = tool();
+    drag(hwnd, (x0 + third, y - 40.0), (x0 + third * 2.0, y + 40.0), Button::Left, 10);
+    let selected = with_app(|a| a.session.ed.has_selection()).unwrap_or(false);
+    keys(&[VK_DELETE]);
+    let (l, m, rt) = with_app(|a| (painted_at(a, layer, left, 2), painted_at(a, layer, mid, 2), painted_at(a, layer, right, 2))).unwrap_or_default();
+    r.check(
+        "tools: R selects a rectangle, Delete clears inside it only",
+        picked == Tool::SelectRect && selected && l && !m && rt,
+        format!("tool {picked:?}, selected: {selected}; paint left / middle / right of the line: {l} / {m} / {rt}"),
+    );
+    keys(&[VK_CONTROL, b'Z' as u16]);
+    let back = with_app(|a| painted_at(a, layer, mid, 2)).unwrap_or(false);
+    keys(&[VK_CONTROL, b'D' as u16]);
+    let kept = with_app(|a| a.session.ed.has_selection()).unwrap_or(true);
+    r.check("tools: Ctrl+Z brings it back, Ctrl+D deselects", back && !kept, format!("middle painted again: {back}, still selected: {kept}"));
+
+    // S picks smudge: a stroke across the line drags its paint along, as one undo step.
+    keys(&[b'S' as u16]);
+    let picked = tool();
+    let (cx, cy) = canvas(left);
+    // Just below the line (the cursor only goes to whole screen pixels, so the line can be
+    // a screen pixel off).
+    let (zoom, size) = with_app(|a| (a.session.ed.view.zoom, a.session.ed.tools.brush.size)).unwrap_or((1.0, 20.0));
+    let edge = (size as f64 / 2.0 + 3.0 + 1.0 / zoom).ceil() as i32;
+    let below = || with_app(|a| ink_in(a, layer, (cx as i32 - 15, cy as i32 + edge), (cx as i32 + 15, cy as i32 + edge + 40)));
+    let (before, steps) = (below().unwrap_or(1), history_applied());
+    drag(hwnd, (left.0, y - 25.0), (left.0, y + 25.0), Button::Left, 25);
+    let (after, steps2) = (below().unwrap_or(0), history_applied());
+    r.check(
+        "tools: S smudges paint along the stroke, one undo step",
+        picked == Tool::Smudge && before == 0 && after > 50 && steps2 == steps + 1,
+        format!("tool {picked:?}; painted pixels just below the line {before} -> {after}; undo steps {steps} -> {steps2}"),
+    );
+
+    // C picks crop: Enter crops to the rectangle dragged, Ctrl+Z gives the whole painting back.
+    keys(&[b'C' as u16]);
+    let picked = tool();
+    let size0 = doc_size();
+    drag(hwnd, (x0 + 50.0, y - 100.0), (x0 + 350.0, y + 100.0), Button::Left, 10);
+    let rect = with_app(|a| a.session.ed.crop_rect).flatten();
+    keys(&[VK_RETURN]);
+    let size1 = doc_size();
+    keys(&[VK_CONTROL, b'Z' as u16]);
+    let size2 = doc_size();
+    r.check(
+        "tools: C and Enter crop the painting; Ctrl+Z undoes it",
+        picked == Tool::Crop && rect.is_some_and(|(_, _, w, h)| (w, h) == size1 && w > 500) && size2 == size0,
+        format!("tool {picked:?}, crop rectangle {rect:?}; size {size0:?} -> {size1:?} -> {size2:?}"),
+    );
+    keys(&[b'2' as u16]);
+
+    // The Move tool and the arrow keys: Right moves the layer 1 px, Shift+Right 10 px.
+    with_app(|a| a.session.ed.tool = Tool::Move);
+    let (lx, ly) = canvas((x0 - 20.0, y));
+    let start = || with_app(|a| first_ink(a, layer, lx as i32, ly as i32, 400)).flatten();
+    let s0 = start();
+    keys(&[VK_RIGHT]);
+    let s1 = start();
+    keys(&[VK_SHIFT, VK_RIGHT]);
+    let s2 = start();
+    keys(&[VK_CONTROL, b'Z' as u16]);
+    keys(&[VK_CONTROL, b'Z' as u16]);
+    let s3 = start();
+    r.check(
+        "tools: arrow keys move the layer with the Move tool (Shift: 10 px)",
+        s0.is_some() && s1 == s0.map(|x| x + 1) && s2 == s0.map(|x| x + 11) && s3 == s0,
+        format!("the line starts at x {s0:?}, then {s1:?}, {s2:?}; after two undos {s3:?}"),
+    );
+
+    // T picks text: a click, then typing; Ctrl+Enter places it.
+    keys(&[b'T' as u16]);
+    let picked = tool();
+    let at = (right.0, y + 60.0);
+    drag(hwnd, at, at, Button::Left, 1);
+    keys(&[b'H' as u16]);
+    keys(&[b'I' as u16]);
+    let typed = with_app(|a| a.session.ed.text_edit.as_ref().map(|t| t.text.clone())).flatten();
+    let steps = history_applied();
+    keys(&[VK_CONTROL, VK_RETURN]);
+    let (placed, steps2) = (with_app(|a| a.session.ed.text_edit.is_none()).unwrap_or(false), history_applied());
+    let (tx, ty) = canvas(at);
+    let ink = with_app(|a| ink_in(a, layer, (tx as i32, ty as i32), (tx as i32 + 200, ty as i32 + 120))).unwrap_or(0);
+    r.check(
+        "tools: T, a click and typing write text; Ctrl+Enter places it",
+        picked == Tool::Text && typed.as_deref() == Some("hi") && placed && steps2 == steps + 1 && ink > 300,
+        format!("tool {picked:?}, typed {typed:?}, placed: {placed}, undo steps {steps} -> {steps2}, {ink} pixels of text"),
+    );
+
+    // ] and [ make the brush bigger and smaller again.
+    keys(&[b'B' as u16]);
+    let size = || with_app(|a| a.session.ed.tools.brush.size).unwrap_or(0.0);
+    let z0 = size();
+    keys(&[VK_OEM_6]);
+    let z1 = size();
+    keys(&[VK_OEM_4]);
+    let z2 = size();
+    r.check("keyboard: ] and [ change the brush size", z1 > z0 && z2 < z1, format!("{z0} -> {z1} -> {z2} px"));
 }
 
 struct InjectedFrame {
@@ -755,6 +885,7 @@ pub fn run(out: Option<PathBuf>) -> i32 {
         wintab_test(&mut r, hwnd, c);
         layer_tests(&mut r, hwnd, c);
         screen_test(&mut r, &out, capture);
+        tool_tests(&mut r, hwnd, c);
         file_tests(&mut r, &out);
         recovery_tests(&mut r, hwnd, c, &recovery);
     }

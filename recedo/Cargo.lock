@@ -1057,6 +1057,7 @@ dependencies = [
 name = "recedo-core"
 version = "0.0.1"
 dependencies = [
+ "epaint_default_fonts",
  "jpeg-decoder",
  "jpeg-encoder",
  "png",
@@ -1064,6 +1065,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "skrifa",
  "web-time",
  "zip",
 ]

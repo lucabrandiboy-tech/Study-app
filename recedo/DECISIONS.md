@@ -177,7 +177,25 @@ cut will be listed in `FEATURES.md` and agreed first.
 | Files open from a file picker and save as downloads; settings in the browser's local storage; the autosave copy in its IndexedDB, offered again after a crash or a closed tab | A web page cannot write files where it likes. | Browser test: autosave written while idle, restored after a reload |
 | Hosted on the repository's GitHub Pages site under `/recedo/`, with its own offline worker; the Study app's worker leaves `/recedo/` alone | The repository has one Pages site, published from the Study app's branch. | Pages deploy runs; worker registers in the browser test |
 
-## 8. Licences
+## 8. More tools (asked for after Phase 1)
+
+The user asked for many more real tools and a way to choose which ones sit on the side bar.
+31 tools now; these are the choices behind them.
+
+| Decision | Why | Verified by |
+|---|---|---|
+| The side bar is a list of tool ids in the settings (`hotbar`); unknown ids are dropped, repeats removed, an empty list falls back to the standard 15 | A settings file from another version, or a renamed tool, can never break the bar or the app. | Settings test |
+| The "All tools" window takes no width from the window itself: the tool list is as wide as its grid, the bar list as wide as its rows | Content as wide as the space it is given makes a resizable egui window a little wider every frame (the first version filled the screen within seconds). | UI test: the window keeps its size over 20 frames and after a change (the old layout fails it) |
+| The canvas overlay (brush outline, marching ants, previews) is painted on the panels' own layer, after them | On a layer of its own it was drawn over the tool window and floating panels. Nothing else paints the canvas area, so the overlay still shows over the painting. | UI test: a selection's outline changes no pixel inside the tool window |
+| The selection is part of the document (a coverage mask, 0-255, shared like tiles) | It is undone and redone with everything else for free, and a crop or a new painting can never leave a selection that no longer fits. | Editor tests (selections undone and redone) |
+| Every tool that changes pixels keeps its change inside the selection by putting back what was outside it afterwards (from the layer as it was), per changed tile | One rule for brush strokes, fills, shapes, gradients, text and retouching, instead of a mask in each of them. Soft selection edges blend. | Engine test (only inside changes), editor test (a stroke across a selection) |
+| One retouch engine for ten tools: a soft round dab spaced at 10 % of the size, colours mixed with premultiplied alpha, the strength per dab scaled so one pass at full strength does about 75 % of the effect whatever the size | The tools then feel alike and respond to pressure the same way; premultiplied mixing keeps a smudge or blur into empty areas from turning dark. | Engine tests (12) |
+| Blur and sharpen reach in proportion to the brush (a blur radius of size / 8, sharpen size / 32), using box blurs whose cost does not depend on the radius | The first version used a fixed 5×5 blur: on a 4K painting at 30 % zoom it did nothing visible. Sharpen compares with the colour around it weighted by opacity, so the edge of paint gets no bright halo. | Engine tests: a 120 px blur softens an edge 10 px out where a 30 px one does not; no halo on a grey square (both fail with the old code) |
+| Text uses the interface's own two fonts (Ubuntu Light, Hack), read with `skrifa`, outlines filled with the same polygon filler as the lasso | No font files to ship or find, and the browser version draws exactly the same letters. Painted into the layer: text layers that stay editable are Phase 6. | Engine tests (letters where placed, holes kept, bold, both fonts, odd input) |
+| While text is being written, the keyboard stays with its text box and letters are never shortcuts; picking another tool places the text | A click on the canvas (to move the text) took the keys away, and the next letter switched tools (B to the brush, and so on). Text left unplaced would stay on screen without being in the painting. | UI tests (each fails with the old code); self-test types "hi" and places it |
+| Both shells tell the interface which of Ctrl, Shift and Alt are held (egui's `ModifiersChanged`) | egui 0.37 learns the held keys only from that event; without it Ctrl+Enter could not place text, in the browser or `recedo.exe`. | Self-test under Wine (Ctrl+Enter places text); UI test |
+
+## 9. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

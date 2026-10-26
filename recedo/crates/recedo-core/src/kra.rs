@@ -129,7 +129,7 @@ pub fn load_from<R: Read + Seek>(r: R) -> Result<Loaded, String> {
             return Err(e);
         }
     }
-    Ok(Loaded { doc: Document { width, height, dpi, layers }, warnings })
+    Ok(Loaded { doc: Document { width, height, dpi, layers, selection: None }, warnings })
 }
 
 /// A paint layer whose tiles are not decoded yet.

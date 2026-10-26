@@ -806,7 +806,7 @@ impl App {
         let (w, h) = (self.canvas.width, self.canvas.height);
         let mut layer = recedo_core::doc::Layer::new("Tablet test drawing");
         layer.pixels.write_rect(0, 0, w, h, &px);
-        let doc = recedo_core::doc::Document { width: w, height: h, dpi: 96.0, layers: vec![layer] };
+        let doc = recedo_core::doc::Document { width: w, height: h, dpi: 96.0, layers: vec![layer], selection: None };
         let kra = dir.join(format!("drawing-{stamp}.kra"));
         recedo_core::kra::save_file(&doc, &kra)?;
         let png = dir.join(format!("drawing-{stamp}.png"));

@@ -7,6 +7,7 @@ use crate::image::Rgba8;
 use crate::tiles::{TILE, TiledLayer};
 
 /// Per-pixel coverage over the canvas, with the rectangle that has any.
+#[derive(Clone, PartialEq)]
 pub struct Mask {
     pub width: u32,
     pub height: u32,
@@ -15,12 +16,28 @@ pub struct Mask {
     pub bounds: (u32, u32, u32, u32),
 }
 
+impl std::fmt::Debug for Mask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Mask({}x{}, bounds {:?})", self.width, self.height, self.bounds)
+    }
+}
+
 impl Mask {
-    fn new(width: u32, height: u32) -> Mask {
+    /// An empty mask over a canvas of this size.
+    pub fn new(width: u32, height: u32) -> Mask {
         Mask { width, height, data: vec![0; (width * height) as usize], bounds: (width, height, 0, 0) }
     }
 
-    fn update_bounds(&mut self) {
+    /// Coverage at a pixel; 0 outside the canvas.
+    pub fn get(&self, x: i32, y: i32) -> u8 {
+        if x < 0 || y < 0 || x as u32 >= self.width || y as u32 >= self.height {
+            return 0;
+        }
+        self.data[y as usize * self.width as usize + x as usize]
+    }
+
+    /// Works out `bounds` again after `data` was changed.
+    pub fn update_bounds(&mut self) {
         let (mut x0, mut y0, mut x1, mut y1) = (self.width, self.height, 0, 0);
         for y in 0..self.height {
             let row = &self.data[(y * self.width) as usize..][..self.width as usize];
@@ -177,6 +194,128 @@ fn shape(width: u32, height: u32, (x0, y0, x1, y1): (f64, f64, f64, f64), f: imp
     mask
 }
 
+/// Closed polygons (canvas pixels) filled by the nonzero rule, so a loop drawn over itself
+/// stays filled, with anti-aliased edges: each pixel row is sampled on 4 sub-rows, with
+/// exact coverage along each sub-row.
+pub fn polygons(width: u32, height: u32, contours: &[Vec<(f64, f64)>]) -> Mask {
+    const SUB: usize = 4;
+    let mut mask = Mask::new(width, height);
+    // Edges top to bottom, with +1 or -1 for the direction they were drawn in.
+    type Edge = ((f64, f64), (f64, f64), i32);
+    let mut edges: Vec<Edge> = Vec::new();
+    for c in contours.iter().filter(|c| c.len() >= 3) {
+        for i in 0..c.len() {
+            let (a, b) = (c[i], c[(i + 1) % c.len()]);
+            if a.1 == b.1 || ![a.0, a.1, b.0, b.1].iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            edges.push(if a.1 < b.1 { (a, b, 1) } else { (b, a, -1) });
+        }
+    }
+    if edges.is_empty() || width == 0 || height == 0 {
+        return mask;
+    }
+    edges.sort_by(|a, b| a.0.1.total_cmp(&b.0.1));
+    let top = edges[0].0.1.max(0.0).floor() as usize;
+    let bottom = edges.iter().map(|e| e.1.1).fold(f64::MIN, f64::max).min(height as f64).ceil().max(0.0) as usize;
+    let w = width as usize;
+    let mut cover = vec![0f32; w];
+    let (mut active, mut next) = (Vec::new(), 0);
+    let mut crossings: Vec<(f64, i32)> = Vec::new();
+    for row in top..bottom {
+        cover.fill(0.0);
+        for k in 0..SUB {
+            let sy = row as f64 + (k as f64 + 0.5) / SUB as f64;
+            while next < edges.len() && edges[next].0.1 <= sy {
+                active.push(next);
+                next += 1;
+            }
+            active.retain(|&i| edges[i].1.1 > sy);
+            crossings.clear();
+            for &i in &active {
+                let ((x0, y0), (x1, y1), dir) = edges[i];
+                crossings.push((x0 + (x1 - x0) * (sy - y0) / (y1 - y0), dir));
+            }
+            crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut winding = 0;
+            let mut start = 0.0;
+            for &(x, dir) in &crossings {
+                let was = winding;
+                winding += dir;
+                if was == 0 && winding != 0 {
+                    start = x;
+                } else if was != 0 && winding == 0 {
+                    add_span(&mut cover, start, x, 1.0 / SUB as f32);
+                }
+            }
+        }
+        for (m, c) in mask.data[row * w..][..w].iter_mut().zip(&cover) {
+            *m = (c.min(1.0) * 255.0 + 0.5) as u8;
+        }
+    }
+    mask.update_bounds();
+    mask
+}
+
+/// Adds `amount` times the part of each pixel that the span a..b covers.
+fn add_span(cover: &mut [f32], a: f64, b: f64, amount: f32) {
+    let (a, b) = (a.max(0.0), b.min(cover.len() as f64));
+    if a >= b {
+        return;
+    }
+    let (ia, ib) = (a.floor() as usize, b.floor() as usize);
+    if ia == ib {
+        cover[ia] += (b - a) as f32 * amount;
+        return;
+    }
+    cover[ia] += ((ia + 1) as f64 - a) as f32 * amount;
+    for c in &mut cover[ia + 1..ib] {
+        *c += amount;
+    }
+    if ib < cover.len() {
+        cover[ib] += (b - ib as f64) as f32 * amount;
+    }
+}
+
+/// Erases a layer where the mask covers it (all of a pixel where coverage is 255). Returns
+/// the tiles it changed.
+pub fn erase_mask(layer: &mut TiledLayer, mask: &Mask) -> Vec<(i32, i32)> {
+    let mut changed = Vec::new();
+    if mask.is_empty() {
+        return changed;
+    }
+    let (x0, y0, x1, y1) = mask.bounds;
+    let t = TILE as u32;
+    for ty in y0 / t..y1.div_ceil(t) {
+        for tx in x0 / t..x1.div_ceil(t) {
+            let key = (tx as i32, ty as i32);
+            // A transparent layer has nothing to erase where it has no tile.
+            if layer.tile(key).is_none() && layer.default[3] == 0 {
+                continue;
+            }
+            let (px0, py0) = (tx * t, ty * t);
+            let n = ((px0 + t).min(mask.width) - px0) as usize;
+            let rows = py0..(py0 + t).min(mask.height);
+            if !rows.clone().any(|y| mask.data[(y * mask.width + px0) as usize..][..n].iter().any(|&v| v != 0)) {
+                continue;
+            }
+            let tile = layer.tile_mut(key);
+            for y in rows {
+                let m_row = &mask.data[(y * mask.width + px0) as usize..][..n];
+                let start = ((y - py0) * t * 4) as usize;
+                for (&m, d) in m_row.iter().zip(tile.0[start..start + n * 4].as_chunks_mut::<4>().0) {
+                    if m != 0 {
+                        let a = crate::doc::mul8(d[3], 255 - m);
+                        *d = if a == 0 { [0; 4] } else { [d[0], d[1], d[2], a] };
+                    }
+                }
+            }
+            changed.push(key);
+        }
+    }
+    changed
+}
+
 /// Paints `color` over a layer where the mask covers it (fully opaque where coverage is 255).
 /// Returns the tiles it changed.
 pub fn paint_mask(layer: &mut TiledLayer, mask: &Mask, color: [u8; 3], opacity: u8) -> Vec<(i32, i32)> {
@@ -299,6 +438,30 @@ mod tests {
         assert_eq!(e.data[30 * 100 + 30], 255);
         assert_eq!(e.data[21 * 100 + 11], 0);
         assert_eq!(e.data[30 * 100 + 12], e.data[30 * 100 + 47]);
+    }
+
+    #[test]
+    fn erasing_by_a_mask() {
+        let mut layer = TiledLayer::new();
+        for y in 0..40 {
+            for x in 0..40 {
+                layer.set_pixel(x, y, [10, 200, 10, 255]);
+            }
+        }
+        let m = rectangle(100, 100, (10.0, 10.0), (20.5, 30.0));
+        let changed = erase_mask(&mut layer, &m);
+        assert_eq!(changed, vec![(0, 0)]);
+        assert_eq!(layer.pixel(15, 15), [0, 0, 0, 0], "inside: gone, and clean");
+        assert_eq!(layer.pixel(20, 15), [10, 200, 10, 127], "half-covered edge: half left");
+        assert_eq!(layer.pixel(5, 15), [10, 200, 10, 255], "outside: kept");
+        // Nothing to erase on an empty layer: no tiles are made.
+        let mut empty = TiledLayer::new();
+        assert!(erase_mask(&mut empty, &m).is_empty());
+        assert_eq!(empty.tile_count(), 0);
+        // A background (filled everywhere) gets a hole.
+        let mut bg = TiledLayer::filled([255, 255, 255, 255]);
+        assert_eq!(erase_mask(&mut bg, &m), vec![(0, 0)]);
+        assert_eq!((bg.pixel(15, 15)[3], bg.pixel(5, 5)[3]), (0, 255));
     }
 
     #[test]

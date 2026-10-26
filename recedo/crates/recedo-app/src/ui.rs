@@ -11,11 +11,13 @@ use recedo_core::blend::BlendMode;
 use recedo_core::brush::{Brush, PaintMode};
 use recedo_core::canvas::{Background, CanvasPreset, builtin_presets};
 use recedo_core::curve::Curve;
+use recedo_core::select::Combine;
+use recedo_core::text::Font;
+use web_time::Instant;
 
 use crate::dock::Panel;
-use crate::editor::{Editor, ExportFormat, MAX_BRUSH, MIN_BRUSH, NoticeKind, Tool};
+use crate::editor::{Editor, ExportFormat, MAX_BRUSH, MIN_BRUSH, NoticeKind, Tool, ToolGroup};
 use crate::settings::{Settings, TabletApi};
-use web_time::Instant;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -100,6 +102,11 @@ pub struct AppUi {
     /// Running in a web browser: no Quit, no recent files (no file paths), no choice of
     /// tablet interface (the browser has its own).
     pub web: bool,
+    /// The window with every tool, where the side bar's tools are chosen.
+    pub tool_library: bool,
+    /// The tool in the last frame, and whether text was being written then.
+    last_tool: Tool,
+    writing: bool,
 }
 
 const TOAST_TIME: Duration = Duration::from_secs(5);
@@ -118,6 +125,9 @@ impl AppUi {
             hsv: crate::widgets::Hsv(0.6, 0.8, 0.6),
             tablet_status: String::new(),
             web: false,
+            tool_library: false,
+            last_tool: Tool::Brush,
+            writing: false,
         }
     }
 
@@ -231,6 +241,8 @@ impl AppUi {
             }
         }
         for n in ed.notices.drain(..) {
+            // The same message again (Undo pressed with nothing left, say): shown once, anew.
+            self.toasts.retain(|(_, _, text)| *text != n.text);
             self.toasts.push((Instant::now(), n.kind, n.text));
         }
         self.toasts.retain(|(t, kind, _)| t.elapsed() < if *kind == NoticeKind::Info { TOAST_TIME } else { TOAST_TIME * 2 });
@@ -239,23 +251,43 @@ impl AppUi {
             self.toasts.drain(..extra);
         }
 
-        if self.dialog.is_none() && !ctx.egui_wants_keyboard_input() {
+        // While text is being written, letters are text, never shortcuts (also those that come
+        // before its box has the keys, in the frame of the click that started it).
+        let writing = ed.tool == Tool::Text && ed.text_edit.is_some();
+        if self.dialog.is_none() && !ctx.egui_wants_keyboard_input() && !writing {
             self.shortcuts(&ctx, ed, &mut requests);
         }
 
         egui::Panel::top("menu").show(root, |ui| {
             egui::MenuBar::new().ui(ui, |ui| self.menus(ui, ed, &mut requests));
         });
-        egui::Panel::top("toolbar").show(root, |ui| toolbar(ui, ed));
+        egui::Panel::top("toolbar").show(root, |ui| toolbar(ui, ed, &mut self.tool_library));
         egui::Panel::bottom("status").show(root, |ui| self.status_bar(ui, ed));
         let mut dock = std::mem::take(&mut self.settings.dock);
         let canvas_rect = dock.ui(root, &mut |ui, panel| self.panel(ui, panel, ed));
         self.settings.dock = dock;
-        // The canvas itself is drawn by the GPU underneath; here only what goes over it.
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::unique("recedo canvas overlay"))).with_clip_rect(canvas_rect);
+        // The canvas itself is drawn by the GPU underneath; here only what goes over it, on the
+        // panels' own layer after them (nothing else paints the canvas area), so every window
+        // and floating panel stays on top of it.
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(canvas_rect);
+        ed.update_outline();
         self.overlay(&painter, &ctx, ed, canvas_rect);
+        self.tool_library_window(&ctx, ed);
         self.toasts_ui(&ctx, canvas_rect);
         self.dialogs(&ctx, ed, &mut requests);
+        // Text being written: its box (in Tool options) comes to the front when writing
+        // starts, and picking another tool places the text, as in other painting apps (it
+        // would otherwise stay on the canvas as a preview, never painted).
+        if ed.text_edit.is_some() {
+            if !self.writing {
+                self.settings.dock.show(Panel::ToolOptions);
+            }
+            if ed.tool != Tool::Text && self.last_tool == Tool::Text {
+                ed.place_text();
+            }
+        }
+        self.writing = ed.text_edit.is_some();
+        self.last_tool = ed.tool;
         FrameOutput { canvas_rect, requests }
     }
 
@@ -285,8 +317,41 @@ impl AppUi {
         if !self.web && hit(ctrl, Key::Q) && self.request_quit(ed) {
             requests.push(Request::Quit);
         }
-        if hit(ctrl, Key::J) {
+        // The more specific combinations first: a shortcut ignores extra Shift or Alt.
+        let ctrl_alt = EguiMods::COMMAND | EguiMods::ALT;
+        if hit(ctrl_alt, Key::J) {
+            ed.selection_to_layer(false);
+        } else if hit(ctrl_shift, Key::J) {
+            ed.selection_to_layer(true);
+        } else if hit(ctrl, Key::J) {
             ed.duplicate_layer();
+        }
+        if hit(ctrl_shift, Key::A) || hit(ctrl, Key::D) {
+            ed.deselect();
+        } else if hit(ctrl, Key::A) {
+            ed.select_all();
+        }
+        if hit(ctrl_shift, Key::I) {
+            ed.invert_selection();
+        }
+        if hit(none, Key::Backspace) {
+            ed.fill_selection();
+        }
+        if hit(none, Key::Enter) {
+            ed.apply_crop();
+        }
+        if hit(none, Key::Escape) {
+            ed.cancel_crop();
+            ed.cancel_text();
+        }
+        if ed.tool == Tool::Move {
+            for (key, dx, dy) in [(Key::ArrowLeft, -1, 0), (Key::ArrowRight, 1, 0), (Key::ArrowUp, 0, -1), (Key::ArrowDown, 0, 1)] {
+                if hit(shift, key) {
+                    ed.nudge(dx * 10, dy * 10);
+                } else if hit(none, key) {
+                    ed.nudge(dx, dy);
+                }
+            }
         }
         if hit(ctrl, Key::E) {
             ed.merge_down();
@@ -328,6 +393,11 @@ impl AppUi {
         }
         if hit(none, Key::V) {
             ed.tool = Tool::Line;
+        }
+        for (key, tool) in [(Key::S, Tool::Smudge), (Key::R, Tool::SelectRect), (Key::L, Tool::SelectLasso), (Key::W, Tool::MagicWand), (Key::C, Tool::Crop), (Key::T, Tool::Text), (Key::Z, Tool::Zoom)] {
+            if hit(none, key) {
+                ed.tool = tool;
+            }
         }
         if hit(none, Key::OpenBracket) {
             ed.resize_brush(false);
@@ -527,11 +597,132 @@ impl AppUi {
 
     fn panel(&mut self, ui: &mut Ui, panel: Panel, ed: &mut Editor) {
         match panel {
-            Panel::Tools => tools_panel(ui, ed),
-            Panel::ToolOptions => tool_options_panel(ui, ed),
+            Panel::Tools => self.tools_panel(ui, ed),
+            Panel::ToolOptions => tool_options_panel(ui, ed, self.dialog.is_none()),
             Panel::Color => self.color_panel(ui, ed),
             Panel::Layers => self.layers_panel(ui, ed),
             Panel::History => history_panel(ui, ed),
+        }
+    }
+
+    /// The side bar: the tools the user chose, the button for all the others, the colour.
+    fn tools_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
+        ui.vertical_centered_justified(|ui| {
+            let label = if self.tool_library { "Close all tools" } else { "All tools…" };
+            if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(vec2(0.0, 28.0))).on_hover_text("Every tool, and which ones are on this bar").clicked() {
+                self.tool_library = !self.tool_library;
+            }
+            ui.add_space(4.0);
+            let bar = self.settings.hotbar_tools();
+            for t in &bar {
+                let tip = match t.key() {
+                    Some(k) => format!("{} ({k})", t.hint()),
+                    None => t.hint().to_string(),
+                };
+                if ui.add(egui::Button::selectable(ed.tool == *t, t.name()).min_size(vec2(0.0, 28.0))).on_hover_text(tip).clicked() {
+                    ed.tool = *t;
+                }
+            }
+            // A tool picked from the full list that is not on the bar still shows here.
+            if !bar.contains(&ed.tool) {
+                ui.add(egui::Button::selectable(true, ed.tool.name()).min_size(vec2(0.0, 28.0))).on_hover_text(ed.tool.hint());
+            }
+            ui.add_space(8.0);
+            let [r, g, b] = ed.color;
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 4.0, Color32::from_rgb(r, g, b));
+            // A light outline, so a dark colour still reads as a swatch on the dark panel.
+            ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color), egui::StrokeKind::Inside);
+        });
+    }
+
+    /// Every tool, by group: click one to use it, tick it to keep it on the side bar. On the
+    /// right, the side bar's order.
+    fn tool_library_window(&mut self, ctx: &egui::Context, ed: &mut Editor) {
+        if !self.tool_library {
+            return;
+        }
+        let mut open = true;
+        let mut bar = self.settings.hotbar_tools();
+        let before = bar.clone();
+        // Nothing inside takes its width from the window (content as wide as the space it is
+        // given makes a resizable window grow a little every frame); the lists fill its height.
+        egui::Window::new("All tools").id(Id::unique("recedo tool library")).open(&mut open).collapsible(false).default_size(vec2(1040.0, 640.0)).show(ctx, |ui| {
+            ui.label("Click a tool to use it. Tick \"On bar\" to keep it on your side bar (point at a tool to see what it does).");
+            ui.add_space(4.0);
+            ui.horizontal_top(|ui| {
+                // Top to bottom (a scroll area inside a row would lay the groups out in a row).
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical().id_salt("all tools").auto_shrink([true, false]).show(ui, |ui| {
+                        for group in ToolGroup::ALL {
+                            ui.add_space(4.0);
+                            ui.strong(group.name());
+                            let tools: Vec<Tool> = Tool::ALL.into_iter().filter(|t| t.group() == group).collect();
+                            egui::Grid::new(("tool group", group.name())).num_columns(6).spacing(vec2(6.0, 4.0)).min_col_width(70.0).show(ui, |ui| {
+                                for row in tools.chunks(3) {
+                                    for &t in row {
+                                        let name = match t.key() {
+                                            Some(k) => format!("{}  ({k})", t.name()),
+                                            None => t.name().to_string(),
+                                        };
+                                        if ui.add(egui::Button::selectable(ed.tool == t, name).min_size(vec2(150.0, 26.0))).on_hover_text(t.hint()).clicked() {
+                                            ed.tool = t;
+                                        }
+                                        let mut on = bar.contains(&t);
+                                        if ui.checkbox(&mut on, "On bar").changed() {
+                                            if on {
+                                                bar.push(t);
+                                            } else if bar.len() > 1 {
+                                                bar.retain(|b| *b != t);
+                                            }
+                                        }
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    });
+                });
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.strong("Your side bar");
+                    ui.weak("Top to bottom");
+                    egui::ScrollArea::vertical().id_salt("bar order").auto_shrink([true, false]).show(ui, |ui| {
+                        let mut action = None;
+                        for (i, t) in bar.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.add_sized(vec2(120.0, 20.0), egui::Label::new(t.name()).truncate());
+                                if ui.add_enabled(i > 0, egui::Button::new("Up").small()).clicked() {
+                                    action = Some((i, -1));
+                                }
+                                if ui.add_enabled(i + 1 < bar.len(), egui::Button::new("Down").small()).clicked() {
+                                    action = Some((i, 1));
+                                }
+                                if ui.add_enabled(bar.len() > 1, egui::Button::new("Remove").small()).clicked() {
+                                    action = Some((i, 0));
+                                }
+                            });
+                        }
+                        match action {
+                            Some((i, 0)) => {
+                                bar.remove(i);
+                            }
+                            Some((i, d)) => bar.swap(i, (i as i32 + d) as usize),
+                            None => {}
+                        }
+                        ui.add_space(6.0);
+                        if ui.button("Back to the standard tools").clicked() {
+                            bar = Tool::DEFAULT_BAR.to_vec();
+                        }
+                    });
+                });
+            });
+        });
+        if bar != before {
+            self.settings.set_hotbar(&bar);
+        }
+        if !open {
+            self.tool_library = false;
         }
     }
 
@@ -706,8 +897,129 @@ impl AppUi {
             painter.circle_stroke(pt(l.pen), l.radius as f32 / ppp, s);
             painter.line_segment([pt(l.brush), pt(l.pen)], s);
         }
+        let to = |p: (f64, f64)| pt(ed.view.to_screen(p.0, p.1));
+        // Lines drawn dark under light, so they show on any colour.
+        let ants = |shapes: &mut Vec<egui::Shape>, light: &mut Vec<egui::Shape>, a: egui::Pos2, b: egui::Pos2| {
+            shapes.push(egui::Shape::line_segment([a, b], Stroke::new(2.5, Color32::from_black_alpha(190))));
+            light.push(egui::Shape::line_segment([a, b], Stroke::new(1.0, Color32::from_gray(250))));
+        };
+        let (mut dark, mut light) = (Vec::new(), Vec::new());
+        // The selection's outline (while moving it, where it goes).
+        let moving = match ed.shape_preview() {
+            Some((Tool::Move, a, b)) => Some((b.0 - a.0, b.1 - a.1)),
+            _ => None,
+        };
+        let shift = moving.unwrap_or((0.0, 0.0));
+        let to_moved = |p: (f64, f64)| to((p.0 + shift.0, p.1 + shift.1));
+        match (ed.selection_outline(), &ed.doc.selection) {
+            (Some(Some(segments)), _) => {
+                for [a, b] in segments {
+                    let (sa, sb) = (to_moved(*a), to_moved(*b));
+                    if canvas.intersects(egui::Rect::from_two_pos(sa, sb).expand(2.0)) {
+                        ants(&mut dark, &mut light, sa, sb);
+                    }
+                }
+            }
+            (Some(None), Some(m)) => {
+                // Too intricate to outline: its bounding box instead.
+                let (x0, y0, x1, y1) = (m.bounds.0 as f64, m.bounds.1 as f64, m.bounds.2 as f64, m.bounds.3 as f64);
+                let c = [to_moved((x0, y0)), to_moved((x1, y0)), to_moved((x1, y1)), to_moved((x0, y1))];
+                for i in 0..4 {
+                    ants(&mut dark, &mut light, c[i], c[(i + 1) % 4]);
+                }
+            }
+            _ => {}
+        }
+        // Moving a whole layer: the outline of what it holds.
+        if let (Some(d), None) = (moving, &ed.doc.selection)
+            && let Some(l) = ed.doc.layers.get(ed.active)
+        {
+            let keys: Vec<_> = l.pixels.tile_keys().collect();
+            if !keys.is_empty() {
+                let t = recedo_core::tiles::TILE as f64;
+                let (x0, y0) = (keys.iter().map(|k| k.0).min().unwrap_or(0) as f64 * t, keys.iter().map(|k| k.1).min().unwrap_or(0) as f64 * t);
+                let (x1, y1) = ((keys.iter().map(|k| k.0).max().unwrap_or(0) + 1) as f64 * t, (keys.iter().map(|k| k.1).max().unwrap_or(0) + 1) as f64 * t);
+                let c = [to((x0 + d.0, y0 + d.1)), to((x1 + d.0, y0 + d.1)), to((x1 + d.0, y1 + d.1)), to((x0 + d.0, y1 + d.1))];
+                for i in 0..4 {
+                    ants(&mut dark, &mut light, c[i], c[(i + 1) % 4]);
+                }
+            }
+        }
+        // A lasso being drawn, closed back to its start.
+        if let Some(points) = ed.lasso_preview()
+            && points.len() >= 2
+        {
+            for w in points.windows(2) {
+                ants(&mut dark, &mut light, to(w[0]), to(w[1]));
+            }
+            light.push(egui::Shape::line_segment([to(points[points.len() - 1]), to(points[0])], Stroke::new(1.0, Color32::from_white_alpha(110))));
+        }
+        // The crop rectangle, and the rest of the canvas dimmed.
+        let crop = match ed.shape_preview() {
+            Some((Tool::Crop, a, b)) => Some((a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))),
+            _ => ed.crop_rect.map(|(x, y, w, h)| (x as f64, y as f64, (x + w as i32) as f64, (y + h as i32) as f64)),
+        };
+        if let Some((x0, y0, x1, y1)) = crop {
+            let (w, h) = (ed.doc.width as f64, ed.doc.height as f64);
+            let c = [to((x0, y0)), to((x1, y0)), to((x1, y1)), to((x0, y1))];
+            // One mesh for the dimmed ring between the canvas edge and the rectangle (separate
+            // anti-aliased pieces would leave light seams where they meet).
+            let dim = Color32::from_black_alpha(130);
+            let mut ring = egui::Mesh::default();
+            for p in [to((0.0, 0.0)), to((w, 0.0)), to((w, h)), to((0.0, h))].into_iter().chain(c) {
+                ring.colored_vertex(p, dim);
+            }
+            for i in 0..4 {
+                let j = (i + 1) % 4;
+                ring.add_triangle(i, j, 4 + j);
+                ring.add_triangle(i, 4 + j, 4 + i);
+            }
+            painter.add(egui::Shape::mesh(ring));
+            for i in 0..4 {
+                ants(&mut dark, &mut light, c[i], c[(i + 1) % 4]);
+            }
+            label_on_canvas(painter, c[0] + vec2(4.0, 4.0), format!("{:.0} × {:.0}", x1 - x0, y1 - y0));
+        }
+        // The measuring line, while dragging and afterwards.
+        let measured = match ed.shape_preview() {
+            Some((Tool::Measure, a, b)) => Some((a, b)),
+            _ if ed.tool == Tool::Measure => ed.measure,
+            _ => None,
+        };
+        if let Some((a, b)) = measured {
+            ants(&mut dark, &mut light, to(a), to(b));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let label = format!("{:.1} px, {:.1}°", dx.hypot(dy), (-dy).atan2(dx).to_degrees());
+            label_on_canvas(painter, to(b) + vec2(10.0, 10.0), label);
+        }
+        // The clone tool's source.
+        if ed.tool == Tool::Clone
+            && let Some(src) = ed.clone_source
+        {
+            let c = to(src);
+            for (r, col) in [(9.0, Color32::from_black_alpha(200)), (8.0, Color32::WHITE)] {
+                painter.circle_stroke(c, r, Stroke::new(1.5, col));
+            }
+            painter.line_segment([c - vec2(12.0, 0.0), c + vec2(12.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
+            painter.line_segment([c - vec2(0.0, 12.0), c + vec2(0.0, 12.0)], Stroke::new(1.0, Color32::WHITE));
+        }
+        // The text being written, roughly as it will look (the same fonts; the view's
+        // rotation is not shown).
+        if let Some(t) = &ed.text_edit {
+            let [r, g, bl] = ed.color;
+            let family = if ed.tools.text.font == Font::Mono { egui::FontFamily::Monospace } else { egui::FontFamily::Proportional };
+            let size = ((ed.tools.text.size as f64 * ed.view.zoom) as f32 / ppp).max(1.0);
+            let at = to(t.at);
+            if t.text.is_empty() {
+                painter.line_segment([at, at + vec2(0.0, size)], Stroke::new(2.0, Color32::from_rgb(r, g, bl)));
+            } else {
+                painter.text(at, egui::Align2::LEFT_TOP, &t.text, egui::FontId::new(size, family), Color32::from_rgb(r, g, bl));
+            }
+            painter.circle_filled(at, 3.0, Color32::from_rgb(80, 140, 230));
+        }
+        painter.extend(dark);
+        painter.extend(light);
         if let Some((tool, a, b)) = ed.shape_preview() {
-            let to = |p: (f64, f64)| pt(ed.view.to_screen(p.0, p.1));
             let [r, g, bl] = ed.color;
             let width = if tool == Tool::Gradient { 1.5 } else { (ed.tools.brush.size as f64 * ed.view.zoom / ppp as f64).max(1.0) as f32 };
             let s = Stroke::new(width, Color32::from_rgb(r, g, bl));
@@ -723,6 +1035,18 @@ impl AppUi {
                 Tool::Rectangle => {
                     painter.add(egui::Shape::closed_line(vec![to(a), to((b.0, a.1)), to(b), to((a.0, b.1))], s));
                 }
+                Tool::SelectRect => {
+                    let c = [to(a), to((b.0, a.1)), to(b), to((a.0, b.1))];
+                    painter.add(egui::Shape::closed_line(c.to_vec(), Stroke::new(2.5, Color32::from_black_alpha(190))));
+                    painter.add(egui::Shape::closed_line(c.to_vec(), guide));
+                }
+                Tool::SelectEllipse => {
+                    let (cx, cy, rx, ry) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.0 - b.0).abs() / 2.0, (a.1 - b.1).abs() / 2.0);
+                    let pts: Vec<egui::Pos2> = (0..96).map(|i| i as f64 / 96.0 * std::f64::consts::TAU).map(|t| to((cx + rx * t.cos(), cy + ry * t.sin()))).collect();
+                    painter.add(egui::Shape::closed_line(pts.clone(), Stroke::new(2.5, Color32::from_black_alpha(190))));
+                    painter.add(egui::Shape::closed_line(pts, guide));
+                }
+                Tool::Crop | Tool::Measure | Tool::Move => {}
                 _ => {
                     let (cx, cy, rx, ry) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.0 - b.0).abs() / 2.0, (a.1 - b.1).abs() / 2.0);
                     let pts = (0..96).map(|i| i as f64 / 96.0 * std::f64::consts::TAU).map(|t| to((cx + rx * t.cos(), cy + ry * t.sin()))).collect();
@@ -764,6 +1088,10 @@ impl AppUi {
                         NoticeKind::Error => Color32::from_rgb(240, 90, 80),
                     };
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        // As wide as the message, up to 560 points (the area keeps the width it
+                        // had and would wrap a longer message into a narrow column).
+                        let font = egui::TextStyle::Body.resolve(ui.style());
+                        ui.set_width(ui.painter().layout_no_wrap(text.clone(), font, color).size().x.min(560.0));
                         ui.label(RichText::new(text).color(color));
                     });
                 }
@@ -997,7 +1325,7 @@ impl AppUi {
 
 /// Big buttons for what a pen or a finger cannot reach by keyboard: undo, redo, brush or
 /// eraser, brush size, fit, zoom.
-fn toolbar(ui: &mut Ui, ed: &mut Editor) {
+fn toolbar(ui: &mut Ui, ed: &mut Editor, library: &mut bool) {
     ui.horizontal_wrapped(|ui| {
         let big = |text: &str| egui::Button::new(RichText::new(text).size(15.0)).min_size(vec2(44.0, 30.0));
         let (_, applied) = ed.history.entries();
@@ -1009,26 +1337,15 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             ed.redo();
         }
         ui.separator();
-        for (t, label) in [
-            (Tool::Brush, "Brush"),
-            (Tool::Eraser, "Eraser"),
-            (Tool::Fill, "Fill"),
-            (Tool::Line, "Line"),
-            (Tool::Rectangle, "Rect"),
-            (Tool::Ellipse, "Ellipse"),
-            (Tool::Gradient, "Gradient"),
-            (Tool::Eyedropper, "Pick colour"),
-            (Tool::Pan, "Move view"),
-        ] {
-            if ui.add(egui::Button::selectable(ed.tool == t, RichText::new(label).size(15.0)).min_size(vec2(44.0, 30.0))).clicked() {
-                ed.tool = t;
-            }
+        if ui.add(egui::Button::selectable(*library, RichText::new("All tools").size(15.0)).min_size(vec2(44.0, 30.0))).on_hover_text("Every tool, and which are on the side bar").clicked() {
+            *library = !*library;
         }
+        ui.label(RichText::new(ed.tool.name()).size(15.0).strong()).on_hover_text(ed.tool.hint());
         ui.separator();
         if ui.add(big("Smaller")).on_hover_text("[").clicked() {
             ed.resize_brush(false);
         }
-        ui.label(format!("{:.0} px", ed.current_brush_mut().size));
+        ui.label(format!("{:.0} px", ed.shown_brush_size()));
         if ui.add(big("Bigger")).on_hover_text("]").clicked() {
             ed.resize_brush(true);
         }
@@ -1063,34 +1380,8 @@ fn presets() -> Vec<(&'static str, &'static str, Brush)> {
     ]
 }
 
-fn tools_panel(ui: &mut Ui, ed: &mut Editor) {
-    let keys = |t: Tool| match t {
-        Tool::Brush => "B",
-        Tool::Eraser => "E",
-        Tool::Eyedropper => "P (or Ctrl-click)",
-        Tool::Pan => "or hold Space",
-        Tool::Fill => "F: fills the area of the colour you click",
-        Tool::Line => "V: drag; Shift for 15° steps",
-        Tool::Rectangle => "Drag; Shift for a square",
-        Tool::Ellipse => "Drag; Shift for a circle",
-        Tool::Gradient => "G: drag from full colour to where it fades out",
-    };
-    ui.vertical_centered_justified(|ui| {
-        for t in Tool::ALL {
-            if ui.add(egui::Button::selectable(ed.tool == t, t.name()).min_size(vec2(0.0, 28.0))).on_hover_text(keys(t)).clicked() {
-                ed.tool = t;
-            }
-        }
-        ui.add_space(8.0);
-        let [r, g, b] = ed.color;
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 4.0, Color32::from_rgb(r, g, b));
-        // A light outline, so a dark colour still reads as a swatch on the dark panel.
-        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color), egui::StrokeKind::Inside);
-    });
-}
-
-fn tool_options_panel(ui: &mut Ui, ed: &mut Editor) {
+/// `may_focus`: no dialog is open, so the text tool's box may take the keyboard.
+fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool) {
     match ed.tool {
         Tool::Brush | Tool::Eraser => {
             ui.strong(if ed.tool == Tool::Eraser { "Eraser" } else { "Brush" });
@@ -1211,6 +1502,217 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor) {
             ui.label("Drag to move the view.");
             ui.weak("With any tool: Space+drag pans, Shift+Space+drag rotates, Ctrl+Space+drag zooms.");
         }
+        Tool::Smudge | Tool::Blur | Tool::Sharpen | Tool::Dodge | Tool::Burn | Tool::Sponge | Tool::Recolour | Tool::Clone | Tool::Push | Tool::Spray => {
+            ui.strong(ed.tool.name());
+            ui.weak(ed.tool.hint());
+            let r = &mut ed.tools.retouch;
+            ui.add(egui::Slider::new(&mut r.size, MIN_BRUSH..=MAX_BRUSH).logarithmic(true).text("Size").suffix(" px").max_decimals(0)).on_hover_text("[ and ] change the size");
+            percent(ui, &mut r.strength, "Strength", "How strong one pass of the brush is; pressing lightly makes it weaker");
+            percent(ui, &mut r.hardness, "Hardness", "0 % fades out from the middle, 100 % works evenly up to the edge");
+            match ed.tool {
+                Tool::Smudge => percent(ui, &mut r.smudge_length, "Length", "How far the paint is dragged"),
+                Tool::Spray => {
+                    ui.add(egui::Slider::new(&mut r.spray_density, 1.0..=100.0).text("Dots").max_decimals(0)).on_hover_text("Dots per step of the brush");
+                    ui.add(egui::Slider::new(&mut r.spray_dot, 0.5..=50.0).logarithmic(true).text("Dot size").suffix(" px").max_decimals(1));
+                    ui.weak("Sprays the colour.");
+                }
+                Tool::Sponge => {
+                    ui.radio_value(&mut ed.tools.sponge_saturates, false, "Make colours more grey");
+                    ui.radio_value(&mut ed.tools.sponge_saturates, true, "Make colours more vivid");
+                }
+                Tool::Recolour => {
+                    ui.weak("Uses the colour (Ctrl+click picks one).");
+                }
+                Tool::Clone => match ed.clone_source {
+                    Some((x, y)) => {
+                        ui.label(format!("Copying from {:.0}, {:.0}", x, y));
+                        if ui.button("Choose another source").on_hover_text("Or Ctrl+click on the canvas").clicked() {
+                            ed.forget_clone_source();
+                        }
+                    }
+                    None => {
+                        ui.label(RichText::new("Ctrl+click where to copy from first.").strong());
+                    }
+                },
+                _ => {}
+            }
+        }
+        Tool::MagicEraser | Tool::MagicWand => {
+            ui.strong(ed.tool.name());
+            ui.weak(ed.tool.hint());
+            percent(ui, &mut ed.tools.wand_tolerance, "Tolerance", "How different a colour may be and still count");
+            ui.radio_value(&mut ed.tools.wand_all_layers, true, "Find the area in the visible picture");
+            ui.radio_value(&mut ed.tools.wand_all_layers, false, "Find the area in this layer only");
+            if ed.tool == Tool::MagicWand {
+                selection_controls(ui, ed);
+            }
+        }
+        Tool::LassoFill => {
+            ui.strong("Lasso fill");
+            ui.weak(ed.tool.hint());
+            ui.label("Draw around the area; lifting the pen closes the outline and fills it with the colour.");
+        }
+        Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso => {
+            ui.strong(ed.tool.name());
+            ui.weak(ed.tool.hint());
+            selection_controls(ui, ed);
+        }
+        Tool::Move => {
+            ui.strong("Move");
+            ui.label(if ed.has_selection() { "Moves the selected pixels (and the selection)." } else { "Moves the whole selected layer." });
+            ui.weak("Drag on the canvas. Arrow keys move 1 px, Shift+arrow 10 px. Shift while dragging keeps it level.");
+        }
+        Tool::Crop => {
+            ui.strong("Crop");
+            match ed.crop_rect {
+                Some((x, y, w, h)) => {
+                    ui.label(format!("Keep {w} × {h} px from {x}, {y}"));
+                    ui.horizontal(|ui| {
+                        if ui.button("Crop").on_hover_text("Enter").clicked() {
+                            ed.apply_crop();
+                        }
+                        if ui.button("Cancel").on_hover_text("Escape").clicked() {
+                            ed.cancel_crop();
+                        }
+                    });
+                }
+                None => {
+                    ui.weak(ed.tool.hint());
+                }
+            }
+            if ed.has_selection() && ui.button("Crop to the selection").clicked() {
+                ed.crop_to_selection();
+            }
+        }
+        Tool::Text => text_options(ui, ed, may_focus),
+        Tool::Zoom => {
+            ui.strong("Zoom");
+            ui.weak(ed.tool.hint());
+        }
+        Tool::Rotate => {
+            ui.strong("Rotate view");
+            ui.weak(ed.tool.hint());
+            if ui.button("Straighten").on_hover_text("5").clicked() {
+                ed.reset_rotation();
+            }
+        }
+        Tool::Measure => {
+            ui.strong("Measure");
+            ui.weak(ed.tool.hint());
+            if let Some((a, b)) = ed.measure {
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                ui.label(format!("Length: {:.1} px", dx.hypot(dy)));
+                ui.label(format!("Angle: {:.1}°", (-dy).atan2(dx).to_degrees()));
+                ui.label(format!("Across {:.1} px, down {:.1} px", dx, dy));
+            }
+        }
+    }
+}
+
+/// Text over the canvas, light on a dark patch so it shows on any picture.
+fn label_on_canvas(painter: &egui::Painter, at: egui::Pos2, text: String) {
+    let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
+    let rect = egui::Rect::from_min_size(at, galley.size()).expand(3.0);
+    painter.rect_filled(rect, 3.0, Color32::from_black_alpha(170));
+    painter.galley(at, galley, Color32::WHITE);
+}
+
+/// A 0..=1 value as a percentage slider.
+fn percent(ui: &mut Ui, v: &mut f32, label: &str, tip: &str) {
+    let mut p = (*v * 100.0).round();
+    if ui.add(egui::Slider::new(&mut p, 0.0..=100.0).text(label).suffix(" %").integer()).on_hover_text(tip).changed() {
+        *v = p / 100.0;
+    }
+}
+
+/// How new selections combine, and what can be done with the selection.
+fn selection_controls(ui: &mut Ui, ed: &mut Editor) {
+    ui.add_space(4.0);
+    ui.label("A new selection:");
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(&mut ed.tools.select_mode, Combine::Replace, "Replaces").on_hover_text("Click without dragging to deselect");
+        ui.radio_value(&mut ed.tools.select_mode, Combine::Add, "Adds").on_hover_text("Or hold Shift when you start");
+        ui.radio_value(&mut ed.tools.select_mode, Combine::Subtract, "Takes away").on_hover_text("Or hold Alt when you start");
+        ui.radio_value(&mut ed.tools.select_mode, Combine::Intersect, "Keeps the overlap").on_hover_text("Or hold Shift and Alt");
+    });
+    let has = ed.has_selection();
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Select all").on_hover_text("Ctrl+A").clicked() {
+            ed.select_all();
+        }
+        if ui.add_enabled(has, egui::Button::new("Deselect")).on_hover_text("Ctrl+Shift+A").clicked() {
+            ed.deselect();
+        }
+        if ui.add_enabled(has, egui::Button::new("Invert")).on_hover_text("Ctrl+Shift+I").clicked() {
+            ed.invert_selection();
+        }
+    });
+    if has {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Fill with colour").on_hover_text("Backspace").clicked() {
+                ed.fill_selection();
+            }
+            if ui.button("Clear").on_hover_text("Delete").clicked() {
+                ed.clear_layer();
+            }
+            if ui.button("Copy to new layer").on_hover_text("Ctrl+Alt+J").clicked() {
+                ed.selection_to_layer(false);
+            }
+            if ui.button("Cut to new layer").on_hover_text("Ctrl+Shift+J").clicked() {
+                ed.selection_to_layer(true);
+            }
+            if ui.button("Crop to it").clicked() {
+                ed.crop_to_selection();
+            }
+        });
+        ui.weak("Painting and filling stay inside the selection.");
+    }
+}
+
+fn text_options(ui: &mut Ui, ed: &mut Editor, may_focus: bool) {
+    ui.strong("Text");
+    let st = &mut ed.tools.text;
+    ui.horizontal(|ui| {
+        for f in Font::ALL {
+            ui.radio_value(&mut st.font, f, f.name());
+        }
+        ui.checkbox(&mut st.bold, "Bold");
+    });
+    ui.add(egui::Slider::new(&mut st.size, 4.0..=600.0).logarithmic(true).text("Size").suffix(" px").max_decimals(0));
+    ui.add(egui::Slider::new(&mut st.line_spacing, 0.5..=3.0).text("Line spacing").max_decimals(2));
+    let (mut place, mut cancel) = (false, false);
+    match &mut ed.text_edit {
+        None => {
+            ui.weak("Click on the canvas where the text should start.");
+        }
+        Some(t) => {
+            let edit = ui.add(egui::TextEdit::multiline(&mut t.text).desired_rows(3).desired_width(f32::INFINITY).hint_text("Type the text here"));
+            // Escape cancels. Otherwise the keys go to the text while it is being written,
+            // unless another field has them: a click on the canvas (to move the text) takes
+            // them away.
+            cancel = may_focus && ui.input(|i| i.key_pressed(Key::Escape));
+            let elsewhere = ui.ctx().memory(|m| m.focused()).is_some_and(|id| id != edit.id);
+            if may_focus && !cancel && !edit.has_focus() && !elsewhere {
+                edit.request_focus();
+            }
+            // Ctrl+Enter, read from the key press itself.
+            let ctrl_enter = |e: &egui::Event| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if modifiers.command);
+            place = edit.has_focus() && ui.input(|i| i.events.iter().any(ctrl_enter));
+            ui.horizontal(|ui| {
+                if ui.button("Place text").on_hover_text("Ctrl+Enter").clicked() {
+                    place = true;
+                }
+                if ui.button("Cancel").on_hover_text("Escape").clicked() {
+                    cancel = true;
+                }
+            });
+            ui.weak("Uses the colour. Click on the canvas again to move the text.");
+        }
+    }
+    if place {
+        ed.place_text();
+    } else if cancel {
+        ed.cancel_text();
     }
 }
 
@@ -1268,7 +1770,21 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F", "Fill"),
     ("G", "Gradient"),
     ("V", "Line"),
+    ("S", "Smudge"),
+    ("R  L  W", "Rectangle select, lasso select, magic wand"),
+    ("C", "Crop (Enter crops, Escape cancels)"),
+    ("T", "Text (Ctrl+Enter places it)"),
+    ("Z", "Zoom tool"),
     ("Shift while dragging a shape", "Straight angles, squares, circles"),
+    ("Shift / Alt when starting a selection", "Add to it / take away from it"),
+    ("Ctrl + A", "Select all"),
+    ("Ctrl + Shift + A, Ctrl + D", "Deselect"),
+    ("Ctrl + Shift + I", "Invert the selection"),
+    ("Backspace", "Fill the selection (or the layer) with the colour"),
+    ("Ctrl + Alt + J", "Copy the selection to a new layer"),
+    ("Ctrl + Shift + J", "Cut the selection to a new layer"),
+    ("Arrow keys (Move tool)", "Move 1 px; with Shift 10 px"),
+    ("Ctrl + click (Clone tool)", "Choose where to copy from"),
     ("Ctrl + click", "Pick a colour while painting"),
     ("[  ]", "Brush smaller / bigger"),
     ("I  O", "Brush opacity down / up"),
@@ -1288,7 +1804,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Insert", "New layer"),
     ("Ctrl + J", "Duplicate layer"),
     ("Shift + Delete", "Delete layer"),
-    ("Delete", "Clear layer"),
+    ("Delete", "Clear the selection, or the layer"),
     ("Ctrl + E", "Merge down"),
     ("Page Up / Down", "Select the layer above / below"),
     ("Ctrl + Page Up / Down", "Move the layer up / down"),

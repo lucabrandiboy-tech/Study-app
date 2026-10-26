@@ -621,3 +621,427 @@ fn shapes_and_fill_refuse_a_locked_layer() {
     assert_eq!(applied(&e), before, "nothing changed");
     assert!(e.notices.iter().filter(|n| n.text.contains("locked")).count() >= 2);
 }
+
+// ----- the tool library's tools ----------------------------------------------------------
+
+/// Drags from a to b (screen pixels) with the current tool, these keys held.
+fn drag_with(e: &mut Editor, a: (f64, f64), b: (f64, f64), mods: Modifiers) {
+    e.pen(&pt(1, a.0, a.1, true), true, mods);
+    for i in 1..=20 {
+        let t = i as f64 / 20.0;
+        e.pen(&pt(1 + i, a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, true), true, mods);
+    }
+    e.pen(&pt(30, b.0, b.1, false), true, mods);
+}
+
+fn click(e: &mut Editor, x: f64, y: f64, mods: Modifiers) {
+    e.pen(&pt(1, x, y, true), true, mods);
+    e.pen(&pt(2, x, y, false), true, mods);
+}
+
+fn px(e: &Editor, x: i32, y: i32) -> [u8; 4] {
+    e.doc.layers[e.active].pixels.pixel(x, y)
+}
+
+fn steps(e: &Editor) -> Vec<String> {
+    let (names, applied) = e.history.entries();
+    names[..applied].iter().map(|s| s.to_string()).collect()
+}
+
+const SHIFT: Modifiers = Modifiers { ctrl: false, shift: true, alt: false, space: false };
+const ALT: Modifiers = Modifiers { ctrl: false, shift: false, alt: true, space: false };
+const CTRL: Modifiers = Modifiers { ctrl: true, shift: false, alt: false, space: false };
+
+/// Fills a rectangle of the selected layer directly (not as a tool) and shows it.
+fn paint_rect(e: &mut Editor, x0: i32, y0: i32, x1: i32, y1: i32, f: impl Fn(i32, i32) -> [u8; 4]) {
+    for y in y0..y1 {
+        for x in x0..x1 {
+            e.doc.layers[e.active].pixels.set_pixel(x, y, f(x, y));
+        }
+    }
+    e.refresh_all = true;
+    e.take_refresh();
+}
+
+#[test]
+fn the_tool_list_is_complete_and_consistent() {
+    assert_eq!(Tool::ALL.len(), 31);
+    let names: HashSet<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
+    assert_eq!(names.len(), Tool::ALL.len(), "names are distinct");
+    let keys: Vec<&str> = Tool::ALL.iter().filter_map(|t| t.key()).collect();
+    assert_eq!(keys.iter().collect::<HashSet<_>>().len(), keys.len(), "no key used twice: {keys:?}");
+    for g in ToolGroup::ALL {
+        assert!(Tool::ALL.iter().any(|t| t.group() == g), "{g:?} has tools");
+    }
+    // Listed group by group, as the library shows them.
+    let order: Vec<ToolGroup> = Tool::ALL.iter().map(|t| t.group()).collect();
+    let mut seen = Vec::new();
+    for g in order {
+        if seen.last() != Some(&g) {
+            assert!(!seen.contains(&g), "{g:?} is in one piece");
+            seen.push(g);
+        }
+    }
+    assert!(Tool::DEFAULT_BAR.iter().all(|t| Tool::ALL.contains(t)));
+    // 22 tools more than the 9 there were.
+    let old = [Tool::Brush, Tool::Eraser, Tool::Eyedropper, Tool::Pan, Tool::Fill, Tool::Line, Tool::Rectangle, Tool::Ellipse, Tool::Gradient];
+    assert_eq!(Tool::ALL.iter().filter(|t| !old.contains(t)).count(), 22);
+}
+
+#[test]
+fn retouch_tools_change_what_is_under_the_brush_in_one_step() {
+    for tool in [Tool::Smudge, Tool::Blur, Tool::Sharpen, Tool::Dodge, Tool::Burn, Tool::Sponge, Tool::Recolour, Tool::Push] {
+        let mut e = editor();
+        // Red and blue stripes: something for every tool to work on.
+        paint_rect(&mut e, 50, 50, 350, 250, |x, _| if x % 8 < 4 { [200, 40, 40, 255] } else { [40, 40, 200, 255] });
+        e.tool = tool;
+        e.color = [0, 200, 0];
+        e.tools.retouch = RetouchBrush { size: 40.0, strength: 1.0, hardness: 0.5, ..RetouchBrush::default() };
+        let before = e.doc.layers[e.active].pixels.clone();
+        drag_with(&mut e, (100.0, 150.0), (300.0, 150.0), Modifiers::default());
+        assert_eq!(steps(&e), vec![tool.name()], "{tool:?}: one undo step");
+        let changed = (100..300).filter(|&x| px(&e, x, 150) != before.pixel(x, 150)).count();
+        assert!(changed > 100, "{tool:?} changed {changed} of 200 pixels along the stroke");
+        assert_eq!(px(&e, 200, 70), before.pixel(200, 70), "{tool:?}: away from the brush nothing changes");
+        e.take_refresh();
+        assert_eq!(e.projection.image, e.doc.flatten(), "{tool:?}: the screen shows it");
+        e.undo();
+        assert_eq!(px(&e, 200, 150), before.pixel(200, 150), "{tool:?}: undone");
+    }
+}
+
+#[test]
+fn a_retouch_stroke_stays_on_its_layer_when_another_is_selected_meanwhile() {
+    let mut e = editor();
+    paint_rect(&mut e, 50, 50, 350, 250, |x, _| if x % 8 < 4 { [200, 40, 40, 255] } else { [40, 40, 200, 255] });
+    let first = e.active;
+    let painted = e.doc.layers[first].pixels.clone();
+    e.add_layer();
+    e.select_layer(first);
+    e.tool = Tool::Smudge;
+    e.tools.retouch = RetouchBrush { size: 40.0, strength: 1.0, ..RetouchBrush::default() };
+    e.pen(&pt(1, 100.0, 150.0, true), true, Modifiers::default());
+    // Page Up in the middle of the stroke.
+    e.select_neighbour(true);
+    assert_ne!(e.active, first);
+    for i in 1..=20 {
+        e.pen(&pt(1 + i, 100.0 + 10.0 * i as f64, 150.0, true), true, Modifiers::default());
+    }
+    e.pen(&pt(30, 300.0, 150.0, false), true, Modifiers::default());
+    assert_eq!(e.doc.layers[first + 1].pixels.tile_count(), 0, "the layer above is untouched");
+    let smudged = (150..300).filter(|&x| e.doc.layers[first].pixels.pixel(x, 150) != painted.pixel(x, 150)).count();
+    assert!(smudged > 100, "{smudged} pixels smudged on the stroke's own layer");
+    e.undo();
+    assert_eq!(e.doc.layers[first].pixels.pixel(200, 150), painted.pixel(200, 150));
+}
+
+#[test]
+fn retouching_nothing_is_no_undo_step_and_locks_and_the_eraser_end_are_kept() {
+    let mut e = editor();
+    e.tool = Tool::Blur;
+    // Blurring an empty layer changes nothing: no step.
+    drag_with(&mut e, (100.0, 150.0), (300.0, 150.0), Modifiers::default());
+    assert!(steps(&e).is_empty());
+    paint_rect(&mut e, 0, 0, 400, 300, |x, _| if x % 6 < 3 { [0, 0, 0, 255] } else { [255, 255, 255, 255] });
+    let a = e.active;
+    e.set_layer_locked(a, true);
+    let n = steps(&e).len();
+    drag_with(&mut e, (100.0, 150.0), (300.0, 150.0), Modifiers::default());
+    assert_eq!(steps(&e).len(), n, "a locked layer is not retouched");
+    assert!(e.notices.iter().any(|m| m.text.contains("locked")));
+    e.set_layer_locked(a, false);
+    // The pen's eraser end erases, also with a retouch tool.
+    let mut s = pt(1, 200.0, 150.0, true);
+    s.flags.set(Flags::ERASER, true);
+    e.pen(&s, true, Modifiers::default());
+    let mut up = pt(2, 200.0, 150.0, false);
+    up.flags.set(Flags::ERASER, true);
+    e.pen(&up, true, Modifiers::default());
+    assert_eq!(px(&e, 200, 150)[3], 0);
+    assert_eq!(steps(&e).last().map(String::as_str), Some("Erase"));
+}
+
+#[test]
+fn clone_copies_from_the_source_set_with_ctrl_click() {
+    let mut e = editor();
+    paint_rect(&mut e, 20, 20, 80, 80, |x, y| [(x * 3) as u8, (y * 3) as u8, 90, 255]);
+    e.tool = Tool::Clone;
+    e.tools.retouch = RetouchBrush { size: 20.0, strength: 1.0, hardness: 1.0, ..RetouchBrush::default() };
+    // No source yet: nothing happens, and it says what to do.
+    drag_with(&mut e, (250.0, 50.0), (270.0, 50.0), Modifiers::default());
+    assert!(steps(&e).is_empty() && e.notices.iter().any(|m| m.text.contains("Ctrl+click")));
+    click(&mut e, 50.0, 50.0, CTRL);
+    assert_eq!(e.clone_source, Some((50.0, 50.0)));
+    assert!(steps(&e).is_empty(), "choosing the source changes nothing");
+    drag_with(&mut e, (250.0, 50.0), (270.0, 50.0), Modifiers::default());
+    for x in 252..268 {
+        assert_eq!(px(&e, x, 50), px(&e, x - 200, 50), "x {x}");
+    }
+    assert_eq!(steps(&e), vec!["Clone"]);
+    // The distance stays for the next stroke (aligned clone).
+    drag_with(&mut e, (250.0, 60.0), (265.0, 60.0), Modifiers::default());
+    assert_eq!(px(&e, 258, 60), px(&e, 58, 60));
+}
+
+#[test]
+fn spray_scatters_the_colour() {
+    let mut e = editor();
+    e.tool = Tool::Spray;
+    e.color = [10, 120, 250];
+    e.tools.retouch = RetouchBrush { size: 40.0, strength: 1.0, spray_density: 15.0, spray_dot: 3.0, ..RetouchBrush::default() };
+    drag_with(&mut e, (100.0, 150.0), (300.0, 150.0), Modifiers::default());
+    assert_eq!(steps(&e), vec!["Spray"]);
+    let painted = (130..170).flat_map(|y| (100..300).map(move |x| (x, y))).filter(|&(x, y)| px(&e, x, y)[3] > 0).count();
+    assert!(painted > 300 && painted < 200 * 40 * 9 / 10, "dots, not a solid band: {painted}");
+    assert_eq!(e.recent_colors.first(), Some(&[10, 120, 250]));
+}
+
+#[test]
+fn magic_eraser_and_lasso_fill() {
+    let mut e = editor();
+    paint_rect(&mut e, 100, 100, 200, 200, |_, _| [220, 0, 0, 255]);
+    e.tool = Tool::MagicEraser;
+    click(&mut e, 150.0, 150.0, Modifiers::default());
+    assert_eq!(steps(&e), vec!["Magic eraser"]);
+    assert_eq!(px(&e, 150, 150)[3], 0, "the red square is erased");
+    // The background around it was white on another layer: the layer itself is untouched there.
+    assert_eq!(e.doc.layers[0].pixels.pixel(150, 150), [255, 255, 255, 255]);
+    e.undo();
+    assert_eq!(px(&e, 150, 150), [220, 0, 0, 255]);
+    // Lasso fill: a triangle drawn freehand is filled with the colour.
+    e.tool = Tool::LassoFill;
+    e.color = [0, 0, 200];
+    let m = Modifiers::default();
+    e.pen(&pt(1, 250.0, 50.0, true), true, m);
+    for (i, (x, y)) in [(350.0, 50.0), (300.0, 150.0), (252.0, 52.0)].into_iter().enumerate() {
+        for k in 1..=10 {
+            let (lx, ly) = if i == 0 { (250.0, 50.0) } else { [(350.0, 50.0), (300.0, 150.0)][i - 1] };
+            let t = k as f64 / 10.0;
+            e.pen(&pt(2 + i as u64 * 10 + k, lx + (x - lx) * t, ly + (y - ly) * t, true), true, m);
+        }
+    }
+    e.pen(&pt(60, 252.0, 52.0, false), true, m);
+    assert_eq!(steps(&e), vec!["Lasso fill"]);
+    assert_eq!(px(&e, 300, 80), [0, 0, 200, 255], "inside the triangle");
+    assert_eq!(px(&e, 260, 140)[3], 0, "outside it");
+}
+
+#[test]
+fn selections_are_made_combined_and_undone() {
+    let mut e = editor();
+    e.tool = Tool::SelectRect;
+    drag_with(&mut e, (50.0, 50.0), (150.0, 150.0), Modifiers::default());
+    assert!(e.has_selection());
+    let sel = |e: &Editor, x: i32, y: i32| e.doc.selection.as_ref().map_or(0, |m| m.get(x, y));
+    assert_eq!((sel(&e, 100, 100), sel(&e, 200, 100)), (255, 0));
+    // Shift adds, Alt takes away (held when the drag starts).
+    drag_with(&mut e, (200.0, 50.0), (300.0, 150.0), SHIFT);
+    assert_eq!((sel(&e, 100, 100), sel(&e, 250, 100)), (255, 255));
+    drag_with(&mut e, (60.0, 60.0), (90.0, 90.0), ALT);
+    assert_eq!((sel(&e, 70, 70), sel(&e, 120, 120)), (0, 255));
+    // Ellipse select replaces it.
+    e.tool = Tool::SelectEllipse;
+    drag_with(&mut e, (100.0, 100.0), (300.0, 200.0), Modifiers::default());
+    assert_eq!((sel(&e, 200, 150), sel(&e, 105, 105), sel(&e, 250, 100)), (255, 0, 0));
+    e.invert_selection();
+    assert_eq!((sel(&e, 200, 150), sel(&e, 5, 5)), (0, 255));
+    e.select_all();
+    assert_eq!(sel(&e, 399, 299), 255);
+    e.deselect();
+    assert!(!e.has_selection());
+    assert_eq!(steps(&e), vec!["Select", "Select", "Select", "Select", "Invert selection", "Select all", "Deselect"]);
+    // Undo walks back through them.
+    e.undo();
+    assert_eq!(sel(&e, 399, 299), 255);
+    e.undo();
+    e.undo();
+    assert_eq!(sel(&e, 200, 150), 255, "the ellipse again");
+    // A click without dragging deselects.
+    e.tool = Tool::SelectRect;
+    click(&mut e, 10.0, 10.0, Modifiers::default());
+    assert!(!e.has_selection());
+    // The outline the screen draws follows the selection.
+    e.tool = Tool::SelectRect;
+    drag_with(&mut e, (50.0, 50.0), (150.0, 150.0), Modifiers::default());
+    e.update_outline();
+    let segs = e.selection_outline().and_then(|o| o.clone()).unwrap();
+    assert_eq!(segs.len(), 4);
+}
+
+#[test]
+fn lasso_select_and_magic_wand() {
+    let mut e = editor();
+    paint_rect(&mut e, 100, 100, 200, 200, |_, _| [220, 0, 0, 255]);
+    e.tool = Tool::MagicWand;
+    click(&mut e, 150.0, 150.0, Modifiers::default());
+    let m = e.doc.selection.clone().unwrap();
+    assert_eq!(m.bounds, (100, 100, 200, 200), "exactly the red square");
+    click(&mut e, 10.0, 10.0, SHIFT);
+    assert_eq!(e.doc.selection.as_ref().unwrap().bounds, (0, 0, 400, 300), "and the white around it");
+    e.tool = Tool::SelectLasso;
+    let m = Modifiers::default();
+    let path = [(20.0, 20.0), (120.0, 20.0), (120.0, 120.0), (20.0, 120.0), (21.0, 21.0)];
+    e.pen(&pt(1, path[0].0, path[0].1, true), true, m);
+    for (i, w) in path.windows(2).enumerate() {
+        for k in 1..=10 {
+            let t = k as f64 / 10.0;
+            e.pen(&pt(2 + i as u64 * 10 + k, w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t, true), true, m);
+        }
+    }
+    e.pen(&pt(60, 21.0, 21.0, false), true, m);
+    let sel = e.doc.selection.clone().unwrap();
+    assert_eq!((sel.get(70, 70), sel.get(150, 150)), (255, 0));
+}
+
+#[test]
+fn painting_filling_and_clearing_stay_inside_the_selection() {
+    let mut e = editor();
+    e.tool = Tool::SelectRect;
+    drag_with(&mut e, (100.0, 0.0), (200.0, 300.0), Modifiers::default());
+    // A brush stroke across the whole canvas paints only inside.
+    e.tool = Tool::Brush;
+    stroke(&mut e, 150.0, 20.0, 380.0);
+    assert!(inked(&e, 150, 150) && !inked(&e, 50, 150) && !inked(&e, 300, 150));
+    e.take_refresh();
+    assert_eq!(e.projection.image, e.doc.flatten());
+    // The fill finds the whole white area but fills only the selected part of it.
+    e.tool = Tool::Fill;
+    e.color = [0, 150, 0];
+    click(&mut e, 120.0, 40.0, Modifiers::default());
+    assert_eq!(px(&e, 120, 40), [0, 150, 0, 255]);
+    assert_eq!(px(&e, 50, 40)[3], 0);
+    // Delete clears the selected pixels; Backspace fills them.
+    e.clear_layer();
+    assert_eq!(px(&e, 120, 40)[3], 0);
+    e.color = [10, 10, 200];
+    e.fill_selection();
+    assert_eq!((px(&e, 150, 10), px(&e, 50, 10)[3]), ([10, 10, 200, 255], 0));
+    // Retouch tools too.
+    e.tool = Tool::Burn;
+    e.tools.retouch = RetouchBrush { size: 40.0, strength: 1.0, ..RetouchBrush::default() };
+    let outside = e.doc.layers[0].pixels.pixel(50, 100);
+    drag_with(&mut e, (20.0, 100.0), (380.0, 100.0), Modifiers::default());
+    assert!(px(&e, 150, 100)[2] < 200, "burnt inside");
+    assert_eq!(e.doc.layers[0].pixels.pixel(50, 100), outside);
+    assert_eq!(px(&e, 50, 100)[3], 0, "nothing outside");
+    assert_eq!(steps(&e), vec!["Select", "Brush stroke", "Fill", "Clear selection", "Fill with colour", "Burn"]);
+}
+
+#[test]
+fn move_tool_moves_the_layer_or_the_selected_pixels() {
+    let mut e = editor();
+    paint_rect(&mut e, 100, 100, 120, 120, |_, _| [200, 0, 0, 255]);
+    paint_rect(&mut e, 300, 100, 320, 120, |_, _| [0, 0, 200, 255]);
+    e.tool = Tool::Move;
+    drag_with(&mut e, (150.0, 150.0), (180.0, 170.0), Modifiers::default());
+    assert_eq!(steps(&e), vec!["Move"]);
+    assert_eq!((px(&e, 135, 125), px(&e, 105, 105)[3]), ([200, 0, 0, 255], 0), "the whole layer moved by (30, 20)");
+    assert_eq!(px(&e, 335, 125), [0, 0, 200, 255]);
+    e.undo();
+    // With a selection only the selected pixels move, and the selection with them.
+    e.tool = Tool::SelectRect;
+    drag_with(&mut e, (90.0, 90.0), (130.0, 130.0), Modifiers::default());
+    e.tool = Tool::Move;
+    drag_with(&mut e, (110.0, 110.0), (110.0, 160.0), SHIFT);
+    assert_eq!(px(&e, 110, 160), [200, 0, 0, 255], "moved down 50");
+    assert_eq!(px(&e, 110, 110)[3], 0);
+    assert_eq!(px(&e, 310, 110), [0, 0, 200, 255], "the rest stays");
+    assert_eq!(e.doc.selection.as_ref().unwrap().bounds, (90, 140, 130, 180));
+    e.undo();
+    assert_eq!((px(&e, 110, 110), e.doc.selection.as_ref().unwrap().bounds), ([200, 0, 0, 255], (90, 90, 130, 130)), "undo puts both back");
+    // Arrow keys nudge.
+    e.nudge(1, 0);
+    assert_eq!(px(&e, 120, 110), [200, 0, 0, 255]);
+}
+
+#[test]
+fn crop_tool_and_crop_to_selection() {
+    let mut e = editor();
+    paint_rect(&mut e, 60, 50, 70, 60, |_, _| [0, 0, 0, 255]);
+    e.tool = Tool::Crop;
+    drag_with(&mut e, (50.0, 40.0), (250.0, 140.0), Modifiers::default());
+    assert_eq!(e.crop_rect, Some((50, 40, 200, 100)));
+    assert!(steps(&e).is_empty(), "nothing is cropped until it is confirmed");
+    e.apply_crop();
+    assert_eq!((e.doc.width, e.doc.height), (200, 100));
+    assert_eq!(px(&e, 10, 10), [0, 0, 0, 255], "(60, 50) is now (10, 10)");
+    assert_eq!(e.take_refresh(), Refresh::All, "a new canvas size: everything is uploaded again");
+    assert_eq!(e.projection.image.width, 200);
+    e.undo();
+    assert_eq!((e.doc.width, e.doc.height), (400, 300));
+    // (A new canvas size is fitted to the window again; back to 1:1 for the screen points.)
+    e.view = View::default();
+    // Escape-style cancel, and cropping to a selection.
+    drag_with(&mut e, (10.0, 10.0), (20.0, 20.0), Modifiers::default());
+    e.cancel_crop();
+    assert_eq!(e.crop_rect, None);
+    e.tool = Tool::SelectRect;
+    drag_with(&mut e, (30.0, 30.0), (130.0, 80.0), Modifiers::default());
+    e.crop_to_selection();
+    assert_eq!((e.doc.width, e.doc.height, e.has_selection()), (100, 50, false));
+}
+
+#[test]
+fn text_tool_places_text_in_one_step() {
+    let mut e = editor();
+    e.tool = Tool::Text;
+    e.color = [200, 0, 100];
+    e.tools.text.size = 40.0;
+    click(&mut e, 20.0, 20.0, Modifiers::default());
+    assert_eq!(e.text_edit.as_ref().map(|t| t.at), Some((20.0, 20.0)));
+    // Clicking again moves it; placing empty text does nothing.
+    click(&mut e, 30.0, 30.0, Modifiers::default());
+    assert_eq!(e.text_edit.as_ref().map(|t| t.at), Some((30.0, 30.0)));
+    e.text_edit.as_mut().unwrap().text = "Hello\n".into();
+    e.place_text();
+    assert_eq!(steps(&e), vec!["Text"]);
+    assert!(e.text_edit.is_none());
+    let inked: Vec<(i32, i32)> = (0..300).flat_map(|y| (0..400).map(move |x| (x, y))).filter(|&(x, y)| px(&e, x, y)[3] > 200).collect();
+    assert!(inked.len() > 200, "{} pixels of text", inked.len());
+    assert!(inked.iter().all(|&(x, y)| (30..160).contains(&x) && (30..90).contains(&y)), "where it was placed");
+    assert_eq!(px(&e, inked[0].0, inked[0].1)[0..3], [200, 0, 100]);
+    click(&mut e, 50.0, 200.0, Modifiers::default());
+    e.place_text();
+    assert_eq!(steps(&e).len(), 1, "no text, no step");
+}
+
+#[test]
+fn zoom_rotate_and_measure_tools_change_no_pixels() {
+    let mut e = editor();
+    e.tool = Tool::Zoom;
+    click(&mut e, 200.0, 150.0, Modifiers::default());
+    let zoomed = e.view.zoom;
+    assert!(zoomed > 1.0);
+    let (cx, cy) = e.view.to_canvas(200.0, 150.0);
+    assert!((cx - 200.0).abs() < 1e-6 && (cy - 150.0).abs() < 1e-6, "about the point clicked");
+    click(&mut e, 200.0, 150.0, ALT);
+    assert!(e.view.zoom < zoomed);
+    let z = e.view.zoom;
+    drag_with(&mut e, (200.0, 150.0), (200.0, 100.0), Modifiers::default());
+    assert!(e.view.zoom > z * 1.5, "dragging up zooms in");
+    e.tool = Tool::Rotate;
+    drag_with(&mut e, (500.0, 300.0), (400.0, 400.0), Modifiers::default());
+    assert!(e.view.angle.abs() > 0.1);
+    e.tool = Tool::Measure;
+    e.view = View::default();
+    drag_with(&mut e, (10.0, 10.0), (40.0, 50.0), Modifiers::default());
+    assert_eq!(e.measure, Some(((10.0, 10.0), (40.0, 50.0))));
+    assert!(steps(&e).is_empty());
+}
+
+#[test]
+fn selection_to_a_new_layer() {
+    let mut e = editor();
+    paint_rect(&mut e, 0, 0, 400, 300, |_, _| [0, 120, 0, 255]);
+    e.tool = Tool::SelectRect;
+    drag_with(&mut e, (10.0, 10.0), (60.0, 60.0), Modifiers::default());
+    let layers = e.doc.layers.len();
+    e.selection_to_layer(false);
+    assert_eq!(e.doc.layers.len(), layers + 1);
+    assert_eq!((px(&e, 30, 30), px(&e, 100, 100)[3]), ([0, 120, 0, 255], 0), "only the selected part");
+    assert_eq!(e.doc.layers[e.active - 1].pixels.pixel(30, 30), [0, 120, 0, 255], "copied: still below");
+    e.select_layer(e.active - 1);
+    e.selection_to_layer(true);
+    assert_eq!(e.doc.layers[e.active - 1].pixels.pixel(30, 30)[3], 0, "cut: gone below");
+    assert_eq!(steps(&e), vec!["Select", "Copy to new layer", "Cut to new layer"]);
+}

@@ -11,12 +11,16 @@ use recedo_core::blend::BlendMode;
 use recedo_core::brush::Brush;
 use recedo_core::canvas::CanvasPreset;
 use recedo_core::doc::{Document, new_uuid};
+use recedo_core::fill::Mask;
 use recedo_core::history::History;
 use recedo_core::image;
 use recedo_core::paint::PaintSession;
 use recedo_core::projection::Projection;
+use recedo_core::retouch::{Retouch, RetouchBrush, RetouchStroke};
+use recedo_core::select::{self, Combine};
 use recedo_core::stabilizer::{PaintInfo, StabilizerSettings};
-use recedo_core::tiles::TileKey;
+use recedo_core::text::{self, TextStyle};
+use recedo_core::tiles::{TileKey, TiledLayer};
 use recedo_core::view::View;
 use recedo_core::{fill, import, kra, ops};
 use recedo_tablet::{Flags, PenSample, Source};
@@ -24,7 +28,7 @@ use serde::{Deserialize, Serialize};
 // Like std's, and also works in a browser.
 use web_time::Instant;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Tool {
     #[default]
     Brush,
@@ -38,10 +42,119 @@ pub enum Tool {
     Ellipse,
     /// The colour fading to transparent, from where the drag starts to where it ends.
     Gradient,
+    Smudge,
+    Blur,
+    Sharpen,
+    /// Lighten under the brush.
+    Dodge,
+    /// Darken under the brush.
+    Burn,
+    /// Saturate or desaturate under the brush (Tool options).
+    Sponge,
+    /// The colour's hue and saturation, keeping the light and shade under the brush.
+    Recolour,
+    /// Copies from where Ctrl+click set the source.
+    Clone,
+    /// Pushes pixels along with the brush (liquify).
+    Push,
+    Spray,
+    /// Erases the connected area of similar colour that was clicked.
+    MagicEraser,
+    /// Fills a freehand outline.
+    LassoFill,
+    SelectRect,
+    SelectEllipse,
+    SelectLasso,
+    MagicWand,
+    /// Moves the selected pixels, or the whole layer.
+    Move,
+    Crop,
+    Text,
+    Zoom,
+    Rotate,
+    Measure,
+}
+
+/// The groups the full tool list is shown in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolGroup {
+    Paint,
+    Retouch,
+    FillAndShapes,
+    Select,
+    Arrange,
+    View,
+}
+
+impl ToolGroup {
+    pub const ALL: [ToolGroup; 6] = [ToolGroup::Paint, ToolGroup::Retouch, ToolGroup::FillAndShapes, ToolGroup::Select, ToolGroup::Arrange, ToolGroup::View];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ToolGroup::Paint => "Paint",
+            ToolGroup::Retouch => "Retouch",
+            ToolGroup::FillAndShapes => "Fill and shapes",
+            ToolGroup::Select => "Select",
+            ToolGroup::Arrange => "Move, crop and text",
+            ToolGroup::View => "View and measure",
+        }
+    }
 }
 
 impl Tool {
-    pub const ALL: [Tool; 9] = [Tool::Brush, Tool::Eraser, Tool::Eyedropper, Tool::Pan, Tool::Fill, Tool::Line, Tool::Rectangle, Tool::Ellipse, Tool::Gradient];
+    /// Every tool, group by group.
+    pub const ALL: [Tool; 31] = [
+        Tool::Brush,
+        Tool::Eraser,
+        Tool::Spray,
+        Tool::Eyedropper,
+        Tool::Smudge,
+        Tool::Blur,
+        Tool::Sharpen,
+        Tool::Dodge,
+        Tool::Burn,
+        Tool::Sponge,
+        Tool::Recolour,
+        Tool::Clone,
+        Tool::Push,
+        Tool::Fill,
+        Tool::Gradient,
+        Tool::LassoFill,
+        Tool::MagicEraser,
+        Tool::Line,
+        Tool::Rectangle,
+        Tool::Ellipse,
+        Tool::SelectRect,
+        Tool::SelectEllipse,
+        Tool::SelectLasso,
+        Tool::MagicWand,
+        Tool::Move,
+        Tool::Crop,
+        Tool::Text,
+        Tool::Pan,
+        Tool::Zoom,
+        Tool::Rotate,
+        Tool::Measure,
+    ];
+
+    /// The tools on the side bar until the user picks their own.
+    pub const DEFAULT_BAR: [Tool; 15] = [
+        Tool::Brush,
+        Tool::Eraser,
+        Tool::Eyedropper,
+        Tool::Fill,
+        Tool::Gradient,
+        Tool::Smudge,
+        Tool::Blur,
+        Tool::Line,
+        Tool::Rectangle,
+        Tool::Ellipse,
+        Tool::SelectRect,
+        Tool::MagicWand,
+        Tool::Move,
+        Tool::Text,
+        Tool::Pan,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -54,12 +167,175 @@ impl Tool {
             Tool::Rectangle => "Rectangle",
             Tool::Ellipse => "Ellipse",
             Tool::Gradient => "Gradient",
+            Tool::Smudge => "Smudge",
+            Tool::Blur => "Blur",
+            Tool::Sharpen => "Sharpen",
+            Tool::Dodge => "Dodge",
+            Tool::Burn => "Burn",
+            Tool::Sponge => "Sponge",
+            Tool::Recolour => "Recolour",
+            Tool::Clone => "Clone",
+            Tool::Push => "Push",
+            Tool::Spray => "Spray",
+            Tool::MagicEraser => "Magic eraser",
+            Tool::LassoFill => "Lasso fill",
+            Tool::SelectRect => "Rectangle select",
+            Tool::SelectEllipse => "Ellipse select",
+            Tool::SelectLasso => "Lasso select",
+            Tool::MagicWand => "Magic wand",
+            Tool::Move => "Move",
+            Tool::Crop => "Crop",
+            Tool::Text => "Text",
+            Tool::Zoom => "Zoom",
+            Tool::Rotate => "Rotate view",
+            Tool::Measure => "Measure",
         }
     }
 
-    /// Drawn by dragging from one point to another.
+    /// The name kept in the settings (never changes, unlike the shown name).
+    pub fn id(self) -> &'static str {
+        match self {
+            Tool::Brush => "brush",
+            Tool::Eraser => "eraser",
+            Tool::Eyedropper => "eyedropper",
+            Tool::Pan => "pan",
+            Tool::Fill => "fill",
+            Tool::Line => "line",
+            Tool::Rectangle => "rectangle",
+            Tool::Ellipse => "ellipse",
+            Tool::Gradient => "gradient",
+            Tool::Smudge => "smudge",
+            Tool::Blur => "blur",
+            Tool::Sharpen => "sharpen",
+            Tool::Dodge => "dodge",
+            Tool::Burn => "burn",
+            Tool::Sponge => "sponge",
+            Tool::Recolour => "recolour",
+            Tool::Clone => "clone",
+            Tool::Push => "push",
+            Tool::Spray => "spray",
+            Tool::MagicEraser => "magic_eraser",
+            Tool::LassoFill => "lasso_fill",
+            Tool::SelectRect => "select_rect",
+            Tool::SelectEllipse => "select_ellipse",
+            Tool::SelectLasso => "select_lasso",
+            Tool::MagicWand => "magic_wand",
+            Tool::Move => "move",
+            Tool::Crop => "crop",
+            Tool::Text => "text",
+            Tool::Zoom => "zoom",
+            Tool::Rotate => "rotate",
+            Tool::Measure => "measure",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Tool> {
+        Tool::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    pub fn group(self) -> ToolGroup {
+        match self {
+            Tool::Brush | Tool::Eraser | Tool::Spray | Tool::Eyedropper => ToolGroup::Paint,
+            Tool::Smudge | Tool::Blur | Tool::Sharpen | Tool::Dodge | Tool::Burn | Tool::Sponge | Tool::Recolour | Tool::Clone | Tool::Push => ToolGroup::Retouch,
+            Tool::Fill | Tool::Gradient | Tool::LassoFill | Tool::MagicEraser | Tool::Line | Tool::Rectangle | Tool::Ellipse => ToolGroup::FillAndShapes,
+            Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::MagicWand => ToolGroup::Select,
+            Tool::Move | Tool::Crop | Tool::Text => ToolGroup::Arrange,
+            Tool::Pan | Tool::Zoom | Tool::Rotate | Tool::Measure => ToolGroup::View,
+        }
+    }
+
+    /// One line on what the tool does and how.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Tool::Brush => "Paint with the brush (presets in Tool options)",
+            Tool::Eraser => "Erase with a brush",
+            Tool::Spray => "Spray paint: dots of the colour over the brush area",
+            Tool::Eyedropper => "Pick a colour from the picture (or Ctrl+click with a painting tool)",
+            Tool::Smudge => "Drag the paint along, like a wet finger",
+            Tool::Blur => "Soften what is under the brush",
+            Tool::Sharpen => "Make what is under the brush crisper",
+            Tool::Dodge => "Lighten what is under the brush",
+            Tool::Burn => "Darken what is under the brush",
+            Tool::Sponge => "Make colours more vivid or more grey (Tool options)",
+            Tool::Recolour => "Give what is under the brush the colour's hue, keeping its light and shade",
+            Tool::Clone => "Ctrl+click where to copy from, then paint the copy somewhere else",
+            Tool::Push => "Push pixels along with the brush, like liquify",
+            Tool::Fill => "Fill the area of the colour you click",
+            Tool::Gradient => "Drag from where the colour is full to where it fades out",
+            Tool::LassoFill => "Draw around an area to fill it with the colour",
+            Tool::MagicEraser => "Erase the area of the colour you click",
+            Tool::Line => "Drag a straight line; Shift for 15° steps",
+            Tool::Rectangle => "Drag a rectangle; Shift for a square",
+            Tool::Ellipse => "Drag an ellipse; Shift for a circle",
+            Tool::SelectRect => "Drag to select a rectangle (Shift adds, Alt takes away)",
+            Tool::SelectEllipse => "Drag to select an ellipse (Shift adds, Alt takes away)",
+            Tool::SelectLasso => "Draw around what to select (Shift adds, Alt takes away)",
+            Tool::MagicWand => "Click to select an area of one colour (Shift adds, Alt takes away)",
+            Tool::Move => "Drag the selected pixels, or the whole layer; arrow keys nudge",
+            Tool::Crop => "Drag over the part to keep, then Crop (Enter)",
+            Tool::Text => "Click where the text goes, type it, then Place (Ctrl+Enter)",
+            Tool::Pan => "Drag to move the view (or hold Space)",
+            Tool::Zoom => "Click to zoom in, Alt+click to zoom out, or drag up and down",
+            Tool::Rotate => "Drag to turn the view (or Shift+Space)",
+            Tool::Measure => "Drag to measure a distance and an angle",
+        }
+    }
+
+    /// Its keyboard shortcut, if it has one.
+    pub fn key(self) -> Option<&'static str> {
+        Some(match self {
+            Tool::Brush => "B",
+            Tool::Eraser => "E",
+            Tool::Eyedropper => "P",
+            Tool::Fill => "F",
+            Tool::Gradient => "G",
+            Tool::Line => "V",
+            Tool::Smudge => "S",
+            Tool::SelectRect => "R",
+            Tool::SelectLasso => "L",
+            Tool::MagicWand => "W",
+            Tool::Crop => "C",
+            Tool::Text => "T",
+            Tool::Zoom => "Z",
+            _ => return None,
+        })
+    }
+
+    /// Dragged from one point to another (with a preview while dragging).
     pub fn is_shape(self) -> bool {
-        matches!(self, Tool::Line | Tool::Rectangle | Tool::Ellipse | Tool::Gradient)
+        matches!(self, Tool::Line | Tool::Rectangle | Tool::Ellipse | Tool::Gradient | Tool::SelectRect | Tool::SelectEllipse | Tool::Crop | Tool::Measure | Tool::Move)
+    }
+
+    /// The retouch brush engine behind the tool, if it is a retouch tool.
+    pub fn retouch(self, sponge_saturates: bool) -> Option<Retouch> {
+        Some(match self {
+            Tool::Smudge => Retouch::Smudge,
+            Tool::Blur => Retouch::Blur,
+            Tool::Sharpen => Retouch::Sharpen,
+            Tool::Dodge => Retouch::Dodge,
+            Tool::Burn => Retouch::Burn,
+            Tool::Sponge if sponge_saturates => Retouch::Saturate,
+            Tool::Sponge => Retouch::Desaturate,
+            Tool::Recolour => Retouch::Recolour,
+            Tool::Clone => Retouch::Clone,
+            Tool::Push => Retouch::Push,
+            Tool::Spray => Retouch::Spray,
+            _ => return None,
+        })
+    }
+
+    /// Changes pixels by painting them (the pen's eraser end erases freehand instead).
+    pub fn paints(self) -> bool {
+        matches!(self.group(), ToolGroup::Paint | ToolGroup::Retouch | ToolGroup::FillAndShapes) && self != Tool::Eyedropper || self == Tool::Text
+    }
+
+    /// Paints with the colour: Ctrl+click picks one, as with the brush.
+    pub fn uses_colour(self) -> bool {
+        matches!(self, Tool::Brush | Tool::Eraser | Tool::Spray | Tool::Recolour | Tool::Fill | Tool::LassoFill | Tool::Text)
+    }
+
+    fn is_select(self) -> bool {
+        self.group() == ToolGroup::Select
     }
 }
 
@@ -80,6 +356,17 @@ pub struct ToolSettings {
     pub fill_all_layers: bool,
     /// Rectangle and ellipse: filled with the colour (and outlined with the brush).
     pub shape_filled: bool,
+    /// The brush of the retouch tools (smudge, blur, ... spray).
+    pub retouch: RetouchBrush,
+    /// Sponge: more vivid (true) or more grey.
+    pub sponge_saturates: bool,
+    /// Selection tools: how a new selection goes with the one there is.
+    pub select_mode: Combine,
+    /// Magic wand and magic eraser: how different a colour may be (0..=1).
+    pub wand_tolerance: f32,
+    /// Magic wand and magic eraser: find the area in the visible picture (true) or the layer.
+    pub wand_all_layers: bool,
+    pub text: TextStyle,
 }
 
 impl Default for ToolSettings {
@@ -93,6 +380,12 @@ impl Default for ToolSettings {
             fill_tolerance: 0.12,
             fill_all_layers: true,
             shape_filled: false,
+            retouch: RetouchBrush::default(),
+            sponge_saturates: false,
+            select_mode: Combine::Replace,
+            wand_tolerance: 0.12,
+            wand_all_layers: true,
+            text: TextStyle::default(),
         }
     }
 }
@@ -143,6 +436,18 @@ pub enum Refresh {
     All,
 }
 
+/// A selection's edge as short segments (canvas pixels), or `None` when it is too
+/// intricate to outline (then its bounding box is shown).
+pub type Outline = Option<Vec<[CanvasPoint; 2]>>;
+
+/// Text the text tool is writing, before it is placed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextEdit {
+    /// Top-left corner of the first line, canvas pixels.
+    pub at: CanvasPoint,
+    pub text: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportFormat {
     Png,
@@ -161,8 +466,16 @@ enum Interaction {
     Zoom { anchor: (f64, f64), last_y: f64 },
     /// Eyedropper held down.
     Pick { all_layers: bool },
-    /// A line, rectangle, ellipse or gradient being dragged out (canvas pixels).
+    /// Dragged from a point to another (canvas pixels): a line, rectangle, ellipse, gradient,
+    /// rectangle or ellipse selection, crop, measurement or move.
     Shape { tool: Tool, start: (f64, f64), end: (f64, f64) },
+    /// A retouch stroke on `layer`, with the painting as it was before it (for undo and the
+    /// selection).
+    Retouch { stroke: Box<RetouchStroke>, before: Box<Document>, layer: usize, name: &'static str },
+    /// A freehand outline being drawn (lasso fill or lasso select), canvas pixels.
+    Lasso { tool: Tool, points: Vec<(f64, f64)> },
+    /// The zoom tool held down: dragging zooms; a click without moving zooms a step.
+    ZoomTool { anchor: (f64, f64), last_y: f64, moved: f64, out: bool },
     /// The pen is down but nothing happens until it lifts (e.g. a locked layer).
     Ignore,
 }
@@ -197,6 +510,23 @@ pub struct Editor {
     pub recent_colors: Vec<[u8; 3]>,
     /// Keys held at the last pen sample (Shift straightens shapes).
     mods: Modifiers,
+    /// Keys held when the pen went down (Shift / Alt choose how a selection combines).
+    press_mods: Modifiers,
+    /// The current selection and its outline, worked out once per selection.
+    outline: Option<(std::sync::Arc<Mask>, Outline)>,
+    /// The selected layer as it was when the current brush stroke began (to keep the stroke
+    /// inside the selection).
+    stroke_before: Option<TiledLayer>,
+    /// Clone tool: where it copies from (canvas pixels), set with Ctrl+click.
+    pub clone_source: Option<CanvasPoint>,
+    /// Clone tool: source minus brush, fixed by the first stroke after the source was set.
+    clone_offset: Option<CanvasPoint>,
+    /// Text tool: the text being written and where, until it is placed.
+    pub text_edit: Option<TextEdit>,
+    /// Crop tool: the part to keep (x, y, width, height in canvas pixels), until confirmed.
+    pub crop_rect: Option<(i32, i32, u32, u32)>,
+    /// Measure tool: the last line measured (canvas pixels).
+    pub measure: Option<(CanvasPoint, CanvasPoint)>,
     /// The `.kra` this painting is saved in, if any.
     pub file: Option<PathBuf>,
     /// Name shown when there is no file yet ("Untitled 1"), or the opened picture's name.
@@ -241,6 +571,14 @@ impl Editor {
             color: [20, 20, 30],
             recent_colors: Vec::new(),
             mods: Modifiers::default(),
+            press_mods: Modifiers::default(),
+            outline: None,
+            stroke_before: None,
+            clone_source: None,
+            clone_offset: None,
+            text_edit: None,
+            crop_rect: None,
+            measure: None,
             file: None,
             untitled_name: "Untitled 1".into(),
             autosaver: Autosaver::new(autosave::DEFAULT_INTERVAL),
@@ -292,13 +630,14 @@ impl Editor {
     /// The brush outline at the hover point: (centre, radius in screen pixels), for the tools
     /// that paint.
     pub fn brush_outline(&self) -> Option<((f64, f64), f64)> {
-        let brush = match self.tool {
-            Tool::Brush => &self.tools.brush,
-            Tool::Eraser => &self.tools.eraser,
+        let size = match self.tool {
+            Tool::Brush => self.tools.brush.size,
+            Tool::Eraser => self.tools.eraser.size,
+            t if t.retouch(false).is_some() => self.tools.retouch.size,
             _ => return None,
         };
         let at = self.hover?;
-        Some((at, (brush.size as f64 * 0.5 * self.view.zoom).max(1.0)))
+        Some((at, (size as f64 * 0.5 * self.view.zoom).max(1.0)))
     }
 
     pub fn current_brush_mut(&mut self) -> &mut Brush {
@@ -414,45 +753,120 @@ impl Editor {
 
     fn press(&mut self, s: &PenSample, mods: Modifiers) {
         self.last_edit = None;
+        self.press_mods = mods;
         let at = (s.x, s.y);
-        // The eraser end of the pen erases freehand with the fill and shape tools too.
+        let c = self.view.to_canvas(s.x, s.y);
+        let tool = self.tool;
+        // The eraser end of the pen erases freehand with the tools that paint.
         let eraser_end = s.flags.has(Flags::ERASER);
         self.interaction = if mods.space && mods.shift {
             Interaction::Rotate { last_angle: self.angle_from_centre(at) }
         } else if mods.space && mods.ctrl {
             Interaction::Zoom { anchor: at, last_y: s.y }
-        } else if mods.space || self.tool == Tool::Pan {
+        } else if mods.space || tool == Tool::Pan {
             Interaction::Pan { last: at }
-        } else if self.tool == Tool::Fill && !eraser_end {
-            self.fill_at(s);
+        } else if tool == Tool::Rotate {
+            Interaction::Rotate { last_angle: self.angle_from_centre(at) }
+        } else if tool == Tool::Zoom {
+            Interaction::ZoomTool { anchor: at, last_y: s.y, moved: 0.0, out: mods.alt }
+        } else if tool == Tool::Clone && mods.ctrl && !eraser_end {
+            self.clone_source = Some(c);
+            self.clone_offset = None;
+            self.notice(NoticeKind::Info, "Clone source set: now paint where the copy goes.");
             Interaction::Ignore
-        } else if self.tool.is_shape() && !eraser_end {
-            let c = self.view.to_canvas(s.x, s.y);
-            Interaction::Shape { tool: self.tool, start: c, end: c }
-        } else if self.tool == Tool::Eyedropper || (mods.ctrl && matches!(self.tool, Tool::Brush | Tool::Eraser)) {
+        } else if tool == Tool::Eyedropper || (mods.ctrl && tool.uses_colour()) {
             let all_layers = self.tools.pick_all_layers;
             self.pick(s, all_layers);
             Interaction::Pick { all_layers }
+        } else if matches!(tool, Tool::Brush | Tool::Eraser) || (eraser_end && tool.paints()) {
+            self.begin_stroke(s, tool == Tool::Eraser || eraser_end)
+        } else if tool == Tool::Fill {
+            self.fill_at(s);
+            Interaction::Ignore
+        } else if tool == Tool::MagicEraser {
+            self.magic_erase_at(c);
+            Interaction::Ignore
+        } else if tool == Tool::MagicWand {
+            self.wand_at(c);
+            Interaction::Ignore
+        } else if tool == Tool::Text {
+            self.text_at(c);
+            Interaction::Ignore
+        } else if tool.is_shape() {
+            Interaction::Shape { tool, start: c, end: c }
+        } else if matches!(tool, Tool::LassoFill | Tool::SelectLasso) {
+            Interaction::Lasso { tool, points: vec![c] }
+        } else if let Some(kind) = tool.retouch(self.tools.sponge_saturates) {
+            self.begin_retouch(kind, s)
         } else {
-            // The eraser end of the pen always erases, whatever the tool.
-            let erase = self.tool == Tool::Eraser || s.flags.has(Flags::ERASER);
-            let brush = if erase { self.tools.eraser.clone() } else { self.tools.brush.clone() };
-            let info = self.paint_info(s);
-            match PaintSession::begin(&mut self.doc, &mut self.history, self.active, brush, self.color, erase, self.tools.stabilizer, self.view.zoom, info, s.recv_us) {
-                Ok(mut session) => {
+            Interaction::Ignore
+        };
+    }
+
+    /// A brush or eraser stroke starts.
+    fn begin_stroke(&mut self, s: &PenSample, erase: bool) -> Interaction {
+        let brush = if erase { self.tools.eraser.clone() } else { self.tools.brush.clone() };
+        let info = self.paint_info(s);
+        let layer = self.active;
+        self.stroke_before = self.doc.selection.is_some().then(|| self.doc.layers.get(layer).map(|l| l.pixels.clone())).flatten();
+        match PaintSession::begin(&mut self.doc, &mut self.history, layer, brush, self.color, erase, self.tools.stabilizer, self.view.zoom, info, s.recv_us) {
+            Ok(mut session) => {
                 if !erase {
                     self.remember_color();
                 }
-                    let d = session.take_dirty();
-                    self.mark_tiles(d);
-                    Interaction::Stroke(Box::new(session))
-                }
-                Err(e) => {
-                    self.notice(NoticeKind::Warning, format!("{e}: nothing was painted."));
-                    Interaction::Ignore
-                }
+                let d = session.take_dirty();
+                self.clip_stroke(layer, &d);
+                self.mark_tiles(d);
+                Interaction::Stroke(Box::new(session))
             }
+            Err(e) => {
+                self.stroke_before = None;
+                self.notice(NoticeKind::Warning, format!("{e}: nothing was painted."));
+                Interaction::Ignore
+            }
+        }
+    }
+
+    /// Keeps what a brush stroke just painted inside the selection.
+    fn clip_stroke(&mut self, layer: usize, tiles: &HashSet<TileKey>) {
+        if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
+            select::clip_to(&mut l.pixels, before, sel, tiles.iter().copied());
+        }
+    }
+
+    /// A retouch stroke starts (smudge, blur, ... spray).
+    fn begin_retouch(&mut self, kind: Retouch, s: &PenSample) -> Interaction {
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was changed."));
+            return Interaction::Ignore;
+        }
+        let c = self.view.to_canvas(s.x, s.y);
+        let offset = if kind == Retouch::Clone {
+            let Some(src) = self.clone_source else {
+                self.notice(NoticeKind::Info, "Clone: first Ctrl+click where to copy from.");
+                return Interaction::Ignore;
+            };
+            // The first stroke after choosing the source fixes the distance; later strokes
+            // keep it (Krita's "aligned" clone).
+            *self.clone_offset.get_or_insert((src.0 - c.0, src.1 - c.1))
+        } else {
+            (0.0, 0.0)
         };
+        let before = Box::new(self.doc.clone());
+        let (w, h) = (self.doc.width, self.doc.height);
+        let a = self.active;
+        let info = self.paint_info(s);
+        let mut stroke = Box::new(RetouchStroke::new(kind, self.tools.retouch, self.color, &self.doc.layers[a].pixels, (w, h), offset, s.recv_us));
+        stroke.add(&mut self.doc.layers[a].pixels, info);
+        let d = stroke.take_dirty();
+        if let Some(sel) = &self.doc.selection {
+            select::clip_to(&mut self.doc.layers[a].pixels, &before.layers[a].pixels, sel, d.iter().copied());
+        }
+        self.mark_tiles(d);
+        if kind == Retouch::Spray {
+            self.remember_color();
+        }
+        Interaction::Retouch { stroke, before, layer: a, name: self.tool.name() }
     }
 
     fn drag(&mut self, s: &PenSample) {
@@ -462,11 +876,33 @@ impl Editor {
         let info = self.paint_info(s);
         let angle = self.angle_from_centre(at);
         let centre = self.centre();
+        let zoom = self.view.zoom;
         let mut pick = None;
         match &mut self.interaction {
             Interaction::Stroke(session) => {
                 session.add(&mut self.doc, info, s.recv_us);
-                self.dirty.extend(session.take_dirty());
+                let d = session.take_dirty();
+                let layer = session.layer();
+                if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
+                    select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
+                }
+                self.dirty.extend(d);
+            }
+            Interaction::Retouch { stroke, before, layer, .. } => {
+                // Its own layer, even if another one is selected meanwhile (Page Up / Down).
+                let a = *layer;
+                stroke.add(&mut self.doc.layers[a].pixels, info);
+                let d = stroke.take_dirty();
+                if let Some(sel) = &self.doc.selection {
+                    select::clip_to(&mut self.doc.layers[a].pixels, &before.layers[a].pixels, sel, d.iter().copied());
+                }
+                self.dirty.extend(d);
+            }
+            Interaction::Lasso { points, .. } => {
+                // A point at least a screen pixel from the last one.
+                if points.last().is_none_or(|p| (p.0 - canvas.0).hypot(p.1 - canvas.1) * zoom >= 1.0) {
+                    points.push(canvas);
+                }
             }
             Interaction::Pan { last } => {
                 let (dx, dy) = (at.0 - last.0, at.1 - last.1);
@@ -486,8 +922,18 @@ impl Editor {
                 let anchor = *anchor;
                 self.view.zoom_by(factor, anchor);
             }
+            Interaction::ZoomTool { anchor, last_y, moved, .. } => {
+                *moved += (s.y - *last_y).abs();
+                let factor = 1.01f64.powf(*last_y - s.y);
+                *last_y = s.y;
+                let anchor = *anchor;
+                self.view.zoom_by(factor, anchor);
+            }
             Interaction::Pick { all_layers } => pick = Some(*all_layers),
-            Interaction::Shape { tool, start, end } => *end = if shift { constrain(*tool, *start, canvas) } else { canvas },
+            Interaction::Shape { tool, start, end } => {
+                // Shift straightens; for selections it was the "add" key when the pen went down.
+                *end = if shift && !tool.is_select() && *tool != Tool::Crop { constrain(*tool, *start, canvas) } else { canvas };
+            }
             Interaction::Ignore | Interaction::Idle => {}
         }
         if let Some(all) = pick {
@@ -500,11 +946,23 @@ impl Editor {
         self.owner = None;
         match interaction {
             Interaction::Stroke(session) => {
+                let layer = session.layer();
                 let d = session.end(&mut self.doc, now_us);
+                self.clip_stroke(layer, &d);
+                self.stroke_before = None;
                 self.mark_tiles(d);
                 self.autosaver.changed(Instant::now());
             }
+            Interaction::Retouch { before, name, .. } => {
+                // One undo step, if the stroke changed anything.
+                if !changed_tiles(&before, &self.doc).is_some_and(|t| t.is_empty()) {
+                    self.history.record(name, &before);
+                    self.autosaver.changed(Instant::now());
+                }
+            }
             Interaction::Shape { tool, start, end } => self.commit_shape(tool, start, end, now_us),
+            Interaction::Lasso { tool, points } => self.commit_lasso(tool, points),
+            Interaction::ZoomTool { anchor, moved, out, .. } if moved < 3.0 => self.view.step_zoom(!out, anchor),
             _ => {}
         }
     }
@@ -514,6 +972,14 @@ impl Editor {
     pub fn shape_preview(&self) -> Option<(Tool, CanvasPoint, CanvasPoint)> {
         match &self.interaction {
             Interaction::Shape { tool, start, end } => Some((*tool, *start, *end)),
+            _ => None,
+        }
+    }
+
+    /// The freehand outline being drawn (lasso fill or lasso select), canvas pixels.
+    pub fn lasso_preview(&self) -> Option<&[CanvasPoint]> {
+        match &self.interaction {
+            Interaction::Lasso { points, .. } => Some(points),
             _ => None,
         }
     }
@@ -528,6 +994,41 @@ impl Editor {
         }
     }
 
+    /// Ends a change to the selected layer (`before` is the painting as it was) as one undo
+    /// step: kept inside the selection, if there is one, and not recorded if nothing changed.
+    fn finish_paint(&mut self, name: &str, before: Document) -> bool {
+        let a = self.active;
+        if let (Some(sel), Some(tiles)) = (&self.doc.selection, changed_tiles(&before, &self.doc)) {
+            select::clip_to(&mut self.doc.layers[a].pixels, &before.layers[a].pixels, sel, tiles);
+        }
+        if changed_tiles(&before, &self.doc).is_some_and(|t| t.is_empty()) {
+            return false;
+        }
+        self.history.record(name, &before);
+        self.refresh_from(&before);
+        self.autosaver.changed(Instant::now());
+        true
+    }
+
+    /// The picture the area tools look at: the visible picture (with changes not yet on
+    /// screen included) or the selected layer.
+    fn reference(&mut self, all_layers: bool) -> image::Rgba8 {
+        let (w, h) = (self.doc.width, self.doc.height);
+        if !all_layers {
+            let mut img = image::Rgba8::new(w, h);
+            img.data = self.doc.layers[self.active].pixels.read_rect(0, 0, w, h);
+            return img;
+        }
+        if self.refresh_all {
+            return self.doc.flatten();
+        }
+        if !self.dirty.is_empty() {
+            let pending = self.dirty.clone();
+            self.projection.update(&self.doc, &pending);
+        }
+        self.projection.image.clone()
+    }
+
     /// The paint bucket at a pen sample: fills the connected area of similar colour.
     fn fill_at(&mut self, s: &PenSample) {
         if let Some(why) = self.layer_refusal() {
@@ -535,30 +1036,33 @@ impl Editor {
             return;
         }
         let (cx, cy) = self.view.to_canvas(s.x, s.y);
-        let (w, h) = (self.doc.width, self.doc.height);
-        let reference = if self.tools.fill_all_layers {
-            // The visible picture, with changes not yet on screen included.
-            if self.refresh_all {
-                self.doc.flatten()
-            } else {
-                if !self.dirty.is_empty() {
-                    let pending = self.dirty.clone();
-                    self.projection.update(&self.doc, &pending);
-                }
-                self.projection.image.clone()
-            }
-        } else {
-            let mut img = image::Rgba8::new(w, h);
-            img.data = self.doc.layers[self.active].pixels.read_rect(0, 0, w, h);
-            img
-        };
+        let reference = self.reference(self.tools.fill_all_layers);
         let Some(mask) = fill::flood(&reference, cx.floor() as i32, cy.floor() as i32, self.tools.fill_tolerance, 1) else { return };
-        let color = self.color;
-        self.edit_now("Fill", |doc, active| {
-            fill::paint_mask(&mut doc.layers[*active].pixels, &mask, color, 255);
-            Ok(())
-        });
+        let before = self.doc.clone();
+        fill::paint_mask(&mut self.doc.layers[self.active].pixels, &mask, self.color, 255);
+        self.finish_paint("Fill", before);
         self.remember_color();
+    }
+
+    /// The magic eraser: erases the connected area of similar colour.
+    fn magic_erase_at(&mut self, c: CanvasPoint) {
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was erased."));
+            return;
+        }
+        let reference = self.reference(self.tools.wand_all_layers);
+        let Some(mask) = fill::flood(&reference, c.0.floor() as i32, c.1.floor() as i32, self.tools.wand_tolerance, 1) else { return };
+        let before = self.doc.clone();
+        fill::erase_mask(&mut self.doc.layers[self.active].pixels, &mask);
+        self.finish_paint("Magic eraser", before);
+    }
+
+    /// The magic wand: selects the connected area of similar colour.
+    fn wand_at(&mut self, c: CanvasPoint) {
+        let reference = self.reference(self.tools.wand_all_layers);
+        if let Some(mask) = fill::flood(&reference, c.0.floor() as i32, c.1.floor() as i32, self.tools.wand_tolerance, 0) {
+            self.select_mask(mask);
+        }
     }
 
     fn remember_color(&mut self) {
@@ -568,19 +1072,29 @@ impl Editor {
         self.recent_colors.truncate(MAX_RECENT_COLORS);
     }
 
-    /// Paints a finished line, rectangle, ellipse or gradient: one undo step.
+    /// A finished drag: paints a line, rectangle, ellipse or gradient (one undo step), or
+    /// selects, sets the crop, measures or moves.
     fn commit_shape(&mut self, tool: Tool, a: (f64, f64), b: (f64, f64), now_us: u64) {
+        match tool {
+            Tool::SelectRect | Tool::SelectEllipse => return self.select_shape(tool, a, b),
+            Tool::Crop => return self.set_crop(a, b),
+            Tool::Measure => {
+                self.measure = Some((a, b));
+                return;
+            }
+            Tool::Move => return self.move_by((b.0 - a.0).round() as i32, (b.1 - a.1).round() as i32),
+            _ => {}
+        }
         if let Some(why) = self.layer_refusal() {
             self.notice(NoticeKind::Warning, format!("{why}: nothing was painted."));
             return;
         }
         let (w, h) = (self.doc.width, self.doc.height);
         let color = self.color;
+        let before = self.doc.clone();
         if tool == Tool::Gradient {
-            self.edit_now("Gradient", |doc, active| {
-                fill::gradient(&mut doc.layers[*active].pixels, w, h, a, b, color);
-                Ok(())
-            });
+            fill::gradient(&mut self.doc.layers[self.active].pixels, w, h, a, b, color);
+            self.finish_paint("Gradient", before);
             self.remember_color();
             return;
         }
@@ -588,7 +1102,6 @@ impl Editor {
         if tiny && tool != Tool::Line {
             return;
         }
-        let before = self.doc.clone();
         if self.tools.shape_filled && tool != Tool::Line {
             let mask = if tool == Tool::Rectangle { fill::rectangle(w, h, a, b) } else { fill::ellipse(w, h, a, b) };
             fill::paint_mask(&mut self.doc.layers[self.active].pixels, &mask, color, 255);
@@ -612,13 +1125,261 @@ impl Editor {
             }
             session.end(&mut self.doc, now_us);
         }
-        if changed_tiles(&before, &self.doc).is_some_and(|t| t.is_empty()) {
-            return; // entirely off the canvas
+        if self.finish_paint(tool.name(), before) {
+            self.remember_color();
         }
-        self.history.record(tool.name(), &before);
-        self.refresh_from(&before);
-        self.autosaver.changed(Instant::now());
-        self.remember_color();
+    }
+
+    /// A finished freehand outline: fills it (lasso fill) or selects it (lasso select).
+    fn commit_lasso(&mut self, tool: Tool, points: Vec<CanvasPoint>) {
+        if points.len() < 3 {
+            return;
+        }
+        let mask = fill::polygons(self.doc.width, self.doc.height, &[points]);
+        if tool == Tool::SelectLasso {
+            return self.select_mask(mask);
+        }
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was filled."));
+            return;
+        }
+        let before = self.doc.clone();
+        fill::paint_mask(&mut self.doc.layers[self.active].pixels, &mask, self.color, 255);
+        if self.finish_paint("Lasso fill", before) {
+            self.remember_color();
+        }
+    }
+
+    // ----- selection ------------------------------------------------------------------------
+
+    pub fn has_selection(&self) -> bool {
+        self.doc.selection.is_some()
+    }
+
+    /// The selection's outline (canvas pixels) for the screen: `Some(None)` when the selection
+    /// is too intricate to outline. Call [`Editor::update_outline`] once per frame first.
+    pub fn selection_outline(&self) -> Option<&Outline> {
+        self.outline.as_ref().map(|(_, o)| o)
+    }
+
+    /// Works the outline out again if the selection changed since.
+    pub fn update_outline(&mut self) {
+        match &self.doc.selection {
+            None => self.outline = None,
+            Some(sel) => {
+                if !self.outline.as_ref().is_some_and(|(m, _)| std::sync::Arc::ptr_eq(m, sel)) {
+                    self.outline = Some((sel.clone(), select::outline(sel, 40_000)));
+                }
+            }
+        }
+    }
+
+    /// Replaces the selection (one undo step, as in Krita).
+    fn set_selection(&mut self, name: &str, mask: Option<Mask>) {
+        let mask = mask.map(std::sync::Arc::new);
+        if mask == self.doc.selection {
+            return;
+        }
+        self.edit_now(name, |doc, _| {
+            doc.selection = mask;
+            Ok(())
+        });
+    }
+
+    /// A new selected area, combined with the selection there is: Shift (when the pen went
+    /// down) adds, Alt takes away, both keep only the overlap; otherwise the tool's mode.
+    fn select_mask(&mut self, mask: Mask) {
+        let mode = match (self.press_mods.shift, self.press_mods.alt) {
+            (true, true) => Combine::Intersect,
+            (true, false) => Combine::Add,
+            (false, true) => Combine::Subtract,
+            _ => self.tools.select_mode,
+        };
+        let new = select::combine(self.doc.selection.as_deref(), mask, mode);
+        self.set_selection(if new.is_some() { "Select" } else { "Deselect" }, new);
+    }
+
+    fn select_shape(&mut self, tool: Tool, a: CanvasPoint, b: CanvasPoint) {
+        let (w, h) = (self.doc.width, self.doc.height);
+        // A click without dragging clears the selection, as in Krita.
+        if (a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0 {
+            if self.tools.select_mode == Combine::Replace && !self.press_mods.shift && !self.press_mods.alt {
+                self.deselect();
+            }
+            return;
+        }
+        let mask = if tool == Tool::SelectRect { fill::rectangle(w, h, a, b) } else { fill::ellipse(w, h, a, b) };
+        self.select_mask(mask);
+    }
+
+    /// Ctrl+A.
+    pub fn select_all(&mut self) {
+        self.finish_interaction();
+        let all = select::all(self.doc.width, self.doc.height);
+        self.set_selection("Select all", Some(all));
+    }
+
+    /// Ctrl+Shift+A.
+    pub fn deselect(&mut self) {
+        self.finish_interaction();
+        self.set_selection("Deselect", None);
+    }
+
+    /// Ctrl+Shift+I.
+    pub fn invert_selection(&mut self) {
+        self.finish_interaction();
+        let inverted = match &self.doc.selection {
+            Some(m) => select::invert(m),
+            None => return,
+        };
+        self.set_selection("Invert selection", inverted);
+    }
+
+    /// Fills the selection (or the whole layer) with the colour: Backspace.
+    pub fn fill_selection(&mut self) {
+        self.finish_interaction();
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was filled."));
+            return;
+        }
+        let (w, h) = (self.doc.width, self.doc.height);
+        let area = self.doc.selection.as_deref().cloned().unwrap_or_else(|| select::all(w, h));
+        let before = self.doc.clone();
+        fill::paint_mask(&mut self.doc.layers[self.active].pixels, &area, self.color, 255);
+        if self.finish_paint("Fill with colour", before) {
+            self.remember_color();
+        }
+    }
+
+    /// Crops the canvas to the selection's bounding box.
+    pub fn crop_to_selection(&mut self) {
+        let Some((x0, y0, x1, y1)) = self.doc.selection.as_ref().map(|m| m.bounds) else { return };
+        self.crop_rect = Some((x0 as i32, y0 as i32, x1 - x0, y1 - y0));
+        self.apply_crop();
+    }
+
+    /// Copies (or with `cut`, moves) the selected pixels to a new layer above.
+    pub fn selection_to_layer(&mut self, cut: bool) {
+        self.finish_interaction();
+        let Some(sel) = self.doc.selection.clone() else { return };
+        if cut && let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was cut."));
+            return;
+        }
+        let name = if cut { "Cut to new layer" } else { "Copy to new layer" };
+        self.edit(name, |doc, active| {
+            let src = doc.layers.get(*active).ok_or("No layer is selected")?;
+            let (rest, lifted) = select::lift(&src.pixels, &sel);
+            let base = format!("{} (part)", src.name);
+            if cut {
+                doc.layers[*active].pixels = rest;
+            }
+            *active = ops::add_layer(doc, Some(*active));
+            doc.layers[*active].pixels = lifted;
+            doc.layers[*active].name = base;
+            Ok(())
+        });
+    }
+
+    // ----- move, crop, text -----------------------------------------------------------------
+
+    /// Moves the selected pixels (and the selection) or, without a selection, the whole
+    /// layer, by whole pixels.
+    pub fn move_by(&mut self, dx: i32, dy: i32) {
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was moved."));
+            return;
+        }
+        let sel = self.doc.selection.clone();
+        self.edit_now("Move", |doc, active| {
+            let l = &mut doc.layers[*active].pixels;
+            match &sel {
+                Some(m) => {
+                    *l = select::move_selected(l, m, dx, dy);
+                    let moved = select::offset_mask(m, dx, dy);
+                    doc.selection = (!moved.is_empty()).then(|| std::sync::Arc::new(moved));
+                }
+                None => *l = select::offset_layer(l, dx, dy),
+            }
+            Ok(())
+        });
+    }
+
+    /// The arrow keys with the move tool.
+    pub fn nudge(&mut self, dx: i32, dy: i32) {
+        self.finish_interaction();
+        self.move_by(dx, dy);
+    }
+
+    fn set_crop(&mut self, a: CanvasPoint, b: CanvasPoint) {
+        let (w, h) = (self.doc.width as f64, self.doc.height as f64);
+        let (x0, x1) = (a.0.min(b.0).clamp(0.0, w).round(), a.0.max(b.0).clamp(0.0, w).round());
+        let (y0, y1) = (a.1.min(b.1).clamp(0.0, h).round(), a.1.max(b.1).clamp(0.0, h).round());
+        self.crop_rect = (x1 - x0 >= 1.0 && y1 - y0 >= 1.0).then_some((x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32));
+    }
+
+    /// Crops the canvas to the crop rectangle (Enter or the Crop button).
+    pub fn apply_crop(&mut self) {
+        self.finish_interaction();
+        let Some((x, y, w, h)) = self.crop_rect.take() else { return };
+        if (x, y, w, h) == (0, 0, self.doc.width, self.doc.height) {
+            return;
+        }
+        // The picture stays where it is on screen.
+        let keep = self.view.to_screen(x as f64, y as f64);
+        self.edit("Crop", |doc, _| {
+            *doc = select::crop(doc, x, y, w, h);
+            Ok(())
+        });
+        self.view.offset = keep;
+    }
+
+    pub fn cancel_crop(&mut self) {
+        self.crop_rect = None;
+    }
+
+    /// The text tool clicked at `c`: starts writing there, or moves the text being written.
+    fn text_at(&mut self, c: CanvasPoint) {
+        match &mut self.text_edit {
+            Some(t) => t.at = c,
+            None => self.text_edit = Some(TextEdit { at: c, text: String::new() }),
+        }
+    }
+
+    /// Paints the text being written onto the selected layer (Place, or Ctrl+Enter).
+    pub fn place_text(&mut self) {
+        self.finish_interaction();
+        let Some(mut t) = self.text_edit.clone() else { return };
+        // An Enter typed with the Ctrl+Enter that places the text is not a line.
+        t.text.truncate(t.text.trim_end_matches(['\n', '\r']).len());
+        if t.text.trim().is_empty() {
+            self.text_edit = None;
+            return;
+        }
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: the text was not placed."));
+            return;
+        }
+        let mask = text::render(self.doc.width, self.doc.height, &t.text, &self.tools.text, t.at);
+        let before = self.doc.clone();
+        fill::paint_mask(&mut self.doc.layers[self.active].pixels, &mask, self.color, 255);
+        if self.finish_paint("Text", before) {
+            self.remember_color();
+        }
+        self.text_edit = None;
+    }
+
+    pub fn cancel_text(&mut self) {
+        self.text_edit = None;
+    }
+
+    /// The clone tool forgets where it copies from (the next Ctrl+click sets it again).
+    pub fn forget_clone_source(&mut self) {
+        self.clone_source = None;
+        self.clone_offset = None;
     }
 
     /// The pen left the tablet's range or the window lost the pen: ends what it was doing.
@@ -634,7 +1395,12 @@ impl Editor {
     pub fn tick(&mut self, now_us: u64, now: Instant) {
         if let Interaction::Stroke(session) = &mut self.interaction {
             session.tick(&mut self.doc, now_us);
-            self.dirty.extend(session.take_dirty());
+            let d = session.take_dirty();
+            let layer = session.layer();
+            if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
+                select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
+            }
+            self.dirty.extend(d);
         }
         self.poll_jobs();
         let busy = self.stroke_active() || !self.jobs.is_empty();
@@ -719,11 +1485,29 @@ impl Editor {
         self.view.toggle_mirror(c);
     }
 
-    /// `[` and `]`: about 10 % smaller or larger.
+    /// `[` and `]`: about 10 % smaller or larger (the retouch brush with a retouch tool).
     pub fn resize_brush(&mut self, bigger: bool) {
-        let b = self.current_brush_mut();
-        let s = if bigger { (b.size * 1.1).max(b.size + 1.0) } else { (b.size / 1.1).min(b.size - 1.0) };
-        b.size = s.round().clamp(MIN_BRUSH, MAX_BRUSH);
+        let step = |size: f32| {
+            let s = if bigger { (size * 1.1).max(size + 1.0) } else { (size / 1.1).min(size - 1.0) };
+            s.round().clamp(MIN_BRUSH, MAX_BRUSH)
+        };
+        if self.tool.retouch(false).is_some() {
+            self.tools.retouch.size = step(self.tools.retouch.size);
+        } else {
+            let b = self.current_brush_mut();
+            b.size = step(b.size);
+        }
+    }
+
+    /// The size the toolbar shows and changes: the retouch brush's with a retouch tool.
+    pub fn shown_brush_size(&self) -> f32 {
+        if self.tool.retouch(false).is_some() {
+            self.tools.retouch.size
+        } else if self.tool == Tool::Eraser {
+            self.tools.eraser.size
+        } else {
+            self.tools.brush.size
+        }
     }
 
     /// `E`: switch between the brush and the eraser.
@@ -776,6 +1560,7 @@ impl Editor {
 
     fn after_history_move(&mut self, before: &Document) {
         if (before.width, before.height) != (self.doc.width, self.doc.height) {
+            self.crop_rect = None;
             self.fit_pending = true;
             let (x, y, w, h) = self.viewport;
             self.set_viewport(x, y, w, h);
@@ -849,8 +1634,21 @@ impl Editor {
         });
     }
 
+    /// Delete: clears the selection's pixels on the selected layer, or the whole layer.
     pub fn clear_layer(&mut self) {
-        self.edit("Clear layer", |doc, active| ops::clear_layer(doc, *active));
+        match self.doc.selection.clone() {
+            Some(sel) => {
+                self.finish_interaction();
+                if let Some(why) = self.layer_refusal() {
+                    self.notice(NoticeKind::Warning, format!("{why}: nothing was cleared."));
+                    return;
+                }
+                let before = self.doc.clone();
+                fill::erase_mask(&mut self.doc.layers[self.active].pixels, &sel);
+                self.finish_paint("Clear selection", before);
+            }
+            None => self.edit("Clear layer", |doc, active| ops::clear_layer(doc, *active)),
+        }
     }
 
     pub fn select_layer(&mut self, index: usize) {
@@ -932,6 +1730,12 @@ impl Editor {
         self.doc = doc;
         self.history.clear();
         self.active = self.doc.layers.len().saturating_sub(1);
+        self.text_edit = None;
+        self.crop_rect = None;
+        self.measure = None;
+        self.clone_source = None;
+        self.clone_offset = None;
+        self.stroke_before = None;
         self.autosaver = Autosaver::new(self.autosaver.interval);
         self.doc_id = new_uuid();
         self.refresh_all = true;

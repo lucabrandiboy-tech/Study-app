@@ -63,7 +63,7 @@ pub fn document_from_image(img: &Rgba8) -> Result<Document, String> {
     }
     let mut layer = Layer::new("Background");
     layer.pixels.write_rect(0, 0, img.width, img.height, &img.data);
-    Ok(Document { width: img.width, height: img.height, dpi: 72.0, layers: vec![layer] })
+    Ok(Document { width: img.width, height: img.height, dpi: 72.0, layers: vec![layer], selection: None })
 }
 
 /// Opens a `.kra`, PNG or JPEG from its bytes.

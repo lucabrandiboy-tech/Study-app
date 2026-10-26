@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::dock::DockLayout;
-use crate::editor::ToolSettings;
+use crate::editor::{Tool, ToolSettings};
 
 /// Which tablet interface the pen comes through.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +47,9 @@ pub struct Settings {
     pub last_preset: usize,
     /// Saved window position: left, top, right, bottom, maximised.
     pub window: Option<(i32, i32, i32, i32, bool)>,
+    /// The tools on the side bar, in order (tool ids, so a newer version's tools never make
+    /// the file unreadable).
+    pub hotbar: Vec<String>,
 }
 
 impl Default for Settings {
@@ -64,6 +67,7 @@ impl Default for Settings {
             jpeg_quality: 92,
             last_preset: 0,
             window: None,
+            hotbar: Tool::DEFAULT_BAR.iter().map(|t| t.id().to_string()).collect(),
         }
     }
 }
@@ -99,6 +103,15 @@ impl Settings {
     }
 
     /// Keeps hand-edited or old values in range.
+    /// The side bar's tools, in order.
+    pub fn hotbar_tools(&self) -> Vec<Tool> {
+        self.hotbar.iter().filter_map(|id| Tool::from_id(id)).collect()
+    }
+
+    pub fn set_hotbar(&mut self, tools: &[Tool]) {
+        self.hotbar = tools.iter().map(|t| t.id().to_string()).collect();
+    }
+
     pub fn sanitize(&mut self) {
         self.ui_scale = if self.ui_scale.is_finite() { self.ui_scale.clamp(0.5, 3.0) } else { 1.0 };
         self.autosave_minutes = self.autosave_minutes.clamp(1, 120);
@@ -118,6 +131,23 @@ impl Settings {
         st.distance = if st.distance.is_finite() { st.distance.clamp(3.0, 500.0) } else { 50.0 };
         st.delay_distance = if st.delay_distance.is_finite() { st.delay_distance.clamp(1.0, 500.0) } else { 50.0 };
         self.tools.pick_radius = if self.tools.pick_radius.is_finite() { self.tools.pick_radius.clamp(0.0, 50.0) } else { 0.0 };
+        let r = &mut self.tools.retouch;
+        let fix = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
+        r.size = fix(r.size, crate::editor::MIN_BRUSH, crate::editor::MAX_BRUSH, 60.0);
+        r.strength = fix(r.strength, 0.0, 1.0, 0.5);
+        r.hardness = fix(r.hardness, 0.0, 1.0, 0.3);
+        r.smudge_length = fix(r.smudge_length, 0.0, 0.99, 0.85);
+        r.spray_density = fix(r.spray_density, 1.0, 200.0, 12.0);
+        r.spray_dot = fix(r.spray_dot, 0.5, 200.0, 4.0);
+        self.tools.wand_tolerance = fix(self.tools.wand_tolerance, 0.0, 1.0, 0.12);
+        self.tools.fill_tolerance = fix(self.tools.fill_tolerance, 0.0, 1.0, 0.12);
+        let t = &mut self.tools.text;
+        t.size = fix(t.size, 4.0, 2000.0, 64.0);
+        t.line_spacing = fix(t.line_spacing, 0.5, 4.0, 1.0);
+        // Known tools only, each once; an empty bar gets the default back.
+        let mut seen = std::collections::HashSet::new();
+        let bar: Vec<Tool> = self.hotbar_tools().into_iter().filter(|t| seen.insert(*t)).collect();
+        self.set_hotbar(if bar.is_empty() { &Tool::DEFAULT_BAR } else { &bar });
         self.dock.sanitize();
         self.recent_files.truncate(MAX_RECENT);
         self.recent_colors.truncate(crate::editor::MAX_RECENT_COLORS);
@@ -158,6 +188,23 @@ mod tests {
         assert_eq!(Settings::load(&path), Settings::default());
         assert!(dir.join("recedo.json.broken").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_side_bar_keeps_known_tools_once() {
+        let mut s = Settings::default();
+        assert_eq!(s.hotbar_tools(), Tool::DEFAULT_BAR.to_vec());
+        s.hotbar = vec!["smudge".into(), "no_such_tool".into(), "brush".into(), "smudge".into()];
+        s.sanitize();
+        assert_eq!(s.hotbar_tools(), vec![Tool::Smudge, Tool::Brush]);
+        assert_eq!(s.hotbar, vec!["smudge", "brush"]);
+        s.hotbar.clear();
+        s.sanitize();
+        assert_eq!(s.hotbar_tools(), Tool::DEFAULT_BAR.to_vec(), "never empty");
+        // Every tool has its own id, and it reads back.
+        let ids: std::collections::HashSet<&str> = Tool::ALL.iter().map(|t| t.id()).collect();
+        assert_eq!(ids.len(), Tool::ALL.len());
+        assert!(Tool::ALL.iter().all(|t| Tool::from_id(t.id()) == Some(*t)));
     }
 
     #[test]

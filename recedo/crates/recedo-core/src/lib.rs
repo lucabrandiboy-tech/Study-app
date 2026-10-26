@@ -18,7 +18,10 @@ pub mod lzf;
 pub mod ops;
 pub mod paint;
 pub mod projection;
+pub mod retouch;
+pub mod select;
 pub mod stabilizer;
+pub mod text;
 pub mod tiles;
 pub mod view;
 

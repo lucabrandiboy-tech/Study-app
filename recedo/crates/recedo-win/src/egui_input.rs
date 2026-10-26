@@ -19,6 +19,8 @@ pub struct EguiInput {
     tracking_leave: bool,
     buttons_down: u32,
     high_surrogate: Option<u16>,
+    /// The keys egui was last told are held.
+    mods: Modifiers,
 }
 
 fn lparam_pos(lparam: isize) -> (i32, i32) {
@@ -54,6 +56,9 @@ fn key_from_vk(vk: u16) -> Option<Key> {
         VK_ADD => Key::Plus,
         VK_OEM_COMMA => Key::Comma,
         VK_OEM_PERIOD => Key::Period,
+        // [ and ] where a US keyboard has them (brush size).
+        VK_OEM_4 => Key::OpenBracket,
+        VK_OEM_6 => Key::CloseBracket,
         0x30..=0x39 => [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9][(vk - 0x30) as usize],
         0x41..=0x5A => {
             const LETTERS: [Key; 26] = [
@@ -78,7 +83,7 @@ impl Default for EguiInput {
 
 impl EguiInput {
     pub fn new() -> EguiInput {
-        EguiInput { raw: RawInput::default(), start: std::time::Instant::now(), tracking_leave: false, buttons_down: 0, high_surrogate: None }
+        EguiInput { raw: RawInput::default(), start: std::time::Instant::now(), tracking_leave: false, buttons_down: 0, high_surrogate: None, mods: Modifiers::NONE }
     }
 
     fn pos(lparam: isize, ppp: f32) -> Pos2 {
@@ -106,6 +111,15 @@ impl EguiInput {
 
     /// Handles a message if it is input for egui. Returns true if it was consumed.
     pub fn on_message(&mut self, hwnd: HWND, msg: u32, wparam: usize, lparam: isize, ppp: f32) -> bool {
+        // egui knows which of Ctrl, Shift and Alt are held only from these events (Ctrl+Enter
+        // in the text box needs it).
+        if (WM_MOUSEFIRST..=WM_MOUSELAST).contains(&msg) || (WM_KEYFIRST..=WM_KEYLAST).contains(&msg) {
+            let m = modifiers();
+            if m != self.mods {
+                self.mods = m;
+                self.raw.events.push(Event::ModifiersChanged(m));
+            }
+        }
         match msg {
             WM_MOUSEMOVE => {
                 if !self.tracking_leave {
@@ -213,7 +227,9 @@ impl EguiInput {
                 false
             }
             WM_KILLFOCUS => {
+                // egui lets go of every key here.
                 self.raw.events.push(Event::WindowFocused(false));
+                self.mods = Modifiers::NONE;
                 self.buttons_down = 0;
                 false
             }
