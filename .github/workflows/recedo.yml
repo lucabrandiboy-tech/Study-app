@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update -qq
           # MinGW links the Windows build; Mesa's software Vulkan runs the GPU tests.
           sudo apt-get install -y -qq gcc-mingw-w64-x86-64 mesa-vulkan-drivers
-          # recedo/rust-toolchain.toml pins the Rust version, clippy and the Windows target.
+          # recedo/rust-toolchain.toml pins the Rust version, clippy and the Windows and browser targets.
           rustup toolchain install
           rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
@@ -38,6 +38,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Clippy (Windows)
         run: cargo clippy --workspace --target x86_64-pc-windows-gnu -- -D warnings
+      - name: Clippy (browser app)
+        run: cargo clippy -p recedo-web --target wasm32-unknown-unknown -- -D warnings
       - name: Unit and GPU tests
         env:
           RECEDO_REQUIRE_GPU: '1'

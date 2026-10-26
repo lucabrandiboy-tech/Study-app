@@ -18,7 +18,7 @@ use recedo_core::projection::Projection;
 use recedo_core::stabilizer::{PaintInfo, StabilizerSettings};
 use recedo_core::tiles::TileKey;
 use recedo_core::view::View;
-use recedo_core::{import, kra, ops};
+use recedo_core::{fill, import, kra, ops};
 use recedo_tablet::{Flags, PenSample, Source};
 use serde::{Deserialize, Serialize};
 // Like std's, and also works in a browser.
@@ -31,10 +31,17 @@ pub enum Tool {
     Eraser,
     Eyedropper,
     Pan,
+    /// Paint bucket: fills the area of similar colour that was clicked.
+    Fill,
+    Line,
+    Rectangle,
+    Ellipse,
+    /// The colour fading to transparent, from where the drag starts to where it ends.
+    Gradient,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 4] = [Tool::Brush, Tool::Eraser, Tool::Eyedropper, Tool::Pan];
+    pub const ALL: [Tool; 9] = [Tool::Brush, Tool::Eraser, Tool::Eyedropper, Tool::Pan, Tool::Fill, Tool::Line, Tool::Rectangle, Tool::Ellipse, Tool::Gradient];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -42,7 +49,17 @@ impl Tool {
             Tool::Eraser => "Eraser",
             Tool::Eyedropper => "Eyedropper",
             Tool::Pan => "Pan",
+            Tool::Fill => "Fill",
+            Tool::Line => "Line",
+            Tool::Rectangle => "Rectangle",
+            Tool::Ellipse => "Ellipse",
+            Tool::Gradient => "Gradient",
         }
+    }
+
+    /// Drawn by dragging from one point to another.
+    pub fn is_shape(self) -> bool {
+        matches!(self, Tool::Line | Tool::Rectangle | Tool::Ellipse | Tool::Gradient)
     }
 }
 
@@ -57,6 +74,12 @@ pub struct ToolSettings {
     pub pick_all_layers: bool,
     /// Eyedropper: average over this radius, in canvas pixels (0 = one pixel).
     pub pick_radius: f32,
+    /// Fill: how different a colour may be and still be filled (0..=1).
+    pub fill_tolerance: f32,
+    /// Fill: find the area in the visible picture (true) or in the selected layer only.
+    pub fill_all_layers: bool,
+    /// Rectangle and ellipse: filled with the colour (and outlined with the brush).
+    pub shape_filled: bool,
 }
 
 impl Default for ToolSettings {
@@ -67,6 +90,9 @@ impl Default for ToolSettings {
             stabilizer: StabilizerSettings::default(),
             pick_all_layers: true,
             pick_radius: 0.0,
+            fill_tolerance: 0.12,
+            fill_all_layers: true,
+            shape_filled: false,
         }
     }
 }
@@ -135,6 +161,8 @@ enum Interaction {
     Zoom { anchor: (f64, f64), last_y: f64 },
     /// Eyedropper held down.
     Pick { all_layers: bool },
+    /// A line, rectangle, ellipse or gradient being dragged out (canvas pixels).
+    Shape { tool: Tool, start: (f64, f64), end: (f64, f64) },
     /// The pen is down but nothing happens until it lifts (e.g. a locked layer).
     Ignore,
 }
@@ -167,6 +195,8 @@ pub struct Editor {
     pub color: [u8; 3],
     /// Colours painted with, newest first (shown as swatches in the Colour panel).
     pub recent_colors: Vec<[u8; 3]>,
+    /// Keys held at the last pen sample (Shift straightens shapes).
+    mods: Modifiers,
     /// The `.kra` this painting is saved in, if any.
     pub file: Option<PathBuf>,
     /// Name shown when there is no file yet ("Untitled 1"), or the opened picture's name.
@@ -210,6 +240,7 @@ impl Editor {
             tools: ToolSettings::default(),
             color: [20, 20, 30],
             recent_colors: Vec::new(),
+            mods: Modifiers::default(),
             file: None,
             untitled_name: "Untitled 1".into(),
             autosaver: Autosaver::new(autosave::DEFAULT_INTERVAL),
@@ -355,6 +386,7 @@ impl Editor {
     /// One pen or mouse sample. `over_canvas`: the point is on the canvas area, not on a
     /// panel (a stroke can only start there; once started it continues anywhere).
     pub fn pen(&mut self, s: &PenSample, over_canvas: bool, mods: Modifiers) {
+        self.mods = mods;
         self.hover = over_canvas.then_some((s.x, s.y));
         let me = (s.source, s.cursor);
         if self.owner.is_some_and(|o| o != me) {
@@ -383,12 +415,20 @@ impl Editor {
     fn press(&mut self, s: &PenSample, mods: Modifiers) {
         self.last_edit = None;
         let at = (s.x, s.y);
+        // The eraser end of the pen erases freehand with the fill and shape tools too.
+        let eraser_end = s.flags.has(Flags::ERASER);
         self.interaction = if mods.space && mods.shift {
             Interaction::Rotate { last_angle: self.angle_from_centre(at) }
         } else if mods.space && mods.ctrl {
             Interaction::Zoom { anchor: at, last_y: s.y }
         } else if mods.space || self.tool == Tool::Pan {
             Interaction::Pan { last: at }
+        } else if self.tool == Tool::Fill && !eraser_end {
+            self.fill_at(s);
+            Interaction::Ignore
+        } else if self.tool.is_shape() && !eraser_end {
+            let c = self.view.to_canvas(s.x, s.y);
+            Interaction::Shape { tool: self.tool, start: c, end: c }
         } else if self.tool == Tool::Eyedropper || (mods.ctrl && matches!(self.tool, Tool::Brush | Tool::Eraser)) {
             let all_layers = self.tools.pick_all_layers;
             self.pick(s, all_layers);
@@ -401,10 +441,7 @@ impl Editor {
             match PaintSession::begin(&mut self.doc, &mut self.history, self.active, brush, self.color, erase, self.tools.stabilizer, self.view.zoom, info, s.recv_us) {
                 Ok(mut session) => {
                 if !erase {
-                    let c = self.color;
-                    self.recent_colors.retain(|&r| r != c);
-                    self.recent_colors.insert(0, c);
-                    self.recent_colors.truncate(MAX_RECENT_COLORS);
+                    self.remember_color();
                 }
                     let d = session.take_dirty();
                     self.mark_tiles(d);
@@ -420,6 +457,8 @@ impl Editor {
 
     fn drag(&mut self, s: &PenSample) {
         let at = (s.x, s.y);
+        let canvas = self.view.to_canvas(s.x, s.y);
+        let shift = self.mods.shift;
         let info = self.paint_info(s);
         let angle = self.angle_from_centre(at);
         let centre = self.centre();
@@ -448,6 +487,7 @@ impl Editor {
                 self.view.zoom_by(factor, anchor);
             }
             Interaction::Pick { all_layers } => pick = Some(*all_layers),
+            Interaction::Shape { tool, start, end } => *end = if shift { constrain(*tool, *start, canvas) } else { canvas },
             Interaction::Ignore | Interaction::Idle => {}
         }
         if let Some(all) = pick {
@@ -458,11 +498,127 @@ impl Editor {
     fn release(&mut self, now_us: u64) {
         let interaction = std::mem::replace(&mut self.interaction, Interaction::Idle);
         self.owner = None;
-        if let Interaction::Stroke(session) = interaction {
-            let d = session.end(&mut self.doc, now_us);
-            self.mark_tiles(d);
-            self.autosaver.changed(Instant::now());
+        match interaction {
+            Interaction::Stroke(session) => {
+                let d = session.end(&mut self.doc, now_us);
+                self.mark_tiles(d);
+                self.autosaver.changed(Instant::now());
+            }
+            Interaction::Shape { tool, start, end } => self.commit_shape(tool, start, end, now_us),
+            _ => {}
         }
+    }
+
+    /// The shape being dragged out: the tool and its two points in canvas pixels (for the
+    /// preview on screen).
+    pub fn shape_preview(&self) -> Option<(Tool, CanvasPoint, CanvasPoint)> {
+        match &self.interaction {
+            Interaction::Shape { tool, start, end } => Some((*tool, *start, *end)),
+            _ => None,
+        }
+    }
+
+    /// Why painting on the selected layer is not possible, if it is not.
+    fn layer_refusal(&self) -> Option<String> {
+        match self.doc.layers.get(self.active) {
+            None => Some("No layer is selected".into()),
+            Some(l) if l.locked => Some(format!("Layer \"{}\" is locked", l.name)),
+            Some(l) if !l.visible => Some(format!("Layer \"{}\" is hidden", l.name)),
+            Some(_) => None,
+        }
+    }
+
+    /// The paint bucket at a pen sample: fills the connected area of similar colour.
+    fn fill_at(&mut self, s: &PenSample) {
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was filled."));
+            return;
+        }
+        let (cx, cy) = self.view.to_canvas(s.x, s.y);
+        let (w, h) = (self.doc.width, self.doc.height);
+        let reference = if self.tools.fill_all_layers {
+            // The visible picture, with changes not yet on screen included.
+            if self.refresh_all {
+                self.doc.flatten()
+            } else {
+                if !self.dirty.is_empty() {
+                    let pending = self.dirty.clone();
+                    self.projection.update(&self.doc, &pending);
+                }
+                self.projection.image.clone()
+            }
+        } else {
+            let mut img = image::Rgba8::new(w, h);
+            img.data = self.doc.layers[self.active].pixels.read_rect(0, 0, w, h);
+            img
+        };
+        let Some(mask) = fill::flood(&reference, cx.floor() as i32, cy.floor() as i32, self.tools.fill_tolerance, 1) else { return };
+        let color = self.color;
+        self.edit_now("Fill", |doc, active| {
+            fill::paint_mask(&mut doc.layers[*active].pixels, &mask, color, 255);
+            Ok(())
+        });
+        self.remember_color();
+    }
+
+    fn remember_color(&mut self) {
+        let c = self.color;
+        self.recent_colors.retain(|&r| r != c);
+        self.recent_colors.insert(0, c);
+        self.recent_colors.truncate(MAX_RECENT_COLORS);
+    }
+
+    /// Paints a finished line, rectangle, ellipse or gradient: one undo step.
+    fn commit_shape(&mut self, tool: Tool, a: (f64, f64), b: (f64, f64), now_us: u64) {
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing was painted."));
+            return;
+        }
+        let (w, h) = (self.doc.width, self.doc.height);
+        let color = self.color;
+        if tool == Tool::Gradient {
+            self.edit_now("Gradient", |doc, active| {
+                fill::gradient(&mut doc.layers[*active].pixels, w, h, a, b, color);
+                Ok(())
+            });
+            self.remember_color();
+            return;
+        }
+        let tiny = (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5;
+        if tiny && tool != Tool::Line {
+            return;
+        }
+        let before = self.doc.clone();
+        if self.tools.shape_filled && tool != Tool::Line {
+            let mask = if tool == Tool::Rectangle { fill::rectangle(w, h, a, b) } else { fill::ellipse(w, h, a, b) };
+            fill::paint_mask(&mut self.doc.layers[self.active].pixels, &mask, color, 255);
+        }
+        // The outline, with the brush at full pressure.
+        let pt = |(x, y): (f64, f64)| PaintInfo { x, y, pressure: 1.0, tilt_x: 0.0, tilt_y: 0.0, rotation: 0.0 };
+        let points: Vec<PaintInfo> = match tool {
+            Tool::Line => vec![pt(a), pt(b)],
+            Tool::Rectangle => vec![pt(a), pt((b.0, a.1)), pt(b), pt((a.0, b.1)), pt(a)],
+            _ => {
+                let (cx, cy, rx, ry) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.0 - b.0).abs() / 2.0, (a.1 - b.1).abs() / 2.0);
+                let n = ((rx + ry) * std::f64::consts::PI / 3.0).clamp(24.0, 2000.0) as usize;
+                (0..=n).map(|i| i as f64 / n as f64 * std::f64::consts::TAU).map(|t| pt((cx + rx * t.cos(), cy + ry * t.sin()))).collect()
+            }
+        };
+        let mut scratch = History::new(1);
+        let brush = self.tools.brush.clone();
+        if let Ok(mut session) = PaintSession::begin(&mut self.doc, &mut scratch, self.active, brush, color, false, StabilizerSettings::default(), self.view.zoom, points[0], now_us) {
+            for p in &points[1..] {
+                session.add(&mut self.doc, *p, now_us);
+            }
+            session.end(&mut self.doc, now_us);
+        }
+        if changed_tiles(&before, &self.doc).is_some_and(|t| t.is_empty()) {
+            return; // entirely off the canvas
+        }
+        self.history.record(tool.name(), &before);
+        self.refresh_from(&before);
+        self.autosaver.changed(Instant::now());
+        self.remember_color();
     }
 
     /// The pen left the tablet's range or the window lost the pen: ends what it was doing.
@@ -634,6 +790,12 @@ impl Editor {
     /// Runs a document change as one undo step named `name`.
     fn edit(&mut self, name: &str, f: impl FnOnce(&mut Document, &mut usize) -> Result<(), String>) {
         self.finish_interaction();
+        self.edit_now(name, f);
+    }
+
+    /// An edit while the pen is down (the fill tool): like `edit`, without ending the pen's
+    /// interaction first.
+    fn edit_now(&mut self, name: &str, f: impl FnOnce(&mut Document, &mut usize) -> Result<(), String>) {
         self.last_edit = None;
         let before = self.doc.clone();
         let mut active = self.active;
@@ -810,6 +972,8 @@ impl Editor {
 
     /// Opens a file from its bytes (the browser version: a file the user picked or dropped).
     /// `name` is the file's name; the painting takes it as its title.
+    // Only the browser app (recedo-web) calls this.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         let loaded = import::open(bytes)?;
         self.replace_document(loaded.doc);
@@ -822,12 +986,16 @@ impl Editor {
     }
 
     /// The painting as a `.kra` file's bytes (the browser version saves by downloading them).
+    // Only the browser app (recedo-web) calls this.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn encode_kra(&mut self) -> Result<Vec<u8>, String> {
         self.finish_interaction();
         kra::save(&self.doc)
     }
 
     /// The flattened picture as PNG or JPEG bytes.
+    // Only the browser app (recedo-web) calls this.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn encode_export(&mut self, format: ExportFormat) -> Result<Vec<u8>, String> {
         self.finish_interaction();
         let flat = self.doc.flatten();
@@ -838,6 +1006,8 @@ impl Editor {
     }
 
     /// The bytes from [`Editor::encode_kra`] (taken at `snapshot`) were saved as `name`.
+    // Only the browser app (recedo-web) calls this.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn saved_elsewhere(&mut self, name: &str, snapshot: Instant) {
         self.autosaver.saved(snapshot);
         self.untitled_name = Path::new(name).file_stem().map_or_else(|| name.to_string(), |s| s.to_string_lossy().into_owned());
@@ -971,6 +1141,26 @@ impl Editor {
         }
         if let Some(kra) = self.recovered_from.take() {
             autosave::remove_recovery_file(&kra);
+        }
+    }
+}
+
+/// A point on the canvas, in canvas pixels.
+pub type CanvasPoint = (f64, f64);
+
+/// Shift while dragging a shape: lines and gradients at multiples of 15°, squares and circles.
+fn constrain(tool: Tool, a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    match tool {
+        Tool::Rectangle | Tool::Ellipse => {
+            let d = dx.abs().max(dy.abs());
+            (a.0 + d.copysign(dx), a.1 + d.copysign(dy))
+        }
+        _ => {
+            let len = dx.hypot(dy);
+            let step = 15f64.to_radians();
+            let ang = (dy.atan2(dx) / step).round() * step;
+            (a.0 + len * ang.cos(), a.1 + len * ang.sin())
         }
     }
 }

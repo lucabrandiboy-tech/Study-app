@@ -5,9 +5,15 @@
 //! views) and draws them with the view's pan, zoom, rotation and mirror, over a
 //! checkerboard where the picture is see-through. Canvases larger than the GPU's texture
 //! limit are split into several textures.
+//!
+//! The mipmaps are computed on the CPU, only where tiles changed, and uploaded level by
+//! level. (Drawing each level from the one above inside the same texture went wrong on
+//! some browsers' WebGL: a half-size copy of the picture appeared in its top-left corner.)
 
 pub mod gpu;
 
+use rayon::prelude::*;
+use recedo_core::image::Rgba8;
 use recedo_core::projection::Projection;
 use recedo_core::tiles::{TILE, TileKey};
 use recedo_core::view::View;
@@ -33,17 +39,24 @@ struct Chunk {
     texture: wgpu::Texture,
     uniform: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    /// Per mip level n >= 1: bind group reading level n-1, and the view of level n.
-    mips: Vec<(wgpu::BindGroup, wgpu::TextureView)>,
-    mips_stale: bool,
+    /// CPU copies of mip levels 1, 2, … (premultiplied RGBA), to compute the next level from.
+    levels: Vec<Level>,
 }
+
+struct Level {
+    w: u32,
+    h: u32,
+    data: Vec<u8>,
+}
+
+/// Mip blocks are this many pixels square (in their own level's pixels).
+const BLOCK: u32 = 64;
 
 pub struct CanvasDisplay {
     pub width: u32,
     pub height: u32,
     chunks: Vec<Chunk>,
     pipeline: wgpu::RenderPipeline,
-    mip_pipeline: wgpu::RenderPipeline,
     srgb_target: bool,
     /// Scratch for converting a tile to premultiplied alpha.
     scratch: Vec<u8>,
@@ -60,10 +73,6 @@ impl CanvasDisplay {
         let canvas_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("canvas display"),
             source: wgpu::ShaderSource::Wgsl(include_str!("canvas.wgsl").into()),
-        });
-        let mip_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("canvas mipmaps"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("mip.wgsl").into()),
         });
         let tex_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -85,7 +94,6 @@ impl CanvasDisplay {
                 samp_entry(2),
             ],
         });
-        let mip_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("canvas mipmaps"), entries: &[tex_entry(0), samp_entry(1)] });
         let pipeline_for = |label, module: &wgpu::ShaderModule, entry, layout: &wgpu::BindGroupLayout, format| {
             let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some(label), bind_group_layouts: &[Some(layout)], immediate_size: 0 });
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -106,7 +114,6 @@ impl CanvasDisplay {
             })
         };
         let pipeline = pipeline_for("canvas display", &canvas_module, "fs_canvas", &bgl, target_format);
-        let mip_pipeline = pipeline_for("canvas mipmaps", &mip_module, "fs_downsample", &mip_bgl, TEXTURE_FORMAT);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("canvas"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -132,7 +139,7 @@ impl CanvasDisplay {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: TEXTURE_FORMAT,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                     view_formats: &[],
                 });
                 let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -151,27 +158,16 @@ impl CanvasDisplay {
                         wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
                     ],
                 });
-                let level_view = |level| {
-                    texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: level, mip_level_count: Some(1), ..Default::default() })
-                };
-                let mips = (1..levels)
-                    .map(|level| {
-                        let src = level_view(level - 1);
-                        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("canvas mip"),
-                            layout: &mip_bgl,
-                            entries: &[
-                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src) },
-                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-                            ],
-                        });
-                        (bg, level_view(level))
+                let levels = (1..levels)
+                    .map(|n| {
+                        let (lw, lh) = ((w >> n).max(1), (h >> n).max(1));
+                        Level { w: lw, h: lh, data: vec![0; (lw * lh * 4) as usize] }
                     })
                     .collect();
-                chunks.push(Chunk { x, y, w, h, texture, uniform, bind_group, mips, mips_stale: true });
+                chunks.push(Chunk { x, y, w, h, texture, uniform, bind_group, levels });
             }
         }
-        CanvasDisplay { width, height, chunks, pipeline, mip_pipeline, srgb_target: target_format.is_srgb(), scratch: Vec::new() }
+        CanvasDisplay { width, height, chunks, pipeline, srgb_target: target_format.is_srgb(), scratch: Vec::new() }
     }
 
     pub fn chunk_count(&self) -> usize {
@@ -181,16 +177,17 @@ impl CanvasDisplay {
     /// Uploads changed tiles of the projection.
     pub fn upload(&mut self, queue: &wgpu::Queue, projection: &Projection, tiles: &[TileKey]) {
         let img = &projection.image;
+        // Per chunk, the level-1 blocks the changed tiles fall in.
+        let mut blocks: Vec<std::collections::HashSet<(u32, u32)>> = vec![Default::default(); self.chunks.len()];
         for &key in tiles {
             let Some((x, y, w, h)) = projection.tile_rect(key) else { continue };
-            let Some(chunk) = self.chunks.iter_mut().find(|c| x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) else { continue };
+            let Some(ci) = self.chunks.iter().position(|c| x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) else { continue };
+            let chunk = &self.chunks[ci];
             self.scratch.clear();
             for row in 0..h {
                 let start = ((y + row) as usize * img.width as usize + x as usize) * 4;
                 for p in img.data[start..start + w as usize * 4].as_chunks::<4>().0 {
-                    let a = p[3] as u32;
-                    let pm = |c: u8| ((c as u32 * a + 127) / 255) as u8;
-                    self.scratch.extend_from_slice(&[pm(p[0]), pm(p[1]), pm(p[2]), p[3]]);
+                    self.scratch.extend_from_slice(&premultiply(*p));
                 }
             }
             queue.write_texture(
@@ -199,7 +196,45 @@ impl CanvasDisplay {
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
                 wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
-            chunk.mips_stale = true;
+            // A level-0 tile (64 px) is half a level-1 block (64 level-1 px = 128 level-0 px).
+            let (lx, ly) = (x - chunk.x, y - chunk.y);
+            blocks[ci].insert((lx / (2 * BLOCK), ly / (2 * BLOCK)));
+        }
+        for (ci, mut level_blocks) in blocks.into_iter().enumerate() {
+            let chunk = &mut self.chunks[ci];
+            for n in 0..chunk.levels.len() {
+                if level_blocks.is_empty() {
+                    break;
+                }
+                let (prev, rest) = chunk.levels.split_at_mut(n);
+                let level = &mut rest[0];
+                let above = match n {
+                    0 => Above::Picture { img, x: chunk.x, y: chunk.y, w: chunk.w, h: chunk.h },
+                    _ => Above::Level(&prev[n - 1]),
+                };
+                let rects: Vec<(u32, u32, u32, u32)> = level_blocks
+                    .iter()
+                    .map(|&(bx, by)| (bx * BLOCK, by * BLOCK))
+                    .filter(|&(x0, y0)| x0 < level.w && y0 < level.h)
+                    .map(|(x0, y0)| (x0, y0, (x0 + BLOCK).min(level.w), (y0 + BLOCK).min(level.h)))
+                    .collect();
+                // The blocks are independent: computed on all cores, then stored and uploaded.
+                let done: Vec<Vec<u8>> = rects.par_iter().map(|&r| downsample(above, r)).collect();
+                for (&(x0, y0, x1, y1), pixels) in rects.iter().zip(&done) {
+                    let row = ((x1 - x0) * 4) as usize;
+                    for (py, src) in (y0..y1).zip(pixels.chunks_exact(row)) {
+                        let i = ((py * level.w + x0) * 4) as usize;
+                        level.data[i..i + row].copy_from_slice(src);
+                    }
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo { texture: &chunk.texture, mip_level: n as u32 + 1, origin: wgpu::Origin3d { x: x0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+                        pixels,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some((x1 - x0) * 4), rows_per_image: Some(y1 - y0) },
+                        wgpu::Extent3d { width: x1 - x0, height: y1 - y0, depth_or_array_layers: 1 },
+                    );
+                }
+                level_blocks = level_blocks.iter().map(|&(bx, by)| (bx / 2, by / 2)).collect();
+            }
         }
     }
 
@@ -215,27 +250,6 @@ impl CanvasDisplay {
     pub fn draw(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, view: &View, background: [f64; 3]) {
         let zoom = view.zoom;
         let nearest = zoom >= NEAREST_FROM_ZOOM;
-        // Mipmaps are only needed when zoomed out; rebuild them lazily.
-        if zoom < 1.0 {
-            for c in self.chunks.iter_mut().filter(|c| c.mips_stale) {
-                for (bg, dst) in &c.mips {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("canvas mip"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: dst,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                        })],
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(&self.mip_pipeline);
-                    pass.set_bind_group(0, bg, &[]);
-                    pass.draw(0..3, 0..1);
-                }
-                c.mips_stale = false;
-            }
-        }
         // Screen to canvas: the inverse of the view's matrix.
         let [a, b, tx, c, d, ty] = view.matrix();
         let det = a * d - b * c;
@@ -266,6 +280,71 @@ impl CanvasDisplay {
             pass.draw(0..3, 0..1);
         }
     }
+}
+
+/// Where a mip level's pixels come from: the level above it.
+#[derive(Clone, Copy)]
+enum Above<'a> {
+    /// Level 0: the chunk's rectangle of the projection (straight alpha).
+    Picture { img: &'a Rgba8, x: u32, y: u32, w: u32, h: u32 },
+    /// A level computed before (premultiplied).
+    Level(&'a Level),
+}
+
+impl Above<'_> {
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Above::Picture { w, h, .. } => (*w, *h),
+            Above::Level(l) => (l.w, l.h),
+        }
+    }
+
+    /// `n` pixels of row `sy` from column `sx0`, premultiplied, into `out`. Rows and columns
+    /// past the edge repeat the last one (levels of odd sizes).
+    fn row(&self, sy: u32, sx0: u32, n: u32, out: &mut Vec<[u8; 4]>) {
+        out.clear();
+        let (w, h) = self.size();
+        let sy = sy.min(h - 1);
+        let sx0 = sx0.min(w - 1);
+        let len = ((sx0 + n).min(w) - sx0) as usize * 4;
+        match *self {
+            Above::Picture { img, x, y, .. } => {
+                let start = ((y + sy) as usize * img.width as usize + (x + sx0) as usize) * 4;
+                out.extend(img.data[start..start + len].as_chunks::<4>().0.iter().map(|&p| premultiply(p)));
+            }
+            Above::Level(l) => {
+                let start = (sy as usize * l.w as usize + sx0 as usize) * 4;
+                out.extend_from_slice(l.data[start..start + len].as_chunks::<4>().0);
+            }
+        }
+        let last = *out.last().expect("at least one column");
+        out.resize(n as usize, last);
+    }
+}
+
+/// One block (x0..x1, y0..y1) of a mip level: each pixel the rounded average of its 2x2
+/// pixels in the level above. Returns its rows, premultiplied RGBA.
+fn downsample(above: Above, (x0, y0, x1, y1): (u32, u32, u32, u32)) -> Vec<u8> {
+    let n = 2 * (x1 - x0);
+    let (mut top, mut bottom) = (Vec::with_capacity(n as usize), Vec::with_capacity(n as usize));
+    let mut out = Vec::with_capacity(((x1 - x0) * (y1 - y0) * 4) as usize);
+    for py in y0..y1 {
+        above.row(2 * py, 2 * x0, n, &mut top);
+        above.row(2 * py + 1, 2 * x0, n, &mut bottom);
+        for (t, b) in top.as_chunks::<2>().0.iter().zip(bottom.as_chunks::<2>().0) {
+            for c in 0..4 {
+                out.push(((t[0][c] as u32 + t[1][c] as u32 + b[0][c] as u32 + b[1][c] as u32 + 2) / 4) as u8);
+            }
+        }
+    }
+    out
+}
+
+/// Straight to premultiplied alpha, rounded (what the display textures hold).
+fn premultiply(p: [u8; 4]) -> [u8; 4] {
+    let a = p[3] as u32;
+    let pm = |c: u8| ((c as u32 * a + 127) / 255) as u8;
+    [pm(p[0]), pm(p[1]), pm(p[2]), p[3]]
 }
 
 fn srgb_to_linear(c: f64) -> f64 {

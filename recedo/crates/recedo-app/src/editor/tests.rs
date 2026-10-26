@@ -164,6 +164,22 @@ fn the_eraser_end_erases_with_any_tool() {
     assert!(!inked(&e, 100, 50), "erased back to the white background");
     assert!(inked(&e, 40, 50));
     assert_eq!(e.history.entries().0, vec!["Brush stroke", "Erase"]);
+    // With the fill, line or rectangle tool too: the eraser end erases freehand.
+    for tool in [Tool::Fill, Tool::Line, Tool::Rectangle] {
+        e.tool = tool;
+        assert!(inked(&e, 40, 50));
+        for i in 0..=4 {
+            let mut s = pt(300 + i, 36.0 + 2.0 * i as f64, 50.0, true);
+            s.flags.set(Flags::ERASER, true);
+            e.pen(&s, true, Modifiers::default());
+        }
+        let mut up = pt(310, 44.0, 50.0, false);
+        up.flags.set(Flags::ERASER, true);
+        e.pen(&up, true, Modifiers::default());
+        assert!(!inked(&e, 40, 50), "{tool:?} erased");
+        assert_eq!(e.history.entries().0, vec!["Brush stroke", "Erase", "Erase"], "{tool:?}");
+        e.undo();
+    }
 }
 
 #[test]
@@ -509,4 +525,99 @@ fn view_commands() {
     // Centred in the canvas area, which starts at (100, 40).
     let c = f.view.to_screen(2000.0, 500.0);
     assert!((c.0 - 624.0).abs() < 1e-6 && (c.1 - 340.0).abs() < 1e-6, "{c:?}");
+}
+
+
+/// Drags from a to b (screen pixels) with the current tool, Shift as given.
+fn drag_tool(e: &mut Editor, a: (f64, f64), b: (f64, f64), shift: bool) {
+    let mods = Modifiers { shift, ..Modifiers::default() };
+    e.pen(&pt(1, a.0, a.1, true), true, mods);
+    for i in 1..=10 {
+        let t = i as f64 / 10.0;
+        e.pen(&pt(1 + i, a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, true), true, mods);
+    }
+    e.pen(&pt(20, b.0, b.1, false), true, mods);
+}
+
+fn applied(e: &Editor) -> usize {
+    e.history.entries().1
+}
+
+#[test]
+fn fill_tool_fills_inside_a_drawn_outline_in_one_step() {
+    let mut e = editor();
+    // A closed box drawn with the rectangle tool, then filled inside.
+    e.tool = Tool::Rectangle;
+    drag_tool(&mut e, (100.0, 100.0), (200.0, 180.0), false);
+    assert_eq!(applied(&e), 1, "the rectangle is one step");
+    assert_eq!(e.doc.layers[e.active].pixels.pixel(100, 140)[3], 255, "outline painted");
+    assert_eq!(e.doc.layers[e.active].pixels.pixel(150, 140)[3], 0, "inside still empty");
+    e.take_refresh();
+    e.color = [200, 0, 0];
+    e.tool = Tool::Fill;
+    e.pen(&pt(30, 150.0, 140.0, true), true, Modifiers::default());
+    // Dragging the pen while it is down does not fill again.
+    e.pen(&pt(31, 300.0, 250.0, true), true, Modifiers::default());
+    e.pen(&pt(32, 300.0, 250.0, false), true, Modifiers::default());
+    assert_eq!(applied(&e), 2, "the fill is one step");
+    let l = &e.doc.layers[e.active].pixels;
+    assert_eq!(l.pixel(150, 140), [200, 0, 0, 255], "inside filled");
+    assert_eq!(l.pixel(300, 250)[3], 0, "outside the box not filled");
+    assert_eq!(e.recent_colors[0], [200, 0, 0]);
+    e.undo();
+    assert_eq!(e.doc.layers[e.active].pixels.pixel(150, 140)[3], 0, "undo removes the fill");
+}
+
+#[test]
+fn line_rectangle_ellipse_and_gradient_paint_where_dragged() {
+    let mut e = editor();
+    e.tool = Tool::Line;
+    drag_tool(&mut e, (20.0, 20.0), (120.0, 20.0), false);
+    let l = &e.doc.layers[e.active].pixels;
+    assert!((20..=120).step_by(10).all(|x| l.pixel(x, 20)[3] == 255), "the whole line");
+    assert_eq!(l.pixel(20, 40)[3], 0);
+    // Shift: a nearly horizontal drag becomes exactly horizontal.
+    drag_tool(&mut e, (20.0, 60.0), (120.0, 64.0), true);
+    let l = &e.doc.layers[e.active].pixels;
+    assert_eq!(l.pixel(118, 60)[3], 255, "straightened to 0°");
+    // A filled ellipse: inside filled, the corner of its box not.
+    e.tool = Tool::Ellipse;
+    e.tools.shape_filled = true;
+    drag_tool(&mut e, (200.0, 100.0), (300.0, 200.0), false);
+    let l = &e.doc.layers[e.active].pixels;
+    assert_eq!(l.pixel(250, 150)[3], 255);
+    assert_eq!(l.pixel(203, 103)[3], 0);
+    // Shift makes the ellipse a circle: the box's lower edge moves to make it square.
+    drag_tool(&mut e, (20.0, 150.0), (80.0, 170.0), true);
+    let l = &e.doc.layers[e.active].pixels;
+    assert_eq!(l.pixel(50, 200)[3], 255, "circle reaches y = 210 - its outline at 210");
+    let steps = applied(&e);
+    assert_eq!(steps, 4);
+    // Gradient across the canvas on a new layer: solid before the start, half way in the
+    // middle, nothing past the end.
+    e.add_layer();
+    e.tool = Tool::Gradient;
+    e.color = [0, 0, 255];
+    drag_tool(&mut e, (50.0, 0.0), (250.0, 0.0), false);
+    let l = &e.doc.layers[e.active].pixels;
+    assert_eq!(l.pixel(20, 100), [0, 0, 255, 255]);
+    let mid = l.pixel(150, 100)[3];
+    assert!((120..=135).contains(&mid), "half way: {mid}");
+    assert_eq!(l.pixel(260, 100)[3], 0);
+    assert_eq!(applied(&e), steps + 2, "the new layer and the gradient");
+}
+
+#[test]
+fn shapes_and_fill_refuse_a_locked_layer() {
+    let mut e = editor();
+    let a = e.active;
+    e.set_layer_locked(a, true);
+    let before = applied(&e);
+    e.tool = Tool::Fill;
+    e.pen(&pt(1, 50.0, 50.0, true), true, Modifiers::default());
+    e.pen(&pt(2, 50.0, 50.0, false), true, Modifiers::default());
+    e.tool = Tool::Rectangle;
+    drag_tool(&mut e, (10.0, 10.0), (60.0, 60.0), false);
+    assert_eq!(applied(&e), before, "nothing changed");
+    assert!(e.notices.iter().filter(|n| n.text.contains("locked")).count() >= 2);
 }

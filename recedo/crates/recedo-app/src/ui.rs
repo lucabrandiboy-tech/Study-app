@@ -177,6 +177,8 @@ impl AppUi {
 
     /// The browser version: a file the user picked, as bytes (unsaved changes were asked
     /// about before the file picker opened).
+    // Only the browser app (recedo-web) calls this.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn open_bytes(&mut self, ed: &mut Editor, name: &str, bytes: &[u8]) {
         let before = ed.notices.len();
         let result = ed.open_bytes(name, bytes);
@@ -317,6 +319,15 @@ impl AppUi {
         }
         if hit(none, Key::P) {
             ed.tool = Tool::Eyedropper;
+        }
+        if hit(none, Key::F) {
+            ed.tool = Tool::Fill;
+        }
+        if hit(none, Key::G) {
+            ed.tool = Tool::Gradient;
+        }
+        if hit(none, Key::V) {
+            ed.tool = Tool::Line;
         }
         if hit(none, Key::OpenBracket) {
             ed.resize_brush(false);
@@ -695,6 +706,30 @@ impl AppUi {
             painter.circle_stroke(pt(l.pen), l.radius as f32 / ppp, s);
             painter.line_segment([pt(l.brush), pt(l.pen)], s);
         }
+        if let Some((tool, a, b)) = ed.shape_preview() {
+            let to = |p: (f64, f64)| pt(ed.view.to_screen(p.0, p.1));
+            let [r, g, bl] = ed.color;
+            let width = if tool == Tool::Gradient { 1.5 } else { (ed.tools.brush.size as f64 * ed.view.zoom / ppp as f64).max(1.0) as f32 };
+            let s = Stroke::new(width, Color32::from_rgb(r, g, bl));
+            let guide = Stroke::new(1.0, Color32::from_white_alpha(170));
+            match tool {
+                Tool::Line | Tool::Gradient => {
+                    painter.line_segment([to(a), to(b)], s);
+                    if tool == Tool::Gradient {
+                        painter.circle_stroke(to(a), 5.0, guide);
+                        painter.circle_stroke(to(b), 5.0, guide);
+                    }
+                }
+                Tool::Rectangle => {
+                    painter.add(egui::Shape::closed_line(vec![to(a), to((b.0, a.1)), to(b), to((a.0, b.1))], s));
+                }
+                _ => {
+                    let (cx, cy, rx, ry) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.0 - b.0).abs() / 2.0, (a.1 - b.1).abs() / 2.0);
+                    let pts = (0..96).map(|i| i as f64 / 96.0 * std::f64::consts::TAU).map(|t| to((cx + rx * t.cos(), cy + ry * t.sin()))).collect();
+                    painter.add(egui::Shape::closed_line(pts, s));
+                }
+            }
+        }
         if let Some((c, r)) = ed.brush_outline() {
             let c = pt(c);
             if canvas.contains(c) {
@@ -963,7 +998,7 @@ impl AppUi {
 /// Big buttons for what a pen or a finger cannot reach by keyboard: undo, redo, brush or
 /// eraser, brush size, fit, zoom.
 fn toolbar(ui: &mut Ui, ed: &mut Editor) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let big = |text: &str| egui::Button::new(RichText::new(text).size(15.0)).min_size(vec2(44.0, 30.0));
         let (_, applied) = ed.history.entries();
         let redo = ed.history.can_redo();
@@ -974,7 +1009,17 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             ed.redo();
         }
         ui.separator();
-        for (t, label) in [(Tool::Brush, "Brush"), (Tool::Eraser, "Eraser"), (Tool::Eyedropper, "Pick colour"), (Tool::Pan, "Move view")] {
+        for (t, label) in [
+            (Tool::Brush, "Brush"),
+            (Tool::Eraser, "Eraser"),
+            (Tool::Fill, "Fill"),
+            (Tool::Line, "Line"),
+            (Tool::Rectangle, "Rect"),
+            (Tool::Ellipse, "Ellipse"),
+            (Tool::Gradient, "Gradient"),
+            (Tool::Eyedropper, "Pick colour"),
+            (Tool::Pan, "Move view"),
+        ] {
             if ui.add(egui::Button::selectable(ed.tool == t, RichText::new(label).size(15.0)).min_size(vec2(44.0, 30.0))).clicked() {
                 ed.tool = t;
             }
@@ -1002,14 +1047,19 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
 }
 
 /// Ready-made brushes (Krita has a library of these; these are the basics).
-fn presets() -> [(&'static str, &'static str, Brush); 5] {
+fn presets() -> Vec<(&'static str, &'static str, Brush)> {
     let base = Brush::default();
-    [
+    vec![
+        ("Paint brush", "The default round brush", base.clone()),
         ("Pencil", "Thin, a little soft, lighter when you press lightly", Brush { size: 4.0, hardness: 0.6, opacity_curve: Some(Curve::linear()), min_size: 0.5, ..base.clone() }),
         ("Ink pen", "Hard edge, thin to thick with pressure", Brush { size: 10.0, hardness: 1.0, min_size: 0.1, ..base.clone() }),
+        ("Fine liner", "Thin line of one even width", Brush { size: 3.0, hardness: 1.0, size_curve: None, ..base.clone() }),
+        ("Felt-tip", "Even strokes, slightly soft", Brush { size: 14.0, hardness: 0.85, opacity: 0.9, size_curve: None, ..base.clone() }),
         ("Marker", "Even, see-through strokes that do not darken where they cross", Brush { size: 28.0, hardness: 0.75, opacity: 0.55, size_curve: None, ..base.clone() }),
-        ("Airbrush", "Big and soft; builds up colour as you go over it", Brush { size: 150.0, hardness: 0.0, flow: 0.08, mode: PaintMode::BuildUp, size_curve: None, flow_curve: Some(Curve::linear()), ..base.clone() }),
-        ("Paint brush", "The default round brush", base),
+        ("Highlighter", "Wide flat tip, see-through, even", Brush { size: 40.0, hardness: 0.95, opacity: 0.35, size_curve: None, roundness: 0.3, angle: 70.0, ..base.clone() }),
+        ("Calligraphy", "Flat nib at an angle: thick and thin strokes by direction", Brush { size: 26.0, hardness: 1.0, roundness: 0.22, angle: 35.0, min_size: 0.35, ..base.clone() }),
+        ("Watercolour", "Soft and see-through; builds up where you go over it", Brush { size: 70.0, hardness: 0.15, opacity: 0.5, flow: 0.12, mode: PaintMode::BuildUp, size_curve: Some(Curve::linear()), min_size: 0.4, ..base.clone() }),
+        ("Airbrush", "Big and soft; builds up colour as you go over it", Brush { size: 150.0, hardness: 0.0, flow: 0.08, mode: PaintMode::BuildUp, size_curve: None, flow_curve: Some(Curve::linear()), ..base }),
     ]
 }
 
@@ -1019,6 +1069,11 @@ fn tools_panel(ui: &mut Ui, ed: &mut Editor) {
         Tool::Eraser => "E",
         Tool::Eyedropper => "P (or Ctrl-click)",
         Tool::Pan => "or hold Space",
+        Tool::Fill => "F: fills the area of the colour you click",
+        Tool::Line => "V: drag; Shift for 15° steps",
+        Tool::Rectangle => "Drag; Shift for a square",
+        Tool::Ellipse => "Drag; Shift for a circle",
+        Tool::Gradient => "G: drag from full colour to where it fades out",
     };
     ui.vertical_centered_justified(|ui| {
         for t in Tool::ALL {
@@ -1067,6 +1122,13 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor) {
                 .changed()
             {
                 b.spacing = spacing / 100.0;
+            }
+            let mut round = (b.roundness * 100.0).round();
+            if ui.add(egui::Slider::new(&mut round, 5.0..=100.0).text("Roundness").suffix(" %").integer()).on_hover_text("100 % is round; less is a flat tip, like a highlighter or a calligraphy nib").changed() {
+                b.roundness = round / 100.0;
+            }
+            if b.roundness < 1.0 {
+                ui.add(egui::Slider::new(&mut b.angle, -90.0..=90.0).text("Tip angle").suffix("°").max_decimals(0));
             }
             ui.horizontal(|ui| {
                 ui.label("Mode");
@@ -1117,6 +1179,32 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor) {
             ui.radio_value(&mut ed.tools.pick_all_layers, false, "The selected layer only");
             ui.add(egui::Slider::new(&mut ed.tools.pick_radius, 0.0..=20.0).text("Average over").suffix(" px").max_decimals(0));
             ui.weak("Tip: hold Ctrl with the brush to pick a colour.");
+        }
+        Tool::Fill => {
+            ui.strong("Fill");
+            let mut tol = (ed.tools.fill_tolerance * 100.0).round();
+            if ui.add(egui::Slider::new(&mut tol, 0.0..=100.0).text("Tolerance").suffix(" %").integer()).on_hover_text("How different a colour may be and still be filled").changed() {
+                ed.tools.fill_tolerance = tol / 100.0;
+            }
+            ui.radio_value(&mut ed.tools.fill_all_layers, true, "Find the area in the visible picture");
+            ui.radio_value(&mut ed.tools.fill_all_layers, false, "Find the area in this layer only");
+            ui.weak("Fills the selected layer with the colour, a pixel under the edges of lines so no gap shows.");
+        }
+        Tool::Line | Tool::Rectangle | Tool::Ellipse => {
+            ui.strong(ed.tool.name());
+            if ed.tool != Tool::Line {
+                ui.checkbox(&mut ed.tools.shape_filled, "Filled with the colour");
+            }
+            ui.add(egui::Slider::new(&mut ed.tools.brush.size, MIN_BRUSH..=MAX_BRUSH).logarithmic(true).text("Line width").suffix(" px").max_decimals(0));
+            ui.weak(match ed.tool {
+                Tool::Line => "Drag from start to end. Hold Shift for angles in 15° steps. Uses the brush.",
+                Tool::Rectangle => "Drag from corner to corner. Hold Shift for a square. Uses the brush.",
+                _ => "Drag across the box it fits in. Hold Shift for a circle. Uses the brush.",
+            });
+        }
+        Tool::Gradient => {
+            ui.strong("Gradient");
+            ui.weak("Drag from where the colour is full to where it fades out. Hold Shift for angles in 15° steps.");
         }
         Tool::Pan => {
             ui.strong("Pan");
@@ -1177,6 +1265,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("B", "Brush"),
     ("E", "Eraser on/off"),
     ("P", "Eyedropper"),
+    ("F", "Fill"),
+    ("G", "Gradient"),
+    ("V", "Line"),
+    ("Shift while dragging a shape", "Straight angles, squares, circles"),
     ("Ctrl + click", "Pick a colour while painting"),
     ("[  ]", "Brush smaller / bigger"),
     ("I  O", "Brush opacity down / up"),

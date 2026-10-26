@@ -402,6 +402,7 @@ fn ink_test(r: &mut Results, hwnd: HWND, c: Area) {
     }
     let layer = active_layer();
     let before = history_applied();
+    with_app(|a| a.pen_log = Some(crate::win::app::PenLog::new()));
     let y = c.top + c.height() * 0.3;
     let (x0, x1) = (c.left + 60.0, c.right - 60.0);
     let hover = POINTER_FLAG_INRANGE | POINTER_FLAG_UPDATE;
@@ -455,9 +456,17 @@ fn ink_test(r: &mut Results, hwnd: HWND, c: Area) {
         return;
     }
     let after = history_applied();
+    let log = with_app(|a| a.pen_log.take()).flatten();
     r.check("ink: a pen stroke is one undo step", after == before + 1, format!("undo steps {before} -> {after} ({ok} of {} frames injected)", frames.len()));
     let cov = coverage(layer, (x0 + 10.0, y), (x1 - 10.0, y), 2);
     r.check("ink: the line is painted where the pen went", cov >= 0.97, format!("{:.0} % of points along it painted", cov * 100.0));
+    if after != before + 1 || cov < 0.97 {
+        // What the app received and where the stroke started and ended, to see why.
+        r.note("pen trace (frame ids; c = touching, h = hovering):");
+        for line in log.map(|l| l.lines).unwrap_or_default() {
+            r.note(format!("  {line}"));
+        }
+    }
     let (thin, thick) = widths(layer, x0, x1, y, 40.0);
     r.check("ink: pressure changes the line width", thin > 0 && thick >= thin * 3, format!("{thin} canvas px wide near the start, {thick} near the end"));
 }

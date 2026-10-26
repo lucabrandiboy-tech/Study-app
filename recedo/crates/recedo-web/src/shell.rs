@@ -43,6 +43,13 @@ struct App {
     /// Fingers on the screen (pointer id, position in pixels). Fingers move the view: one
     /// pans, two pan and pinch-zoom. Only the pen and the mouse paint.
     touches: Vec<(i32, (f64, f64))>,
+    /// Pointers pressed down (id, eraser end), from their down/up events.
+    down: Vec<(i32, bool)>,
+    /// The pen's last pressure while touching (for readings that report none).
+    last_pressure: f32,
+    /// Pen readings in the last second, and when that second started (shown in the status bar).
+    pen_count: u32,
+    pen_window: f64,
     /// Two fingers were down: the rest of this touch does nothing until all fingers lift.
     pinching: bool,
     last_autosave: Instant,
@@ -126,6 +133,10 @@ async fn run() -> Result<(), String> {
         frames: 0,
         title: String::new(),
         touches: Vec::new(),
+        down: Vec::new(),
+        last_pressure: 0.5,
+        pen_count: 0,
+        pen_window: 0.0,
         pinching: false,
         last_autosave: Instant::now(),
     }));
@@ -146,8 +157,11 @@ fn canvas_size(canvas: &HtmlCanvasElement) -> (u32, u32) {
     (w.max(1), h.max(1))
 }
 
+/// The frame callback, which schedules itself again each frame.
+type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
 fn animation_loop(app: Rc<RefCell<App>>) {
-    let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let f: FrameCallback = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move || {
         let requests = app.borrow_mut().tick();
@@ -232,7 +246,7 @@ impl App {
         }
         self.update_cursor(None);
         // Keep the settings (panel layout, brush, colour) a few times a second at most.
-        if self.frames % 30 == 0 {
+        if self.frames.is_multiple_of(30) {
             let s = serde_json::to_string(&self.session.settings()).unwrap_or_default();
             if s != self.saved_settings {
                 if let Some(st) = window().local_storage().ok().flatten() {
@@ -282,6 +296,23 @@ impl App {
         }
     }
 
+    /// The status bar's pen readout: readings per second and the pressure, so a pen that
+    /// reports no pressure (or few readings) is easy to see.
+    fn pen_stats(&mut self, samples: &[PenSample], now_ms: f64) {
+        self.pen_count += samples.len() as u32;
+        if now_ms - self.pen_window >= 1000.0 {
+            let s = samples.last().expect("one sample");
+            let what = if s.source == Source::Ink { "Pen" } else { "Mouse" };
+            self.session.ui.tablet_status = if s.contact() {
+                format!("{what}: {} readings/s, pressure {:.2}", self.pen_count, s.pressure)
+            } else {
+                format!("{what}: {} readings/s", self.pen_count)
+            };
+            self.pen_count = 0;
+            self.pen_window = now_ms;
+        }
+    }
+
     fn pos(&self, x: f64, y: f64) -> egui::Pos2 {
         egui::pos2(x as f32 / self.ppp, y as f32 / self.ppp)
     }
@@ -295,20 +326,24 @@ fn num(v: &JsValue, name: &str) -> f64 {
     js_sys::Reflect::get(v, &JsValue::from_str(name)).ok().and_then(|x| x.as_f64()).unwrap_or(0.0)
 }
 
-/// A pointer event as a pen sample, in canvas pixels.
-fn sample(e: &PointerEvent, dpr: f64, perf_now: f64) -> PenSample {
+/// A pointer event as a pen sample, in canvas pixels. `contact` comes from the pointer's
+/// down/up events, not from this event's buttons: the extra (coalesced) readings a browser
+/// bundles with an event may not carry the button state, and a reading taken for "lifted"
+/// in the middle of a stroke would split it into separate dabs. `parent_pressure` stands in
+/// when such a reading reports no pressure while touching.
+fn sample(e: &PointerEvent, dpr: f64, perf_now: f64, contact: bool, parent_pressure: f32, eraser: bool) -> PenSample {
     let pen = e.pointer_type() == "pen";
     let buttons = e.buttons() as u32;
     let mut flags = Flags(0);
-    let contact = if pen { buttons & (1 | 32) != 0 } else { buttons & (1 | 4) != 0 };
     flags.set(Flags::CONTACT, contact);
     flags.set(Flags::HAS_PRESSURE, pen);
     flags.set(Flags::HAS_TILT, pen);
-    flags.set(Flags::ERASER, pen && buttons & 32 != 0);
+    flags.set(Flags::ERASER, pen && (eraser || buttons & 32 != 0));
+    let own = e.pressure();
     let pressure = if !contact {
         0.0
     } else if pen {
-        e.pressure().clamp(0.0, 1.0)
+        (if own > 0.0 && own.is_finite() { own } else { parent_pressure }).clamp(0.0, 1.0)
     } else {
         1.0
     };
@@ -358,7 +393,7 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
     let perf = window().performance().ok_or("no performance clock")?;
 
     // Pointer: every sample (coalesced ones too) to the editor; the newest to the interface.
-    for name in ["pointerdown", "pointermove", "pointerup", "pointercancel"] {
+    for name in ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture"] {
         let (a, perf, cv) = (app.clone(), perf.clone(), canvas.clone());
         add(c, name, false, move |e: PointerEvent| {
             e.prevent_default();
@@ -373,23 +408,39 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
                 touch(&mut app, &e, &kind, dpr);
                 return;
             }
+            // Keys held, as the event reports them (also a key pressed before the page had focus).
+            app.mods = egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() };
+            // Touching from pointerdown (pen tip or eraser, mouse left or middle button) to
+            // pointerup or pointercancel.
+            let id = e.pointer_id();
+            let buttons = e.buttons() as u32;
+            match kind.as_str() {
+                "pointerdown" if buttons & (1 | 4 | 32) != 0 || e.button() == 0 || e.button() == 1 || e.button() == 5 => {
+                    app.down.retain(|d| d.0 != id);
+                    app.down.push((id, buttons & 32 != 0 || e.button() == 5));
+                }
+                "pointerup" | "pointercancel" | "lostpointercapture" => app.down.retain(|d| d.0 != id),
+                _ => {}
+            }
+            let held = app.down.iter().find(|d| d.0 == id).copied();
+            let contact = held.is_some();
+            let eraser = held.is_some_and(|d| d.1);
+            let parent_pressure = if e.pressure() > 0.0 { e.pressure() } else { app.last_pressure };
+            if contact && e.pointer_type() == "pen" && e.pressure() > 0.0 {
+                app.last_pressure = e.pressure();
+            }
             let mut samples = Vec::new();
             if kind == "pointermove" {
                 for ce in e.get_coalesced_events().iter() {
                     if let Ok(ce) = ce.dyn_into::<PointerEvent>() {
-                        samples.push(sample(&ce, dpr, now));
+                        samples.push(sample(&ce, dpr, now, contact, parent_pressure, eraser));
                     }
                 }
             }
             if samples.is_empty() {
-                samples.push(sample(&e, dpr, now));
+                samples.push(sample(&e, dpr, now, contact, parent_pressure, eraser));
             }
-            if kind == "pointercancel" {
-                for s in &mut samples {
-                    s.flags.set(Flags::CONTACT, false);
-                    s.pressure = 0.0;
-                }
-            }
+            app.pen_stats(&samples, now);
             let mut mods = app.modifiers();
             // The middle mouse button drags the view, like holding Space.
             if e.pointer_type() == "mouse" && e.buttons() & 4 != 0 {
@@ -403,10 +454,10 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
             let pos = app.pos(last.x, last.y);
             let modifiers = app.mods;
             app.events.push(egui::Event::PointerMoved(pos));
-            if kind == "pointerdown" || kind == "pointerup" || kind == "pointercancel" {
-                if let Some(button) = egui_button(e.button()) {
-                    app.events.push(egui::Event::PointerButton { pos, button, pressed: kind == "pointerdown", modifiers });
-                }
+            if (kind == "pointerdown" || kind == "pointerup" || kind == "pointercancel")
+                && let Some(button) = egui_button(e.button())
+            {
+                app.events.push(egui::Event::PointerButton { pos, button, pressed: kind == "pointerdown", modifiers });
             }
             app.update_cursor(Some((last.x, last.y)));
             app.frame_wanted = true;

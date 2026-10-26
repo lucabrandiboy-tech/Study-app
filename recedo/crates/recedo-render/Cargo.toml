@@ -12,3 +12,4 @@ recedo-core = { path = "../recedo-core" }
 wgpu.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
+rayon = "1"

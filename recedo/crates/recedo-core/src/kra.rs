@@ -478,9 +478,10 @@ pub fn save_file(doc: &Document, path: &Path) -> Result<(), String> {
         let f = File::create(&tmp).map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
         let mut w = BufWriter::new(f);
         save_to(doc, &mut w)?;
-        let f = w.into_inner().map_err(|e| format!("Could not write {}: {}", tmp.display(), e.error()))?;
-        f.sync_all().map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
-        drop(f);
+        {
+            let f = w.into_inner().map_err(|e| format!("Could not write {}: {}", tmp.display(), e.error()))?;
+            f.sync_all().map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
+        } // closed before the rename: Windows cannot rename a file that is open
         std::fs::rename(&tmp, path).map_err(|e| format!("Could not replace {}: {e}", path.display()))
     })();
     if result.is_err() {

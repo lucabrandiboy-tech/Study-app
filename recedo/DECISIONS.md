@@ -45,7 +45,7 @@ in [`FEATURES.md`](FEATURES.md).
 | Option | Why not |
 |---|---|
 | **C++ / Qt 6** (Krita's stack) | The strongest widget toolkit (docks, dialogs), and Krita's code could be ported more literally. But Qt's tablet code is not enough on its own (Krita maintains its own Wintab layer and Qt patches), so the custom tablet layer is needed anyway. Building Qt for Windows from this Linux environment is slow and fragile, which would slow down the run-it-and-check loop the spec requires. C++ memory bugs are a real risk at this size. |
-| **Electron / web** | No Wintab. Excluded by the spec. |
+| **Electron / web** | No Wintab. Excluded by the spec as the app's stack. (A browser build of the same Rust code was added later, only because the user's PC cannot run unsigned programs: section 7.) |
 | **C# / WPF or WinUI 3** | Ink is built in, Wintab works through P/Invoke, but a 4K multi-layer GPU canvas needs Direct3D interop anyway, and WinUI apps cannot be built or run from Linux. |
 | **C++ + Dear ImGui + D3D11** | Close second: excellent docking, including panels floating as separate OS windows. Rejected mainly for memory safety; Rust + egui is the same immediate-mode approach. |
 | **Rust + winit** (the usual Rust window library) | It turns pen input into touch events, drops tilt and has no Wintab. Hence the own Win32 layer. |
@@ -104,7 +104,7 @@ What has been verified, and how:
 
 Phase 1 (the Recedo app) does not start until the user confirms pressure and tilt through
 both APIs. At the user's request, engine work that does not depend on those results was done
-early; see section 6.
+early; see section 5.
 
 ## 4. Scope: what is unrealistic or much bigger than it looks
 
@@ -129,7 +129,7 @@ longer than their one line in the spec suggests. Proposals:
 None of this is cut yet; these are the places where approximations are most likely. Any
 cut will be listed in `FEATURES.md` and agreed first.
 
-## 6. Engine decisions (Phase 1 groundwork, done early)
+## 5. Engine decisions (Phase 1 groundwork, done early)
 
 | Decision | Why | Verified by |
 |---|---|---|
@@ -141,7 +141,7 @@ cut will be listed in `FEATURES.md` and agreed first.
 | `.kra` written in Krita 5.2's own layout (LZF tiles, planar BGRA), mimetype stored first, saved through a `.part` file renamed into place | Krita compatibility; a crash or full disk can never leave a half-written painting. | `scripts/krita-interop.sh` with the real Krita 5.2.2 (CI job) |
 | Things Recedo cannot open yet are listed in plain words, never silently dropped; if nothing can be read, the flattened picture opens as one layer | The spec's "warnings for unsupported parts". | Tests with vector, filter, group, mask, 16-bit and CMYK cases |
 
-## 7. App decisions (Phase 1)
+## 6. App decisions (Phase 1)
 
 | Decision | Why | Verified by |
 |---|---|---|
@@ -156,6 +156,24 @@ cut will be listed in `FEATURES.md` and agreed first.
 | The projection keeps the layers below a stroke combined, per tile, while the stroke lasts | Only the stroke's layer changes; recombining 15 layers per tile per frame was most of the cost of big brushes. Each cached tile holds (not just points at) the tiles and settings it was made from, so it can never be used after any of them changed; exactness is tested against a full flatten after every kind of change, and each check was removed in turn to see a test fail. | Benchmark: 1000 px stroke picture update 10.2 → 5.2 ms per frame |
 | A shared thread pool (`rayon`) for big dabs and picture updates | Starting threads for every dab cost more than the painting on Windows (thread creation is slow there). | Benchmark (Windows build under Wine): 200 px painting 8.1 → 2.6 ms per frame |
 | The interface fits a 1080p screen at 150 %: always-visible scroll bars, fold-out sections (Pen, Stabilizer, colour numbers) | The Artist 12 is 1920×1080 on 11.6", which Windows often scales to 150 %, leaving 1280×720 points. | UI test renders that case |
+| The fill tool finds its area in the visible picture by default (option: the selected layer only) and grows it by 1 px | Line art on one layer and colour on another is the usual way to work; the area must be bounded by lines the fill layer does not hold. Without the 1 px the soft edge of a line leaves a pale ring between line and fill. | Engine tests (exact area inside an outline, tolerance steps); editor test (fill inside a rectangle drawn with the tool) |
+| Line, rectangle and ellipse outlines are painted by the normal brush engine at full pressure, as one undo step | They look exactly like the brush the user picked (presets, flat tips, opacity) and need no second drawing path. | Editor tests: painted where dragged, one step, Shift constraints |
+| The gradient covers the whole layer: solid before its start, the layer untouched after its end | What Krita does without a selection (there are no selections yet). | Engine and editor tests |
+| Dabs are spaced by the tip's width through its centre in the direction of travel (Krita's anisotropic spacing), not by its size | A flat tip spaced by its full size leaves a comb of separate marks when it moves along its thin side. Spaced this way a round tip is exactly as before. | Engine test: a 5 %-round tip in four directions, no gaps or stripes; the check fails with simpler formulas |
+| Brush presets are settings of the one round brush, not a preset library | A real library (saved presets, tags, `.kpp`) is Phase 2; ten useful starting points cost nothing now and are easy to replace. | Browser test draws with them |
+| Mipmaps of the canvas are computed on the CPU (whole rows at a time, blocks spread over the cores), only for the 64 px blocks under changed tiles, and uploaded level by level | The earlier GPU version drew each level from the level above inside the same texture. On the user's PC (browser version, WebGL) a lighter half-size copy of the strokes appeared, which is what a level drawn into the wrong place looks like; it could not be reproduced here (software GPUs). Plain uploads to each level avoid that GPU feature altogether. | GPU test: every level equals a CPU reference after a full and a partial update. Benchmark against the GPU version on this machine: big updates (undo of a 1000 px stroke) as fast, frames during a stroke faster. The user's PC: not yet confirmed |
+
+## 7. The browser version (after Phase 1)
+
+| Decision | Why | Verified by |
+|---|---|---|
+| A browser build of Recedo exists at all | Smart App Control on the user's PC blocks unsigned `.exe` files and cannot be turned off without an administrator; signing costs money and a reputation period. A web page is allowed. `recedo.exe` stays the main program: only it has Wintab. | Browser tests (see `FEATURES.md`) |
+| The same modules compiled in (`#[path]` in `crates/recedo-web`), with a small web shell | No fork of the editor, interface or renderer: every fix and feature lands in both. Code only the desktop needs is marked as such. | Both builds lint and test from one source; CI lints the browser build |
+| WebGL2 (wgpu's GL backend), not WebGPU | WebGL2 runs in every current browser on Windows; WebGPU is still missing on some PCs and browsers. | Browser tests (SwiftShader) |
+| Pen input from pointer events, every coalesced sample; "touching" from pointerdown to pointerup, not from the pressure or buttons of each move | Some pen drivers report pressure 0 or no buttons on single samples in the middle of a stroke, which would break the line into dots; a sample without pressure takes the last pressure of the stroke. | Browser test with an injected pen |
+| Fingers never paint: one pans, two pan and pinch-zoom | Palm and finger touches on a pen display must not leave marks. | Browser test with injected touches |
+| Files open from a file picker and save as downloads; settings in the browser's local storage; the autosave copy in its IndexedDB, offered again after a crash or a closed tab | A web page cannot write files where it likes. | Browser test: autosave written while idle, restored after a reload |
+| Hosted on the repository's GitHub Pages site under `/recedo/`, with its own offline worker; the Study app's worker leaves `/recedo/` alone | The repository has one Pages site, published from the Study app's branch. | Pages deploy runs; worker registers in the browser test |
 
 ## 8. Licences
 

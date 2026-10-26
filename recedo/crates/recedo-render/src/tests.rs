@@ -243,3 +243,78 @@ fn srgb_targets_get_the_same_look() {
     assert!(near(at(160, 10), [204, 204, 204], 3) || near(at(160, 10), [223, 223, 223], 3), "{:?}", at(160, 10));
     assert!(near(at(10, 10), [255, 0, 0], 1));
 }
+
+/// Reads one mip level of a chunk's texture back (premultiplied RGBA, tightly packed).
+fn read_level(g: &Gpu, texture: &wgpu::Texture, level: u32) -> (u32, u32, Vec<u8>) {
+    let (w, h) = ((texture.width() >> level).max(1), (texture.height() >> level).max(1));
+    let padded = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buf = g.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (padded * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+    let mut enc = g.device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(h) } },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    g.queue.submit([enc.finish()]);
+    buf.map_async(wgpu::MapMode::Read, .., |_| {});
+    g.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let data = buf.get_mapped_range(..).unwrap();
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h as usize {
+        out.extend_from_slice(&data[y * padded as usize..][..(w * 4) as usize]);
+    }
+    (w, h, out)
+}
+
+/// Every mip level holds exactly the picture, halved level by level: after a full upload
+/// and after a partial one. (On some browsers' WebGL the old GPU-drawn mipmaps wrote a
+/// half-size copy of the picture into level 0 instead.)
+#[test]
+fn every_mip_level_is_the_picture_halved() {
+    let Some(g) = gpu() else { return };
+    let mut doc = Document::new(300, 200, None);
+    let mut seed = 99u32;
+    for y in 0..200 {
+        for x in 0..300 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            doc.layers[0].pixels.set_pixel(x, y, [seed as u8, (seed >> 8) as u8, (x as u8) ^ (y as u8), 40 + (seed >> 26) as u8 * 3]);
+        }
+    }
+    let mut proj = Projection::new(&doc);
+    let mut d = CanvasDisplay::new(&g.device, doc.width, doc.height, wgpu::TextureFormat::Rgba8Unorm);
+    d.upload_all(&g.queue, &proj);
+    let check = |d: &CanvasDisplay, proj: &Projection, what: &str| {
+        let tex = &d.chunks[0].texture;
+        let mut want: Vec<u8> = proj.image.data.as_chunks::<4>().0.iter().flat_map(|p| premultiply(*p)).collect();
+        let (mut ww, mut wh) = (tex.width(), tex.height());
+        for level in 0..tex.mip_level_count() {
+            let (w, h, got) = read_level(&g, tex, level);
+            assert_eq!((w, h), (ww, wh));
+            assert!(got == want, "{what}: mip level {level} differs");
+            // The next level: each pixel the rounded average of its 2x2 pixels.
+            let (nw, nh) = ((ww / 2).max(1), (wh / 2).max(1));
+            let at = |x: u32, y: u32, c: usize| want[(((y.min(wh - 1)) * ww + x.min(ww - 1)) * 4) as usize + c] as u32;
+            let mut next = Vec::with_capacity((nw * nh * 4) as usize);
+            for y in 0..nh {
+                for x in 0..nw {
+                    for c in 0..4 {
+                        next.push(((at(2 * x, 2 * y, c) + at(2 * x + 1, 2 * y, c) + at(2 * x, 2 * y + 1, c) + at(2 * x + 1, 2 * y + 1, c) + 2) / 4) as u8);
+                    }
+                }
+            }
+            (want, ww, wh) = (next, nw, nh);
+        }
+    };
+    check(&d, &proj, "after the first upload");
+    for y in 130..200 {
+        for x in 0..90 {
+            doc.layers[0].pixels.set_pixel(x, y, [250, 10, 10, 255]);
+        }
+    }
+    let dirty: HashSet<_> = [(0, 2), (1, 2), (0, 3), (1, 3)].into_iter().collect();
+    let up = proj.update(&doc, &dirty);
+    d.upload(&g.queue, &proj, &up);
+    check(&d, &proj, "after a partial update");
+}

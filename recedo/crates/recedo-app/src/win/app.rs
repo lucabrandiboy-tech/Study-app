@@ -153,6 +153,27 @@ pub struct App {
     /// The app should close. The loop drops the app (and its GPU surface) and only then
     /// destroys the window, so the surface never outlives its window.
     pub close_requested: bool,
+    /// The self-test's trace of pen messages and of where strokes start and end (`None`:
+    /// not recording). Printed when a pen check fails, to show why.
+    pub pen_log: Option<PenLog>,
+}
+
+/// See [`App::pen_log`].
+pub struct PenLog {
+    start: Instant,
+    pub lines: Vec<String>,
+}
+
+impl PenLog {
+    pub fn new() -> PenLog {
+        PenLog { start: Instant::now(), lines: Vec::new() }
+    }
+
+    fn add(&mut self, line: String) {
+        if self.lines.len() < 400 {
+            self.lines.push(format!("{:7.1} ms  {line}", self.start.elapsed().as_secs_f64() * 1000.0));
+        }
+    }
 }
 
 impl App {
@@ -215,6 +236,7 @@ impl App {
             captured: None,
             persist,
             close_requested: false,
+            pen_log: None,
         };
         let api = app.session.ui.settings.tablet;
         app.set_tablet_api(api);
@@ -291,7 +313,15 @@ impl App {
     pub fn feed(&mut self, samples: &[PenSample], mods: Modifiers) {
         for s in samples {
             let over = self.session.over_canvas(s.x, s.y);
+            let was = self.session.ed.stroke_active();
             self.session.ed.pen(s, over, mods);
+            let now = self.session.ed.stroke_active();
+            if let Some(log) = &mut self.pen_log
+                && was != now
+            {
+                let what = if now { "starts" } else { "ends" };
+                log.add(format!("  stroke {what} at {:?} sample {} (contact {}, over the canvas {over})", s.source, s.serial, s.contact()));
+            }
         }
         self.request_frame();
     }
@@ -356,9 +386,43 @@ impl App {
     /// Handles a window message. `None` means "pass to DefWindowProc" (done by the caller
     /// once the app is no longer borrowed).
     pub fn handle(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        if self.pen_log.is_none() {
+            return self.handle_message(hwnd, msg, wparam, lparam);
+        }
+        let was = self.session.ed.stroke_active();
+        let result = self.handle_message(hwnd, msg, wparam, lparam);
+        let now = self.session.ed.stroke_active();
+        if let Some(log) = &mut self.pen_log
+            && was != now
+        {
+            log.add(format!("stroke {} while handling message 0x{msg:04X}", if now { "started" } else { "ended" }));
+        }
+        result
+    }
+
+    fn handle_message(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         match msg {
             WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP | WM_POINTERENTER | WM_POINTERLEAVE => {
-                match self.ink.handle(hwnd, msg, wparam) {
+                let event = self.ink.handle(hwnd, msg, wparam);
+                if let Some(log) = &mut self.pen_log {
+                    let name = match msg {
+                        WM_POINTERDOWN => "DOWN",
+                        WM_POINTERUPDATE => "UPDATE",
+                        WM_POINTERUP => "UP",
+                        WM_POINTERENTER => "ENTER",
+                        _ => "LEAVE",
+                    };
+                    let what = match &event {
+                        Some(InkEvent::Samples(v)) => {
+                            let frames: Vec<String> = v.iter().map(|s| format!("{}{}", s.serial, if s.contact() { "c" } else { "h" })).collect();
+                            format!("{} samples [{}]", v.len(), frames.join(" "))
+                        }
+                        Some(InkEvent::Leave { .. }) => "left".into(),
+                        None => "not a pen".into(),
+                    };
+                    log.add(format!("WM_POINTER{name} id {}: {what}", wparam & 0xFFFF));
+                }
+                match event {
                     Some(InkEvent::Samples(v)) => {
                         self.ink_in_range = Some(Instant::now());
                         if self.painting_source() == Source::Ink {
@@ -376,6 +440,9 @@ impl App {
                 None
             }
             WM_POINTERCAPTURECHANGED => {
+                if let Some(log) = &mut self.pen_log {
+                    log.add(format!("WM_POINTERCAPTURECHANGED id {}", wparam & 0xFFFF));
+                }
                 self.session.ed.pen_gone(Source::Ink, now_us());
                 self.request_frame();
                 None
@@ -713,6 +780,19 @@ impl App {
 
     /// Acquires (if needed), runs the interface, draws and presents one frame.
     pub fn frame(&mut self) {
+        if self.pen_log.is_none() {
+            return self.draw_frame();
+        }
+        let (was, start) = (self.session.ed.stroke_active(), Instant::now());
+        self.draw_frame();
+        let now = self.session.ed.stroke_active();
+        if let Some(log) = &mut self.pen_log {
+            let change = if was == now { "" } else if now { "; stroke started" } else { "; stroke ended" };
+            log.add(format!("frame took {:.1} ms{change}", start.elapsed().as_secs_f64() * 1000.0));
+        }
+    }
+
+    fn draw_frame(&mut self) {
         // Lets the self-test check the crash report (never set in normal use).
         if std::env::var_os("RECEDO_TEST_CRASH").is_some() {
             panic!("crash requested by RECEDO_TEST_CRASH");

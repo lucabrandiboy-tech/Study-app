@@ -11,6 +11,11 @@ autosave, docking panels); the user's guide and checklist is
 (`recedo-tablet-test.exe`, [`PHASE0_CHECKLIST.md`](PHASE0_CHECKLIST.md)) is still there for
 measuring the tablet itself.
 
+**Browser version** (for PCs whose Smart App Control blocks the `.exe`): the same app in the
+browser, installable from Edge or Chrome as an app with its own window, at
+https://lucabrandiboy-tech.github.io/Study-app/recedo/. No Wintab there; the pen comes
+through the browser (Windows Ink).
+
 ## Layout
 
 | Path | What |
@@ -21,9 +26,12 @@ measuring the tablet itself.
 | `crates/recedo-tabletest` | The Phase 0 test app: Win32 window and message loop (`src/win/`), wgpu canvas (`gpu.rs`, `shaders.wgsl`), egui panel (`ui.rs`), brush and strokes, report, self-test (`src/win/selftest.rs`). |
 | `crates/recedo-core` | The painting engine, portable and unit-tested: tiles (`tiles.rs`), documents and Krita's compositing (`doc.rs`), brush and dabs (`brush.rs`, `dab.rs`, `curve.rs`), stabilizer, undo (`history.rs`), layer operations and eyedropper (`ops.rs`), view math (`view.rs`), projection, `.kra` files (`kra.rs`, `lzf.rs`), PNG/JPG (`image.rs`), autosave. `examples/kra_tool.rs`: command-line checks and benchmarks. |
 | `crates/recedo-render` | GPU display of the canvas (wgpu): tile uploads, view transform, mipmaps; graphics adapter selection (`gpu.rs`). |
+| `crates/recedo-web` | The browser version: compiles `recedo-app`'s editor, interface and renderer for WebAssembly (`lib.rs`) with a web shell (`shell.rs`: WebGL2 canvas, pointer/touch/key events, file picker and downloads, autosave in IndexedDB, settings in local storage). |
+| `web/` | The browser version's page, install manifest, icons and offline worker. |
 | `crates/wintab-mock` | Stand-in `Wintab32.dll` for tests. Never shipped. |
 | `scripts/wine-selftest.sh` | Runs a Windows build's self-test (`recedo` or `tablet-test`) under Wine on a virtual screen. |
 | `scripts/package.sh` | Builds the release and the zip handed to the user (`recedo` or `tablet-test`). |
+| `scripts/build-web.sh` | Builds the browser version into `target/web/` (needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` of the version in `Cargo.lock`). |
 | `scripts/krita-interop.sh` | Checks `.kra` files against the real Krita (needs `krita` installed): Recedo writes, Krita reads; Krita re-saves, Recedo reads. |
 | `../.github/workflows/recedo.yml` | CI: lint, tests and cross-compile on Linux; both self-tests and the benchmark on real Windows; `.kra` against the real Krita. |
 
@@ -36,6 +44,7 @@ self-test: `wine64`, `xvfb`, `x11-utils`.
 ```sh
 cargo clippy --workspace --all-targets -- -D warnings                       # Linux lints
 cargo clippy --workspace --target x86_64-pc-windows-gnu -- -D warnings      # Windows lints
+cargo clippy -p recedo-web --target wasm32-unknown-unknown -- -D warnings   # browser lints
 RECEDO_REQUIRE_GPU=1 cargo test --workspace                                 # unit + GPU tests
 cargo build --release --target x86_64-pc-windows-gnu -p recedo-app -p recedo-tabletest -p wintab-mock
 scripts/wine-selftest.sh recedo                                              # Recedo end-to-end under Wine
@@ -45,7 +54,12 @@ scripts/package.sh tablet-test                                               # d
 scripts/krita-interop.sh                                                     # .kra against real Krita
 cargo run --release -p recedo-app -- --benchmark /tmp                        # app benchmark (any OS)
 cargo run --release -p recedo-core --example kra_tool -- bench /tmp 14       # engine benchmark, 15 4K layers
+scripts/build-web.sh                                                         # browser version in target/web/
+(cd target/web && python3 -m http.server 8000)                               # then open http://localhost:8000/
 ```
+
+The browser version is published by copying `target/web/` to `recedo-web/` on the Study
+app's branch (`claude/vigilant-tesla-ja2vck`); its Pages workflow puts it under `/recedo/`.
 
 `RECEDO_REQUIRE_GPU=1` turns "no GPU available" in the rendering tests from a skip into a
 failure; CI and the scripts always set it.

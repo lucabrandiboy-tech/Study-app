@@ -9,6 +9,7 @@ pub mod canvas;
 pub mod curve;
 pub mod dab;
 pub mod doc;
+pub mod fill;
 pub mod history;
 pub mod image;
 pub mod import;

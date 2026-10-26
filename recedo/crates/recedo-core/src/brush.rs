@@ -48,6 +48,10 @@ pub struct Brush {
     pub min_size: f32,
     /// Lean the dab with the pen's tilt.
     pub tilt_shape: bool,
+    /// Tip shape: 1 = round, smaller = flatter (a highlighter or calligraphy nib).
+    pub roundness: f32,
+    /// The flat tip's angle, in degrees (0 = flat side horizontal).
+    pub angle: f32,
 }
 
 impl Default for Brush {
@@ -64,6 +68,8 @@ impl Default for Brush {
             flow_curve: None,
             min_size: 0.02,
             tilt_shape: false,
+            roundness: 1.0,
+            angle: 0.0,
         }
     }
 }
@@ -85,8 +91,27 @@ impl Brush {
         self.flow.clamp(0.0, 1.0) * self.flow_curve.as_ref().map_or(1.0, |c| c.eval(pressure))
     }
 
-    fn step(&self, pressure: f32) -> f64 {
-        (self.spacing.clamp(0.01, 10.0) * self.diameter(pressure)).max(0.5) as f64
+    /// Distance from one dab to the next: `spacing` times the tip's width through its centre
+    /// in the direction the stroke moves (`dir`, a unit vector), as Krita's anisotropic
+    /// spacing does, so a flat tip leaves no gaps or stripes whichever way it moves. Before
+    /// the direction is known (the first dab), the narrowest width.
+    fn step(&self, pressure: f32, dir: Option<(f64, f64)>) -> f64 {
+        let round = self.tip_roundness() as f64;
+        let width = match dir {
+            Some((ux, uy)) if round < 1.0 => {
+                let (sin, cos) = (self.angle as f64).to_radians().sin_cos();
+                let (along, across) = (ux * cos + uy * sin, uy * cos - ux * sin);
+                1.0 / along.hypot(across / round)
+            }
+            _ => round,
+        };
+        // In f32 like the size itself, so a round tip's step is exactly what it always was.
+        (self.spacing.clamp(0.01, 10.0) * self.diameter(pressure) * width as f32).max(0.5) as f64
+    }
+
+    /// The tip's roundness, kept to 5..100 %.
+    fn tip_roundness(&self) -> f32 {
+        if self.roundness.is_finite() { self.roundness.clamp(0.05, 1.0) } else { 1.0 }
     }
 }
 
@@ -128,7 +153,7 @@ fn lerp(a: &PaintInfo, b: &PaintInfo, t: f64) -> PaintInfo {
 impl DabSpacer {
     fn dab(brush: &Brush, p: &PaintInfo) -> BrushDab {
         let r = brush.diameter(p.pressure) * 0.5;
-        let (mut rx, mut ry, mut angle) = (r, r, 0.0);
+        let (mut rx, mut ry, mut angle) = (r, r * brush.tip_roundness(), brush.angle.to_radians());
         let lean = (p.tilt_x.hypot(p.tilt_y) / 90.0).clamp(0.0, 1.0);
         if brush.tilt_shape && lean > 0.0 {
             rx = r * (1.0 + 2.0 * lean);
@@ -146,7 +171,7 @@ impl DabSpacer {
         }
         let Some(prev) = self.last else {
             out.push(Self::dab(brush, &p));
-            self.to_next = brush.step(p.pressure);
+            self.to_next = brush.step(p.pressure, None);
             self.last = Some(p);
             return;
         };
@@ -155,11 +180,12 @@ impl DabSpacer {
             self.last = Some(PaintInfo { x: prev.x, y: prev.y, ..p });
             return;
         }
+        let dir = ((p.x - prev.x) / len, (p.y - prev.y) / len);
         let mut d = self.to_next;
         while d <= len {
             let q = lerp(&prev, &p, d / len);
             out.push(Self::dab(brush, &q));
-            d += brush.step(q.pressure);
+            d += brush.step(q.pressure, Some(dir));
         }
         self.to_next = d - len;
         self.last = Some(p);
@@ -293,6 +319,42 @@ mod tests {
         for w in xs.windows(2) {
             assert!((w[1] - w[0] - 1.0).abs() < 1e-4, "{xs:?}");
         }
+    }
+
+    #[test]
+    fn flat_tips_leave_no_gaps_in_any_direction() {
+        // A very flat tip (5 % round), its long side horizontal: going down moves it along its
+        // thin side, where dabs spaced by the full width would leave a comb of lines.
+        let brush = Brush { size: 40.0, hardness: 1.0, roundness: 0.05, angle: 0.0, size_curve: None, ..Default::default() };
+        for (dx, dy) in [(0.0, 1.0), (1.0, 0.0), (0.6, 0.8), (-0.8, 0.6)] {
+            let mut layer = TiledLayer::new();
+            let mut p = StrokePainter::new(brush.clone(), [0, 0, 0], false);
+            let (x0, y0) = (300.5, 300.5);
+            stroke(&mut p, &mut layer, &[(x0, y0), (x0 + 200.0 * dx, y0 + 200.0 * dy)]);
+            for i in 0..=400 {
+                let t = i as f64 / 2.0;
+                let (x, y) = (x0 + t * dx, y0 + t * dy);
+                assert_eq!(layer.pixel(x.floor() as i32, y.floor() as i32)[3], 255, "gap at {t} px going ({dx}, {dy})");
+            }
+        }
+        // Spaced along the stroke by the tip's width in that direction: few dabs along the
+        // long side, many along the thin side.
+        let count = |dx: f64, dy: f64| {
+            let mut s = DabSpacer::default();
+            let mut out = Vec::new();
+            s.add(&brush, pt(0.0, 0.0, 1.0), &mut out);
+            s.add(&brush, pt(100.0 * dx, 100.0 * dy, 1.0), &mut out);
+            out.len()
+        };
+        assert_eq!(count(1.0, 0.0), 26, "4 px apart along the long side");
+        assert!((200..=201).contains(&count(0.0, 1.0)), "0.2 px along the thin side, at least 0.5 px: {}", count(0.0, 1.0));
+        // A round tip is spaced as before, whatever the direction.
+        let round = Brush { roundness: 1.0, ..brush.clone() };
+        let mut s = DabSpacer::default();
+        let mut out = Vec::new();
+        s.add(&round, pt(0.0, 0.0, 1.0), &mut out);
+        s.add(&round, pt(60.0, 80.0, 1.0), &mut out);
+        assert_eq!(out.len(), 26);
     }
 
     #[test]

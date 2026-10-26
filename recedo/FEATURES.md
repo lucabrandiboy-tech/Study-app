@@ -11,6 +11,14 @@ Every feature in the spec, with one status:
 Current phase: **1 (the painting app), finished; waiting for the user's pen check.** The
 Phase 0 pen checklist is also still open (the pen has not been tried on either program yet).
 
+**Browser version.** Smart App Control on the user's PC blocks unsigned `.exe` files, and the
+user cannot turn it off without an administrator. So the same editor, interface and canvas
+display also run in the browser (`crates/recedo-web`: WebAssembly, WebGL2), installable from
+Edge or Chrome as an app with its own window:
+https://lucabrandiboy-tech.github.io/Study-app/recedo/. Pen input there comes from the
+browser (Windows Ink underneath); **Wintab is not available in a browser**. Statuses below
+are for `recedo.exe` unless a row says otherwise.
+
 * "Test app" means the Phase 0 tablet test program (`recedo-tablet-test.exe`).
 * "Self-test" means `recedo.exe --selftest`: it drives the real Recedo window with injected
   input (mouse, keyboard, a Windows Ink pen with pressure, the stand-in Wintab driver) and
@@ -20,6 +28,9 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 * "UI tests" render the whole interface off-screen on a GPU and click through it.
 * "Editor tests" drive the app's editor (everything between the input and the screen) with
   synthetic pen samples.
+* "Browser test" means the browser version in headless Chrome (software GPU, SwiftShader),
+  driven with injected pen, mouse, touch and key events, checked on screenshots. Not the
+  user's PC, browser or graphics card.
 
 ## Phase 1 deliverables
 
@@ -42,6 +53,10 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 | Settings (tablet interface, interface size, autosave interval), window position kept | WORKING | Settings tests (damaged file kept aside, values clamped); switching Windows Ink / Wintab in the self-test. |
 | Benchmark | WORKING | `recedo.exe --benchmark`; numbers at the end of this file. |
 | Interface at 125 % / 150 % display scaling | NEEDS HARDWARE CHECK | Per-monitor DPI aware; rendered at 1080p and 150 % in a UI test (panels scroll, sections fold). Only seen at 100 % on a screen. |
+| Browser version, installable as an app (for PCs that block `.exe` files) | NEEDS HARDWARE CHECK | Browser tests: loads with no errors; pen strokes with pressure (thin to thick); mouse strokes; every tool below; pinch zoom; autosave into the browser's storage and restore after a reload; display scaling 125 / 150 / 200 % (strokes where the pen went, no stray copies when zoomed in or out). The offline worker registers. Not yet seen on the user's PC with the pen. |
+| Toolbar with big buttons (undo, redo, every tool, brush size, zoom, fit) | WORKING | UI tests (the layout still fits 1080p at 150 %); browser test clicks the tool buttons. |
+| Fill (paint bucket), line, rectangle, ellipse and gradient tools | WORKING | Editor tests: each is one undo step and paints where it was dragged; fill stays inside a drawn outline with no gap at the line's soft edge; Shift gives 15° angles, squares and circles; locked layers refuse with a message; the pen's eraser end still erases with these tools. Browser test: rectangle + fill, Shift line, ellipse, gradient on a new layer and its undo, checked on screenshots. Options: see "Fill and gradient" and "Shapes". |
+| Brush presets (10) and flat brush tips (roundness, angle) | WORKING | Paint brush, Pencil, Ink pen, Fine liner, Felt-tip, Marker, Highlighter, Calligraphy, Watercolour, Airbrush set the round brush's settings (Tool options). Roundness/angle: engine tests (dab shape; a 5 %-round tip leaves no gap or stripe going along, across or diagonally, because dabs are spaced by the tip's width in the direction of travel, as in Krita); browser test draws with the highlighter and calligraphy presets. |
 
 ## Phase 0 deliverables
 
@@ -84,8 +99,8 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 
 | Feature | Status |
 |---|---|
-| Built-in presets: pencil, inking pens, oil, acrylic, gouache, airbrush, soft round, watercolour, markers, erasers | NOT STARTED |
-| Full brush editor (tip shape, size, opacity, flow, hardness, spacing, angle, roundness, rotation, scatter, texture, colour dynamics, blend mode, sensor curves for pressure/tilt/speed/random) | NOT STARTED |
+| Built-in presets: pencil, inking pens, oil, acrylic, gouache, airbrush, soft round, watercolour, markers, erasers | PARTIAL: 10 presets of the round brush (Paint brush, Pencil, Ink pen, Fine liner, Felt-tip, Marker, Highlighter, Calligraphy, Watercolour, Airbrush) in Tool options. Oil, acrylic and gouache need the smudge and texture engines (not started); erasers have no presets yet |
+| Full brush editor (tip shape, size, opacity, flow, hardness, spacing, angle, roundness, rotation, scatter, texture, colour dynamics, blend mode, sensor curves for pressure/tilt/speed/random) | PARTIAL: size, opacity, flow, hardness, spacing, roundness and tip angle in Tool options. The rest NOT STARTED |
 | Colour smudge engine (smearing, dulling, smudge length, colour rate) | NOT STARTED |
 | Built-in paper and canvas textures | NOT STARTED |
 | Brush size up to 1000 px | NEEDS HARDWARE CHECK: Recedo's size slider goes to 1000 px ([ and ] step it). Benchmark on this 4-core container, 15-layer 4K painting: a fast 1000 px stroke costs 7-9 ms of painting + 5-7 ms of picture update per frame (median), within a 60 Hz frame in 56-87 % of frames. The real PC's numbers: `--benchmark` |
@@ -103,7 +118,7 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 | Krita-style Advanced Colour Selector | NOT STARTED |
 | Eyedropper, current layer / all layers, Ctrl quick access | WORKING: tool (P) and Ctrl+click with the brush; visible picture or selected layer; averaging radius (editor tests) |
 | Palettes: create, edit, save, `.kpl` and `.gpl` import/export | NOT STARTED |
-| Recent colours | NOT STARTED |
+| Recent colours | WORKING: the last 16 colours painted with (any tool), as swatches in the Colour panel, kept in the settings (editor tests) |
 | Harmony helpers (complementary, analogous, triadic, split-complementary, tetradic) | NOT STARTED |
 | 8-bit default, 16-bit per document | PARTIAL: Krita's 16-bit RGB layers open (converted to 8-bit, with a warning; within 1/255 of Krita's own 16-bit export). Painting and saving in 16-bit: not started |
 | Colour management: sRGB working space, ICC profiles, embedded on export, display profile | NOT STARTED |
@@ -112,10 +127,10 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 
 | Feature | Status |
 |---|---|
-| Bucket fill: tolerance, grow/shrink, feathering, anti-aliasing | NOT STARTED |
+| Bucket fill: tolerance, grow/shrink, feathering, anti-aliasing | PARTIAL (done early): tolerance slider; the fill always grows 1 px under the edge of the lines around it so no light gap shows (engine and editor tests). No grow/shrink setting, feathering or anti-aliasing |
 | Gap closing | NOT STARTED |
-| Fill using a reference layer | NOT STARTED |
-| Gradient: linear, radial, FG→BG, FG→transparent, repeat options | NOT STARTED |
+| Fill using a reference layer | PARTIAL: finds the area in the visible picture (default, so lines on another layer hold the fill) or in the selected layer only. Not an arbitrary reference layer |
+| Gradient: linear, radial, FG→BG, FG→transparent, repeat options | PARTIAL (done early): linear, colour to transparent, over the whole layer (solid before the start, untouched after the end), Shift for 15° steps (engine and editor tests). No radial, FG→BG or repeat |
 
 ## Layers (basic: Phase 1, rest: Phase 4)
 
@@ -158,7 +173,7 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 
 | Feature | Status |
 |---|---|
-| Line, rectangle, ellipse, polygon, polyline, Bézier tools with the current brush | NOT STARTED |
+| Line, rectangle, ellipse, polygon, polyline, Bézier tools with the current brush | PARTIAL (done early): line, rectangle and ellipse, outlined with the current brush (full pressure) and optionally filled with the colour; a preview while dragging; Shift for 15° angles, squares and circles (editor and browser tests). No polygon, polyline or Bézier |
 | Hold-to-snap shapes (QuickShape-style) | NOT STARTED |
 | Assistants: perspective 1/2/3-point, vanishing point, ruler, parallel ruler, ellipse, concentric ellipse, snapping strength | NOT STARTED |
 | Symmetry: horizontal, vertical, radial with N segments | NOT STARTED |
@@ -181,7 +196,7 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 | Mirror view with M | WORKING (editor tests: painting stays under the pen when mirrored) | 1 |
 | Navigator / minimap | NOT STARTED | 7 |
 | Second view of the same canvas | NOT STARTED | 7 |
-| Smooth zoom, pixel grid at high zoom | PARTIAL: mipmaps when zoomed out (fine detail averages instead of shimmering), sharp pixels from 200 % (GPU-tested). No pixel grid yet | 1 |
+| Smooth zoom, pixel grid at high zoom | PARTIAL: mipmaps when zoomed out (fine detail averages instead of shimmering), computed on the CPU only where tiles changed (a GPU test checks every level against a reference after full and partial updates); sharp pixels from 200 % (GPU-tested). No pixel grid yet | 1 |
 | New canvas dialog: presets (3840×2160, 1280×720, …), custom size/DPI, background, depth, custom presets | PARTIAL: File > New with the built-in presets (your two sizes first), custom size and resolution, background, memory estimate (UI tests). 8-bit only; saving your own presets is in the engine but not in the dialog yet | 1 |
 | Canvas resize, image resize, crop | NOT STARTED | not assigned by the spec; proposed for 5 |
 
@@ -226,7 +241,8 @@ Phase 0 pen checklist is also still open (the pen has not been tried on either p
 | Adjustable UI scale | WORKING | Edit > Settings > Interface size (75-200 %), on top of Windows' display scaling. |
 | Krita default shortcuts, remappable, conflict warnings, import/export | NOT STARTED | 7 |
 | Tab: canvas-only focus mode | NOT STARTED | 7 |
-| Tool options panel | WORKING | Brush/eraser size, opacity, flow, hardness, spacing, mode, pen and stabilizer options; eyedropper options. More with each phase. |
+| Tool options panel | WORKING | Brush/eraser presets, size, opacity, flow, hardness, spacing, roundness, tip angle, mode, pen and stabilizer options; eyedropper, fill, shape and gradient options. More with each phase. |
+| Fingers on a touch screen (browser version) | NEEDS HARDWARE CHECK | One finger pans, two pan and pinch-zoom, fingers never paint (browser test with injected touches: pinch 4× zooms 4× with no paint). Not tried on a real touch screen. |
 | Settings window (tablet API, pressure curve, pen buttons, autosave, undo steps, theme, UI scale, shortcuts, performance) | PARTIAL | Edit > Settings: tablet interface, interface size, autosave interval. The rest: Phase 7. |
 
 ## Network
@@ -262,7 +278,7 @@ and says nothing about a graphics card). The real PC's report is the one that co
 | Undo / redo a 1000 px stroke across the painting | 3-8 ms, then 75-100 ms to recombine the picture (+ the display) |
 | Save / open the 15-layer `.kra` (155 MB) | 1.4-1.8 s / 0.7-2.3 s |
 | Memory for the 15 layers | 469 MB |
-| Display redraw with nothing changed | Needs a real GPU (software GPU here: 7-10 ms) |
+| Display redraw with nothing changed | Needs a real GPU (software GPU here: 7-24 ms, depending on the day) |
 | Tablet sample rate on the Artist 12 (both APIs) | Waiting for the user's report |
 | Pen-to-screen time | Waiting for the user's report (test app panel) |
 
