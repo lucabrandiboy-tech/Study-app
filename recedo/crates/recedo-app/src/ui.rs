@@ -153,9 +153,17 @@ impl AppUi {
 
     fn do_open(&mut self, ed: &mut Editor, path: &std::path::Path) {
         let before = ed.notices.len();
-        match ed.open(path) {
+        let result = ed.open(path);
+        if result.is_ok() {
+            self.settings.add_recent(path);
+        }
+        self.after_open(ed, before, result);
+    }
+
+    /// Lists in a dialog what the file had that Recedo could not open, or why it failed.
+    fn after_open(&mut self, ed: &mut Editor, before: usize, result: Result<(), String>) {
+        match result {
             Ok(()) => {
-                self.settings.add_recent(path);
                 // Things the file had that Recedo could not open: list them in a dialog.
                 let warnings: Vec<String> = ed.notices[before..].iter().filter(|n| n.kind == NoticeKind::Warning).map(|n| n.text.clone()).collect();
                 if !warnings.is_empty() {
@@ -165,6 +173,14 @@ impl AppUi {
             }
             Err(e) => self.dialog = Some(Dialog::Messages { title: "Could not open the file".into(), lines: vec![e] }),
         }
+    }
+
+    /// The browser version: a file the user picked, as bytes (unsaved changes were asked
+    /// about before the file picker opened).
+    pub fn open_bytes(&mut self, ed: &mut Editor, name: &str, bytes: &[u8]) {
+        let before = ed.notices.len();
+        let result = ed.open_bytes(name, bytes);
+        self.after_open(ed, before, result);
     }
 
     /// The user picked where to save in the Save dialog.

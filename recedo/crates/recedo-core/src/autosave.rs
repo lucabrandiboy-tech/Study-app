@@ -147,7 +147,7 @@ pub fn find_recoverable(dir: &Path) -> Vec<Recoverable> {
             let json = kra.with_extension("json");
             let info = std::fs::read(&json).ok().and_then(|b| serde_json::from_slice::<RecoveryInfo>(&b).ok()).unwrap_or_else(|| {
                 let modified = std::fs::metadata(&kra).and_then(|m| m.modified()).ok();
-                RecoveryInfo { original: None, saved_at: modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs()) }
+                RecoveryInfo { original: None, saved_at: modified.and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs()) }
             });
             Recoverable { kra, info }
         })

@@ -1,0 +1,30 @@
+[package]
+name = "recedo-web"
+description = "Recedo in the browser (WebAssembly): the same editor and interface as recedo.exe, with a web shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+recedo-core = { path = "../recedo-core" }
+recedo-render = { path = "../recedo-render" }
+recedo-tablet = { path = "../recedo-tablet" }
+wgpu = { workspace = true, features = ["webgl"] }
+egui.workspace = true
+egui-wgpu.workspace = true
+bytemuck.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+web-time = "1"
+wasm-bindgen = "0.2.129"
+wasm-bindgen-futures = "0.4.79"
+js-sys = "0.3.106"
+console_error_panic_hook = "0.1.7"
+web-sys = { version = "0.3.106", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlInputElement", "HtmlAnchorElement", "CssStyleDeclaration", "PointerEvent", "MouseEvent", "KeyboardEvent", "WheelEvent", "Event", "EventTarget", "DomRect", "Storage", "Blob", "BlobPropertyBag", "Url", "File", "FileList", "BeforeUnloadEvent", "Navigator", "ServiceWorkerContainer", "AddEventListenerOptions", "Performance"] }

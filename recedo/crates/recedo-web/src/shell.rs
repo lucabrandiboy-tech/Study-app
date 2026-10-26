@@ -1,0 +1,561 @@
+//! The web shell: a full-window canvas drawn with WebGL2 through wgpu, browser pointer,
+//! keyboard and wheel events turned into pen samples and interface input, files through a
+//! file picker and downloads, settings in the browser's storage.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use recedo_tablet::clock::now_us;
+use recedo_tablet::{Flags, PenSample, Source};
+use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
+use web_sys::{HtmlCanvasElement, KeyboardEvent, PointerEvent, WheelEvent};
+use web_time::Instant;
+
+use crate::editor::{ExportFormat, Modifiers, Tool};
+use crate::session::{Renderer, Session, Target};
+use crate::settings::Settings;
+use crate::ui::Request;
+
+const SETTINGS_KEY: &str = "recedo-settings";
+
+struct App {
+    canvas: HtmlCanvasElement,
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    session: Session,
+    renderer: Renderer,
+    events: Vec<egui::Event>,
+    mods: egui::Modifiers,
+    space_held: bool,
+    /// Points per pixel of the last frame (for converting event positions).
+    ppp: f32,
+    frame_wanted: bool,
+    repaint_at: Option<Instant>,
+    start: Instant,
+    cursor: egui::CursorIcon,
+    saved_settings: String,
+    frames: u64,
+    title: String,
+}
+
+fn window() -> web_sys::Window {
+    web_sys::window().expect("a browser window")
+}
+
+/// A message on the page instead of the app (e.g. no WebGL2).
+fn show_error(msg: &str) {
+    if let Some(el) = window().document().and_then(|d| d.get_element_by_id("status")) {
+        el.set_text_content(Some(msg));
+        let _ = el.set_attribute("class", "error");
+    }
+}
+
+#[wasm_bindgen(start)]
+pub fn start() {
+    console_error_panic_hook::set_once();
+    wasm_bindgen_futures::spawn_local(async {
+        if let Err(e) = run().await {
+            show_error(&format!("Recedo could not start: {e}"));
+        }
+    });
+}
+
+fn load_settings() -> Settings {
+    let stored = window().local_storage().ok().flatten().and_then(|s| s.get_item(SETTINGS_KEY).ok().flatten());
+    match stored.and_then(|t| serde_json::from_str::<Settings>(&t).ok()) {
+        Some(mut s) => {
+            s.sanitize();
+            s
+        }
+        None => Settings::default(),
+    }
+}
+
+async fn run() -> Result<(), String> {
+    let document = window().document().ok_or("no document")?;
+    let canvas: HtmlCanvasElement = document.get_element_by_id("recedo").ok_or("no canvas")?.dyn_into().map_err(|_| "not a canvas")?;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::GL, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+    let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| format!("this browser cannot draw with WebGL2 ({e})"))?;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })
+        .await
+        .map_err(|e| format!("no graphics adapter ({e})"))?;
+    let desc = wgpu::DeviceDescriptor { required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()), ..Default::default() };
+    let (device, queue) = adapter.request_device(&desc).await.map_err(|e| format!("the graphics device did not open ({e})"))?;
+    let caps = surface.get_capabilities(&adapter);
+    let format = egui_wgpu::preferred_framebuffer_format(&caps.formats).map_err(|e| format!("{e:?}"))?;
+    let (w, h) = canvas_size(&canvas);
+    let mut config = surface.get_default_config(&adapter, w, h).ok_or("the graphics device cannot draw to this page")?;
+    config.format = format;
+    surface.configure(&device, &config);
+
+    let settings = load_settings();
+    let saved_settings = serde_json::to_string(&settings).unwrap_or_default();
+    let mut session = Session::new(settings, None);
+    session.ui.web = true;
+    session.ui.tablet_status = "Pen: the browser's (pressure and tilt)".into();
+    let renderer = Renderer::new(&device, format, &session.ed);
+    let ppp = window().device_pixel_ratio() as f32 * session.ui.settings.ui_scale;
+    let app = Rc::new(RefCell::new(App {
+        canvas: canvas.clone(),
+        surface,
+        device,
+        queue,
+        config,
+        session,
+        renderer,
+        events: Vec::new(),
+        mods: egui::Modifiers::NONE,
+        space_held: false,
+        ppp,
+        frame_wanted: true,
+        repaint_at: None,
+        start: Instant::now(),
+        cursor: egui::CursorIcon::Default,
+        saved_settings,
+        frames: 0,
+        title: String::new(),
+    }));
+    listen(&app, &canvas)?;
+    if let Some(el) = document.get_element_by_id("status") {
+        el.remove();
+    }
+    animation_loop(app);
+    Ok(())
+}
+
+/// The canvas's size in device pixels (it fills the window).
+fn canvas_size(canvas: &HtmlCanvasElement) -> (u32, u32) {
+    let dpr = window().device_pixel_ratio();
+    let w = ((canvas.client_width().max(1) as f64) * dpr).round() as u32;
+    let h = ((canvas.client_height().max(1) as f64) * dpr).round() as u32;
+    (w.max(1), h.max(1))
+}
+
+fn animation_loop(app: Rc<RefCell<App>>) {
+    let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let g = f.clone();
+    *g.borrow_mut() = Some(Closure::new(move || {
+        let requests = app.borrow_mut().tick();
+        for r in requests {
+            handle_request(&app, r);
+        }
+        let _ = window().request_animation_frame(f.borrow().as_ref().expect("set").as_ref().unchecked_ref());
+    }));
+    let _ = window().request_animation_frame(g.borrow().as_ref().expect("set").as_ref().unchecked_ref());
+}
+
+impl App {
+    fn wants_frame(&self) -> bool {
+        self.frame_wanted || self.session.ed.needs_ticks() || self.repaint_at.is_some_and(|t| Instant::now() >= t)
+    }
+
+    /// One animation frame: draws if something changed. Returns what the interface asked for.
+    fn tick(&mut self) -> Vec<Request> {
+        let (w, h) = canvas_size(&self.canvas);
+        if (w, h) != (self.config.width, self.config.height) {
+            self.canvas.set_width(w);
+            self.canvas.set_height(h);
+            self.config.width = w;
+            self.config.height = h;
+            self.surface.configure(&self.device, &self.config);
+            self.frame_wanted = true;
+        }
+        if !self.wants_frame() {
+            return Vec::new();
+        }
+        self.frame_wanted = false;
+        self.repaint_at = None;
+        let now = Instant::now();
+        self.session.ed.tick(now_us(), now);
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            _ => {
+                self.surface.configure(&self.device, &self.config);
+                self.frame_wanted = true;
+                return Vec::new();
+            }
+        };
+        let native = window().device_pixel_ratio() as f32;
+        let ppp = native * self.session.ui.settings.ui_scale.clamp(0.5, 3.0);
+        let mut raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w as f32 / ppp, h as f32 / ppp))),
+            time: Some((now - self.start).as_secs_f64()),
+            events: std::mem::take(&mut self.events),
+            focused: true,
+            ..Default::default()
+        };
+        raw.viewports.entry(raw.viewport_id).or_default().native_pixels_per_point = Some(native);
+        let (out, ui_out) = self.session.ui_frame(raw);
+        self.ppp = out.pixels_per_point;
+        self.cursor = out.platform_output.cursor_icon;
+        if let Some(v) = out.viewport_output.get(&egui::ViewportId::ROOT) {
+            if v.repaint_delay.is_zero() {
+                self.frame_wanted = true;
+            } else if v.repaint_delay < Duration::from_secs(3600) {
+                self.repaint_at = Some(now + v.repaint_delay);
+            }
+        }
+        self.renderer.sync(&self.device, &self.queue, &mut self.session.ed);
+        let view = frame.texture.create_view(&Default::default());
+        self.renderer.render(&self.device, &self.queue, Target { view: &view, size: [w, h] }, &self.session.ed, &self.session.egui, out);
+        self.queue.present(frame);
+        self.frames += 1;
+        self.after_frame();
+        ui_out.requests
+    }
+
+    fn after_frame(&mut self) {
+        let ed = &self.session.ed;
+        let title = format!("{}{} - Recedo", ed.title(), if ed.has_unsaved_changes() { "*" } else { "" });
+        if title != self.title {
+            if let Some(d) = window().document() {
+                d.set_title(&title);
+            }
+            self.title = title;
+        }
+        self.update_cursor(None);
+        // Keep the settings (panel layout, brush, colour) a few times a second at most.
+        if self.frames % 30 == 0 {
+            let s = serde_json::to_string(&self.session.settings()).unwrap_or_default();
+            if s != self.saved_settings {
+                if let Some(st) = window().local_storage().ok().flatten() {
+                    let _ = st.set_item(SETTINGS_KEY, &s);
+                }
+                self.saved_settings = s;
+            }
+        }
+    }
+
+    /// Crosshair (or move cursor) over the canvas, the interface's cursor elsewhere.
+    fn update_cursor(&mut self, at: Option<(f64, f64)>) {
+        let over = at.or(self.session.ed.hover).is_some_and(|(x, y)| self.session.over_canvas(x, y));
+        let css = if over {
+            if self.space_held || self.session.ed.tool == Tool::Pan { "move" } else { "crosshair" }
+        } else {
+            use egui::CursorIcon as C;
+            match self.cursor {
+                C::PointingHand => "pointer",
+                C::Text => "text",
+                C::ResizeHorizontal | C::ResizeColumn | C::ResizeEast | C::ResizeWest => "ew-resize",
+                C::ResizeVertical | C::ResizeRow | C::ResizeNorth | C::ResizeSouth => "ns-resize",
+                C::Grab => "grab",
+                C::Grabbing => "grabbing",
+                C::Move | C::AllScroll => "move",
+                C::NotAllowed | C::NoDrop => "not-allowed",
+                _ => "default",
+            }
+        };
+        let _ = self.canvas.style().set_property("cursor", css);
+    }
+
+    fn pos(&self, x: f64, y: f64) -> egui::Pos2 {
+        egui::pos2(x as f32 / self.ppp, y as f32 / self.ppp)
+    }
+
+    fn modifiers(&self) -> Modifiers {
+        Modifiers { ctrl: self.mods.ctrl || self.mods.mac_cmd, shift: self.mods.shift, alt: self.mods.alt, space: self.space_held }
+    }
+}
+
+fn num(v: &JsValue, name: &str) -> f64 {
+    js_sys::Reflect::get(v, &JsValue::from_str(name)).ok().and_then(|x| x.as_f64()).unwrap_or(0.0)
+}
+
+/// A pointer event as a pen sample, in canvas pixels.
+fn sample(e: &PointerEvent, dpr: f64, perf_now: f64) -> PenSample {
+    let pen = e.pointer_type() == "pen";
+    let buttons = e.buttons() as u32;
+    let mut flags = Flags(0);
+    let contact = if pen { buttons & (1 | 32) != 0 } else { buttons & (1 | 4) != 0 };
+    flags.set(Flags::CONTACT, contact);
+    flags.set(Flags::HAS_PRESSURE, pen);
+    flags.set(Flags::HAS_TILT, pen);
+    flags.set(Flags::ERASER, pen && buttons & 32 != 0);
+    let pressure = if !contact {
+        0.0
+    } else if pen {
+        e.pressure().clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let recv = now_us();
+    // The event's own time, on the app clock.
+    let age_us = ((perf_now - e.time_stamp()) * 1000.0).max(0.0) as u64;
+    PenSample {
+        source: if pen { Source::Ink } else { Source::Mouse },
+        t_us: recv.saturating_sub(age_us),
+        recv_us: recv,
+        x: num(e, "clientX") * dpr,
+        y: num(e, "clientY") * dpr,
+        pressure,
+        tilt_x: if pen { e.tilt_x() as f32 } else { 0.0 },
+        tilt_y: if pen { e.tilt_y() as f32 } else { 0.0 },
+        twist: if pen { e.twist() as f32 } else { 0.0 },
+        flags,
+        raw_pressure: (e.pressure() * 1024.0) as u32,
+        raw_buttons: buttons,
+        serial: 0,
+        cursor: e.pointer_id() as u32,
+    }
+}
+
+fn add<E: wasm_bindgen::convert::FromWasmAbi + 'static>(target: &web_sys::EventTarget, name: &str, passive: bool, f: impl FnMut(E) + 'static) -> Result<(), String> {
+    let closure = Closure::<dyn FnMut(E)>::new(f);
+    let opts = web_sys::AddEventListenerOptions::new();
+    opts.set_passive(passive);
+    target
+        .add_event_listener_with_callback_and_add_event_listener_options(name, closure.as_ref().unchecked_ref(), &opts)
+        .map_err(|_| format!("could not listen to {name}"))?;
+    closure.forget();
+    Ok(())
+}
+
+fn egui_button(b: i16) -> Option<egui::PointerButton> {
+    match b {
+        0 => Some(egui::PointerButton::Primary),
+        1 => Some(egui::PointerButton::Middle),
+        2 => Some(egui::PointerButton::Secondary),
+        _ => None,
+    }
+}
+
+fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), String> {
+    let c: &web_sys::EventTarget = canvas.as_ref();
+    let perf = window().performance().ok_or("no performance clock")?;
+
+    // Pointer: every sample (coalesced ones too) to the editor; the newest to the interface.
+    for name in ["pointerdown", "pointermove", "pointerup", "pointercancel"] {
+        let (a, perf, cv) = (app.clone(), perf.clone(), canvas.clone());
+        add(c, name, false, move |e: PointerEvent| {
+            e.prevent_default();
+            let dpr = window().device_pixel_ratio();
+            let now = perf.now();
+            let mut app = a.borrow_mut();
+            let kind = e.type_();
+            if kind == "pointerdown" {
+                let _ = cv.set_pointer_capture(e.pointer_id());
+            }
+            let mut samples = Vec::new();
+            if kind == "pointermove" {
+                for ce in e.get_coalesced_events().iter() {
+                    if let Ok(ce) = ce.dyn_into::<PointerEvent>() {
+                        samples.push(sample(&ce, dpr, now));
+                    }
+                }
+            }
+            if samples.is_empty() {
+                samples.push(sample(&e, dpr, now));
+            }
+            if kind == "pointercancel" {
+                for s in &mut samples {
+                    s.flags.set(Flags::CONTACT, false);
+                    s.pressure = 0.0;
+                }
+            }
+            let mut mods = app.modifiers();
+            // The middle mouse button drags the view, like holding Space.
+            if e.pointer_type() == "mouse" && e.buttons() & 4 != 0 {
+                mods = Modifiers { space: true, ..Modifiers::default() };
+            }
+            for s in &samples {
+                let over = app.session.over_canvas(s.x, s.y);
+                app.session.ed.pen(s, over, mods);
+            }
+            let last = *samples.last().expect("one sample");
+            let pos = app.pos(last.x, last.y);
+            let modifiers = app.mods;
+            app.events.push(egui::Event::PointerMoved(pos));
+            if kind == "pointerdown" || kind == "pointerup" || kind == "pointercancel" {
+                if let Some(button) = egui_button(e.button()) {
+                    app.events.push(egui::Event::PointerButton { pos, button, pressed: kind == "pointerdown", modifiers });
+                }
+            }
+            app.update_cursor(Some((last.x, last.y)));
+            app.frame_wanted = true;
+        })?;
+    }
+    {
+        let a = app.clone();
+        add(c, "pointerleave", true, move |_e: PointerEvent| {
+            let mut app = a.borrow_mut();
+            app.events.push(egui::Event::PointerGone);
+            app.session.ed.hover = None;
+            app.frame_wanted = true;
+        })?;
+    }
+    add(c, "contextmenu", false, |e: web_sys::Event| e.prevent_default())?;
+
+    // Wheel: zoom over the canvas, scroll panels elsewhere.
+    {
+        let a = app.clone();
+        add(c, "wheel", false, move |e: WheelEvent| {
+            e.prevent_default();
+            let dpr = window().device_pixel_ratio();
+            let mut app = a.borrow_mut();
+            let at = (num(&e, "clientX") * dpr, num(&e, "clientY") * dpr);
+            let scale = match e.delta_mode() {
+                1 => 40.0,
+                2 => 800.0,
+                _ => 1.0,
+            };
+            let (dx, dy) = (e.delta_x() * scale, e.delta_y() * scale);
+            if app.session.over_canvas(at.0, at.1) {
+                app.session.ed.wheel(-dy / 100.0, at);
+            } else {
+                let modifiers = app.mods;
+                app.events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(-dx as f32, -dy as f32),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers,
+                });
+            }
+            app.frame_wanted = true;
+        })?;
+    }
+
+    // Keyboard, on the whole window.
+    let w: web_sys::EventTarget = window().into();
+    for name in ["keydown", "keyup"] {
+        let a = app.clone();
+        add(&w, name, false, move |e: KeyboardEvent| {
+            let mut app = a.borrow_mut();
+            let pressed = e.type_() == "keydown";
+            app.mods = egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() };
+            let typing = app.session.egui.egui_wants_keyboard_input();
+            let key = e.key();
+            app.frame_wanted = true;
+            if key == " " && !typing {
+                // Space is the pan key, never a key for the interface.
+                e.prevent_default();
+                app.space_held = pressed;
+                app.update_cursor(None);
+                return;
+            }
+            // Layout-independent letters and digits (Ctrl+Z is Ctrl+Z on any keyboard).
+            let code = e.code();
+            let name = code.strip_prefix("Key").or_else(|| code.strip_prefix("Digit")).map_or(key.clone(), str::to_string);
+            let mods = app.mods;
+            if let Some(k) = egui::Key::from_name(&name).or_else(|| egui::Key::from_name(&key)) {
+                app.events.push(egui::Event::Key { key: k, physical_key: Some(k), pressed, repeat: pressed && e.repeat(), modifiers: mods });
+            }
+            if pressed && key.chars().count() == 1 && !mods.ctrl && !mods.mac_cmd {
+                app.events.push(egui::Event::Text(key.clone()));
+            }
+            // Keep the browser's own shortcuts (Ctrl+S saves the page, Ctrl+O opens a file,
+            // Ctrl+Z, Tab, …) from acting while Recedo uses them.
+            if mods.ctrl || mods.mac_cmd || key == "Tab" || (!typing && (key == "Backspace" || key.starts_with('F') && key.len() > 1)) {
+                e.prevent_default();
+            }
+        })?;
+    }
+    {
+        let a = app.clone();
+        add(&w, "blur", true, move |_e: web_sys::Event| {
+            let mut app = a.borrow_mut();
+            app.space_held = false;
+            app.mods = egui::Modifiers::NONE;
+        })?;
+    }
+    // Leaving with unsaved changes: the browser asks first.
+    {
+        let a = app.clone();
+        add(&w, "beforeunload", false, move |e: web_sys::BeforeUnloadEvent| {
+            if a.try_borrow().is_ok_and(|app| app.session.ed.has_unsaved_changes()) {
+                e.prevent_default();
+                e.set_return_value("unsaved");
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// What the interface asked for that only the shell can do.
+fn handle_request(app: &Rc<RefCell<App>>, r: Request) {
+    match r {
+        Request::OpenDialog => pick_file(app.clone()),
+        Request::SaveAsDialog => {
+            let mut a = app.borrow_mut();
+            let snapshot = Instant::now();
+            let name = format!("{}.kra", stem(&a.session.ed.title()));
+            match a.session.ed.encode_kra() {
+                Ok(bytes) => {
+                    if download(&name, &bytes, "application/x-krita").is_ok() {
+                        a.session.ed.saved_elsewhere(&name, snapshot);
+                    }
+                }
+                Err(e) => a.session.ed.notices.push(crate::editor::Notice { kind: crate::editor::NoticeKind::Error, text: format!("Could not save: {e}") }),
+            }
+            a.frame_wanted = true;
+        }
+        Request::ExportDialog(format) => {
+            let mut a = app.borrow_mut();
+            let (ext, mime) = match format {
+                ExportFormat::Png => ("png", "image/png"),
+                ExportFormat::Jpeg(_) => ("jpg", "image/jpeg"),
+            };
+            let name = format!("{}.{ext}", stem(&a.session.ed.title()));
+            match a.session.ed.encode_export(format) {
+                Ok(bytes) => {
+                    let _ = download(&name, &bytes, mime);
+                }
+                Err(e) => a.session.ed.notices.push(crate::editor::Notice { kind: crate::editor::NoticeKind::Error, text: format!("Could not export: {e}") }),
+            }
+            a.frame_wanted = true;
+        }
+        Request::Quit | Request::SetTabletApi(_) => {}
+    }
+}
+
+fn stem(title: &str) -> String {
+    std::path::Path::new(title).file_stem().map_or_else(|| title.to_string(), |s| s.to_string_lossy().into_owned())
+}
+
+/// Offers bytes as a downloaded file.
+fn download(name: &str, bytes: &[u8], mime: &str) -> Result<(), JsValue> {
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)?;
+    let document = window().document().ok_or("no document")?;
+    let a: web_sys::HtmlAnchorElement = document.create_element("a")?.dyn_into()?;
+    a.set_href(&url);
+    a.set_download(name);
+    a.click();
+    // Let the download start before the address is released.
+    let release = Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    window().set_timeout_with_callback_and_timeout_and_arguments_0(release.unchecked_ref(), 60_000)?;
+    Ok(())
+}
+
+/// The browser's file picker; the chosen file is opened from its bytes.
+fn pick_file(app: Rc<RefCell<App>>) {
+    let Some(document) = window().document() else { return };
+    let Ok(input) = document.create_element("input").and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().map_err(Into::into)) else { return };
+    input.set_type("file");
+    input.set_accept(".kra,.png,.jpg,.jpeg,image/png,image/jpeg");
+    let picker = input.clone();
+    let on_change = Closure::once_into_js(move || {
+        let Some(file) = picker.files().and_then(|f| f.get(0)) else { return };
+        let name = file.name();
+        wasm_bindgen_futures::spawn_local(async move {
+            let Ok(buf) = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await else { return };
+            let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+            let mut a = app.borrow_mut();
+            let App { session, .. } = &mut *a;
+            session.ui.open_bytes(&mut session.ed, &name, &bytes);
+            a.frame_wanted = true;
+        });
+    });
+    input.set_onchange(Some(on_change.unchecked_ref()));
+    input.click();
+}
