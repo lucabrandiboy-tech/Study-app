@@ -30,6 +30,7 @@ impl Session {
         let mut ed = Editor::new(doc, recovery_dir);
         ed.tools = settings.tools.clone();
         ed.color = settings.color;
+        ed.recent_colors = settings.recent_colors.clone();
         ed.autosaver.interval = std::time::Duration::from_secs(settings.autosave_minutes as u64 * 60);
         let egui = egui::Context::default();
         egui.set_theme(egui::Theme::Dark);
@@ -44,6 +45,7 @@ impl Session {
         let mut s = self.ui.settings.clone();
         s.tools = self.ed.tools.clone();
         s.color = self.ed.color;
+        s.recent_colors = self.ed.recent_colors.clone();
         s
     }
 

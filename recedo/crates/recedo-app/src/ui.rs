@@ -8,7 +8,7 @@ use std::time::Duration;
 use egui::{Color32, Id, Key, KeyboardShortcut, Modifiers as EguiMods, RichText, Stroke, Ui, vec2};
 use recedo_core::autosave::Recoverable;
 use recedo_core::blend::BlendMode;
-use recedo_core::brush::PaintMode;
+use recedo_core::brush::{Brush, PaintMode};
 use recedo_core::canvas::{Background, CanvasPreset, builtin_presets};
 use recedo_core::curve::Curve;
 
@@ -244,6 +244,7 @@ impl AppUi {
         egui::Panel::top("menu").show(root, |ui| {
             egui::MenuBar::new().ui(ui, |ui| self.menus(ui, ed, &mut requests));
         });
+        egui::Panel::top("toolbar").show(root, |ui| toolbar(ui, ed));
         egui::Panel::bottom("status").show(root, |ui| self.status_bar(ui, ed));
         let mut dock = std::mem::take(&mut self.settings.dock);
         let canvas_rect = dock.ui(root, &mut |ui, panel| self.panel(ui, panel, ed));
@@ -526,6 +527,21 @@ impl AppUi {
     fn color_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
         crate::widgets::color_selector(ui, &mut ed.color, &mut self.hsv);
         ui.add_space(2.0);
+        if !ed.recent_colors.is_empty() {
+            // Colours painted with, newest first: tap one to paint with it again.
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
+                for c in ed.recent_colors.clone() {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), egui::Sense::click());
+                    ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(c[0], c[1], c[2]));
+                    let stroke = if c == ed.color { Stroke::new(2.0, ui.visuals().selection.stroke.color) } else { Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color) };
+                    ui.painter().rect_stroke(rect, 3.0, stroke, egui::StrokeKind::Inside);
+                    if resp.on_hover_text(format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])).clicked() {
+                        ed.color = c;
+                    }
+                }
+            });
+        }
         // The numbers fold away: the square and the hue bar are what a pen uses.
         egui::CollapsingHeader::new("Numbers (RGB, hex)").id_salt("colour numbers").default_open(false).show(ui, |ui| {
             for (i, name) in ["Red", "Green", "Blue"].into_iter().enumerate() {
@@ -944,6 +960,59 @@ impl AppUi {
     }
 }
 
+/// Big buttons for what a pen or a finger cannot reach by keyboard: undo, redo, brush or
+/// eraser, brush size, fit, zoom.
+fn toolbar(ui: &mut Ui, ed: &mut Editor) {
+    ui.horizontal(|ui| {
+        let big = |text: &str| egui::Button::new(RichText::new(text).size(15.0)).min_size(vec2(44.0, 30.0));
+        let (_, applied) = ed.history.entries();
+        let redo = ed.history.can_redo();
+        if ui.add_enabled(applied > 0, big("Undo")).on_hover_text("Ctrl+Z").clicked() {
+            ed.undo();
+        }
+        if ui.add_enabled(redo, big("Redo")).on_hover_text("Ctrl+Shift+Z").clicked() {
+            ed.redo();
+        }
+        ui.separator();
+        for (t, label) in [(Tool::Brush, "Brush"), (Tool::Eraser, "Eraser"), (Tool::Eyedropper, "Pick colour"), (Tool::Pan, "Move view")] {
+            if ui.add(egui::Button::selectable(ed.tool == t, RichText::new(label).size(15.0)).min_size(vec2(44.0, 30.0))).clicked() {
+                ed.tool = t;
+            }
+        }
+        ui.separator();
+        if ui.add(big("Smaller")).on_hover_text("[").clicked() {
+            ed.resize_brush(false);
+        }
+        ui.label(format!("{:.0} px", ed.current_brush_mut().size));
+        if ui.add(big("Bigger")).on_hover_text("]").clicked() {
+            ed.resize_brush(true);
+        }
+        ui.separator();
+        if ui.add(big("Zoom out")).on_hover_text("-").clicked() {
+            ed.zoom_out();
+        }
+        if ui.add(big("Zoom in")).on_hover_text("+").clicked() {
+            ed.zoom_in();
+        }
+        if ui.add(big("Fit")).on_hover_text("2").clicked() {
+            ed.fit_to_window();
+            ed.reset_rotation();
+        }
+    });
+}
+
+/// Ready-made brushes (Krita has a library of these; these are the basics).
+fn presets() -> [(&'static str, &'static str, Brush); 5] {
+    let base = Brush::default();
+    [
+        ("Pencil", "Thin, a little soft, lighter when you press lightly", Brush { size: 4.0, hardness: 0.6, opacity_curve: Some(Curve::linear()), min_size: 0.5, ..base.clone() }),
+        ("Ink pen", "Hard edge, thin to thick with pressure", Brush { size: 10.0, hardness: 1.0, min_size: 0.1, ..base.clone() }),
+        ("Marker", "Even, see-through strokes that do not darken where they cross", Brush { size: 28.0, hardness: 0.75, opacity: 0.55, size_curve: None, ..base.clone() }),
+        ("Airbrush", "Big and soft; builds up colour as you go over it", Brush { size: 150.0, hardness: 0.0, flow: 0.08, mode: PaintMode::BuildUp, size_curve: None, flow_curve: Some(Curve::linear()), ..base.clone() }),
+        ("Paint brush", "The default round brush", base),
+    ]
+}
+
 fn tools_panel(ui: &mut Ui, ed: &mut Editor) {
     let keys = |t: Tool| match t {
         Tool::Brush => "B",
@@ -970,6 +1039,15 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor) {
     match ed.tool {
         Tool::Brush | Tool::Eraser => {
             ui.strong(if ed.tool == Tool::Eraser { "Eraser" } else { "Brush" });
+            if ed.tool == Tool::Brush {
+                ui.horizontal_wrapped(|ui| {
+                    for (name, tip, brush) in presets() {
+                        if ui.button(name).on_hover_text(tip).clicked() {
+                            ed.tools.brush = brush;
+                        }
+                    }
+                });
+            }
             let b = ed.current_brush_mut();
             ui.add(egui::Slider::new(&mut b.size, MIN_BRUSH..=MAX_BRUSH).logarithmic(true).text("Size").suffix(" px").max_decimals(0))
                 .on_hover_text("[ and ] change the size");

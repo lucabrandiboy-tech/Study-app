@@ -40,6 +40,12 @@ struct App {
     saved_settings: String,
     frames: u64,
     title: String,
+    /// Fingers on the screen (pointer id, position in pixels). Fingers move the view: one
+    /// pans, two pan and pinch-zoom. Only the pen and the mouse paint.
+    touches: Vec<(i32, (f64, f64))>,
+    /// Two fingers were down: the rest of this touch does nothing until all fingers lift.
+    pinching: bool,
+    last_autosave: Instant,
 }
 
 fn window() -> web_sys::Window {
@@ -119,7 +125,11 @@ async fn run() -> Result<(), String> {
         saved_settings,
         frames: 0,
         title: String::new(),
+        touches: Vec::new(),
+        pinching: false,
+        last_autosave: Instant::now(),
     }));
+    restore_autosave(&app);
     listen(&app, &canvas)?;
     if let Some(el) = document.get_element_by_id("status") {
         el.remove();
@@ -165,6 +175,8 @@ impl App {
             self.surface.configure(&self.device, &self.config);
             self.frame_wanted = true;
         }
+        // Also while nothing is drawn: a painting left alone is the one to keep.
+        self.autosave();
         if !self.wants_frame() {
             return Vec::new();
         }
@@ -253,6 +265,23 @@ impl App {
         let _ = self.canvas.style().set_property("cursor", css);
     }
 
+    /// Keeps a copy of a painting with unsaved changes in the browser's storage, every
+    /// autosave interval (Settings), between strokes.
+    fn autosave(&mut self) {
+        let ed = &mut self.session.ed;
+        let every = Duration::from_secs(self.session.ui.settings.autosave_minutes.max(1) as u64 * 60);
+        if !ed.has_unsaved_changes() || !ed.autosaver.copy_is_behind() || ed.stroke_active() || self.last_autosave.elapsed() < every {
+            return;
+        }
+        self.last_autosave = Instant::now();
+        let snapshot = Instant::now();
+        if let Ok(bytes) = recedo_core::kra::save(&ed.doc) {
+            let name = format!("{}.kra", stem(&ed.title()));
+            store_call("put", &[JsValue::from_str(&name), js_sys::Uint8Array::from(&bytes[..]).into()]);
+            ed.autosaver.autosaved(snapshot);
+        }
+    }
+
     fn pos(&self, x: f64, y: f64) -> egui::Pos2 {
         egui::pos2(x as f32 / self.ppp, y as f32 / self.ppp)
     }
@@ -339,6 +368,10 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
             let kind = e.type_();
             if kind == "pointerdown" {
                 let _ = cv.set_pointer_capture(e.pointer_id());
+            }
+            if e.pointer_type() == "touch" {
+                touch(&mut app, &e, &kind, dpr);
+                return;
             }
             let mut samples = Vec::new();
             if kind == "pointermove" {
@@ -488,6 +521,7 @@ fn handle_request(app: &Rc<RefCell<App>>, r: Request) {
                 Ok(bytes) => {
                     if download(&name, &bytes, "application/x-krita").is_ok() {
                         a.session.ed.saved_elsewhere(&name, snapshot);
+                        store_call("clear", &[]);
                     }
                 }
                 Err(e) => a.session.ed.notices.push(crate::editor::Notice { kind: crate::editor::NoticeKind::Error, text: format!("Could not save: {e}") }),
@@ -558,4 +592,91 @@ fn pick_file(app: Rc<RefCell<App>>) {
     });
     input.set_onchange(Some(on_change.unchecked_ref()));
     input.click();
+}
+
+/// Fingers: one finger pans (through the editor's pan, like Space+drag), two pan and
+/// pinch-zoom about the point between them. Fingers never paint.
+fn touch(app: &mut App, e: &PointerEvent, kind: &str, dpr: f64) {
+    let id = e.pointer_id();
+    let p = (num(e, "clientX") * dpr, num(e, "clientY") * dpr);
+    let before = app.touches.iter().find(|t| t.0 == id).map(|t| t.1);
+    match kind {
+        "pointerdown" => app.touches.push((id, p)),
+        "pointermove" => {
+            if let Some(t) = app.touches.iter_mut().find(|t| t.0 == id) {
+                t.1 = p;
+            }
+        }
+        _ => app.touches.retain(|t| t.0 != id),
+    }
+    let pos = app.pos(p.0, p.1);
+    let modifiers = app.mods;
+    // The interface gets fingers as clicks and drags (panels, menus, sliders).
+    app.events.push(egui::Event::PointerMoved(pos));
+    if kind != "pointermove" {
+        app.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: kind == "pointerdown", modifiers });
+    }
+    app.frame_wanted = true;
+    if app.touches.len() >= 2 {
+        if !app.pinching {
+            app.pinching = true;
+            app.session.ed.pen_gone(Source::Mouse, now_us());
+        }
+        // Move with the finger that moved, against the other one.
+        if let (Some(old), Some(other)) = (before, app.touches.iter().find(|t| t.0 != id).map(|t| t.1)) {
+            let d0 = (old.0 - other.0).hypot(old.1 - other.1);
+            let d1 = (p.0 - other.0).hypot(p.1 - other.1);
+            let view = &mut app.session.ed.view;
+            view.pan((p.0 - old.0) / 2.0, (p.1 - old.1) / 2.0);
+            if d0 > 10.0 && d1 > 10.0 {
+                view.zoom_by(d1 / d0, ((p.0 + other.0) / 2.0, (p.1 + other.1) / 2.0));
+            }
+        }
+        return;
+    }
+    if app.touches.is_empty() {
+        app.pinching = false;
+    }
+    if app.pinching {
+        return;
+    }
+    let mut s = PenSample::synthetic(now_us(), p.0, p.1, 1.0, kind == "pointerdown" || kind == "pointermove" && before.is_some());
+    s.source = Source::Mouse;
+    s.cursor = id as u32;
+    if kind == "pointerup" || kind == "pointercancel" {
+        s.flags.set(Flags::CONTACT, false);
+    }
+    let over = app.session.over_canvas(p.0, p.1);
+    app.session.ed.pen(&s, over, Modifiers { space: true, ..Modifiers::default() });
+}
+
+/// Calls `window.recedoStore.<name>(...)` (the browser storage helper in index.html).
+fn store_call(name: &str, args: &[JsValue]) -> Option<js_sys::Promise> {
+    let store = js_sys::Reflect::get(&window(), &JsValue::from_str("recedoStore")).ok()?;
+    let f: js_sys::Function = js_sys::Reflect::get(&store, &JsValue::from_str(name)).ok()?.dyn_into().ok()?;
+    f.apply(&store, &args.iter().collect::<js_sys::Array>()).ok()?.dyn_into().ok()
+}
+
+/// After a crash or a closed tab: the painting's last autosaved copy opens again, unsaved.
+fn restore_autosave(app: &Rc<RefCell<App>>) {
+    let Some(p) = store_call("get", &[]) else { return };
+    let app = app.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let Ok(rec) = wasm_bindgen_futures::JsFuture::from(p).await else { return };
+        if rec.is_undefined() || rec.is_null() {
+            return;
+        }
+        let name = js_sys::Reflect::get(&rec, &JsValue::from_str("name")).ok().and_then(|v| v.as_string()).unwrap_or_else(|| "Recovered.kra".into());
+        let Ok(bytes) = js_sys::Reflect::get(&rec, &JsValue::from_str("bytes")) else { return };
+        let bytes = js_sys::Uint8Array::new(&bytes).to_vec();
+        let mut a = app.borrow_mut();
+        let App { session, .. } = &mut *a;
+        session.ui.open_bytes(&mut session.ed, &name, &bytes);
+        session.ed.autosaver.changed(Instant::now());
+        session.ed.notices.push(crate::editor::Notice {
+            kind: crate::editor::NoticeKind::Info,
+            text: format!("Your unsaved painting \"{name}\" was restored from the last autosave. Save it with Ctrl+S."),
+        });
+        a.frame_wanted = true;
+    });
 }

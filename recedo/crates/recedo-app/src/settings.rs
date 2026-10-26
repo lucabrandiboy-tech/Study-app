@@ -31,6 +31,7 @@ impl TabletApi {
 pub struct Settings {
     pub tools: ToolSettings,
     pub color: [u8; 3],
+    pub recent_colors: Vec<[u8; 3]>,
     pub dock: DockLayout,
     pub tablet: TabletApi,
     /// Interface size multiplier on top of Windows' display scaling.
@@ -53,6 +54,7 @@ impl Default for Settings {
         Settings {
             tools: ToolSettings::default(),
             color: [20, 20, 30],
+            recent_colors: Vec::new(),
             dock: DockLayout::default(),
             tablet: TabletApi::Ink,
             ui_scale: 1.0,
@@ -118,6 +120,7 @@ impl Settings {
         self.tools.pick_radius = if self.tools.pick_radius.is_finite() { self.tools.pick_radius.clamp(0.0, 50.0) } else { 0.0 };
         self.dock.sanitize();
         self.recent_files.truncate(MAX_RECENT);
+        self.recent_colors.truncate(crate::editor::MAX_RECENT_COLORS);
     }
 
     /// Puts a file at the top of the recent list.

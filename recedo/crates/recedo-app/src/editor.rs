@@ -74,6 +74,7 @@ impl Default for ToolSettings {
 /// Smallest and largest brush size the size keys and sliders allow, in canvas pixels.
 pub const MIN_BRUSH: f32 = 1.0;
 pub const MAX_BRUSH: f32 = 1000.0;
+pub const MAX_RECENT_COLORS: usize = 16;
 
 /// Keyboard modifier state at the time of an input event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -164,6 +165,8 @@ pub struct Editor {
     pub tools: ToolSettings,
     /// Painting colour, sRGB.
     pub color: [u8; 3],
+    /// Colours painted with, newest first (shown as swatches in the Colour panel).
+    pub recent_colors: Vec<[u8; 3]>,
     /// The `.kra` this painting is saved in, if any.
     pub file: Option<PathBuf>,
     /// Name shown when there is no file yet ("Untitled 1"), or the opened picture's name.
@@ -206,6 +209,7 @@ impl Editor {
             tool: Tool::Brush,
             tools: ToolSettings::default(),
             color: [20, 20, 30],
+            recent_colors: Vec::new(),
             file: None,
             untitled_name: "Untitled 1".into(),
             autosaver: Autosaver::new(autosave::DEFAULT_INTERVAL),
@@ -396,6 +400,12 @@ impl Editor {
             let info = self.paint_info(s);
             match PaintSession::begin(&mut self.doc, &mut self.history, self.active, brush, self.color, erase, self.tools.stabilizer, self.view.zoom, info, s.recv_us) {
                 Ok(mut session) => {
+                if !erase {
+                    let c = self.color;
+                    self.recent_colors.retain(|&r| r != c);
+                    self.recent_colors.insert(0, c);
+                    self.recent_colors.truncate(MAX_RECENT_COLORS);
+                }
                     let d = session.take_dirty();
                     self.mark_tiles(d);
                     Interaction::Stroke(Box::new(session))
