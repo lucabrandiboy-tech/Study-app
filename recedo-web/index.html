@@ -20,6 +20,18 @@
 <body>
 <canvas id="recedo" tabindex="0"></canvas>
 <div id="status">Loading Recedo…</div>
+<script>
+  // Autosave in the browser's own storage (IndexedDB): one copy of the unsaved painting.
+  window.recedoStore = (() => {
+    const open = () => new Promise((res, rej) => { const r = indexedDB.open("recedo", 1); r.onupgradeneeded = () => r.result.createObjectStore("files"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const run = (mode, f) => open().then(db => new Promise((res, rej) => { const t = db.transaction("files", mode); const q = f(t.objectStore("files")); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); }));
+    return {
+      put: (name, bytes) => run("readwrite", s => s.put({ name, bytes, time: Date.now() }, "autosave")),
+      get: () => run("readonly", s => s.get("autosave")),
+      clear: () => run("readwrite", s => s.delete("autosave")),
+    };
+  })();
+</script>
 <script type="module">
   import init from "./recedo_web.js";
   init().catch(e => { const s = document.getElementById("status"); s.textContent = "Recedo could not start: " + e; s.className = "error"; });
