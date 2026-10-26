@@ -25,6 +25,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build:pwa
+      # Recedo, the painting app (built from recedo/ with scripts/build-web.sh), in its own folder.
+      - run: cp -r recedo-web dist-pwa/recedo
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
