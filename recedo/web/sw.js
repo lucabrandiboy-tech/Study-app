@@ -8,10 +8,11 @@ self.addEventListener("install", e => {
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
-// Network first (so a new version arrives when online), the kept copy when offline.
+// Network first (so a new version arrives when online; asking the server even if the
+// browser has a recent copy), the kept copy when offline.
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
-  e.respondWith(fetch(e.request).then(r => {
+  e.respondWith(fetch(e.request, { cache: "no-cache" }).then(r => {
     const copy = r.clone();
     caches.open(VERSION).then(c => c.put(e.request, copy));
     return r;
