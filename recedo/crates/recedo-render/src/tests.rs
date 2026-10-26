@@ -317,4 +317,17 @@ fn every_mip_level_is_the_picture_halved() {
     let up = proj.update(&doc, &dirty);
     d.upload(&g.queue, &proj, &up);
     check(&d, &proj, "after a partial update");
+    // Scattered tiles: gaps within a row of tiles, and the clipped last column and row.
+    let spots = [(0, 0), (2, 0), (4, 0), (4, 1), (1, 3), (3, 3), (4, 3)];
+    for &(tx, ty) in &spots {
+        for y in (ty * 64)..((ty * 64 + 64).min(200)) {
+            for x in (tx * 64)..((tx * 64 + 64).min(300)) {
+                doc.layers[0].pixels.set_pixel(x, y, [(x * 3) as u8, (y * 5) as u8, 90, (x + y) as u8 | 1]);
+            }
+        }
+    }
+    let dirty: HashSet<_> = spots.into_iter().collect();
+    let up = proj.update(&doc, &dirty);
+    d.upload(&g.queue, &proj, &up);
+    check(&d, &proj, "after scattered updates");
 }

@@ -49,42 +49,43 @@ pub fn flood(reference: &Rgba8, x: i32, y: i32, tolerance: f32, grow: u32) -> Op
     }
     let seed = reference.pixel(x as u32, y as u32);
     let limit = (tolerance.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let similar = |p: [u8; 4]| {
-        // All fully transparent pixels count as the same colour.
-        if p[3] == 0 && seed[3] == 0 {
-            return true;
-        }
-        (0..4).all(|c| (p[c] as i32 - seed[c] as i32).abs() <= limit)
-    };
+    // First, in one pass: 1 where the colour counts as the clicked one, else 0. All fully
+    // transparent pixels count as the same colour.
     let mut mask = Mask::new(w, h);
-    // Scanline fill: each popped point fills its whole run, then queues the rows next to it.
-    let mut stack = vec![(x as u32, y as u32)];
+    for (m, p) in mask.data.iter_mut().zip(reference.data.as_chunks::<4>().0) {
+        let same = (p[3] == 0 && seed[3] == 0) || (0..4).all(|c| (p[c] as i32 - seed[c] as i32).abs() <= limit);
+        *m = same as u8;
+    }
+    // Scanline fill over those: each popped point fills its whole run (255), then queues the
+    // runs next to it in the rows above and below.
+    let (wu, d) = (w as usize, &mut mask.data);
+    let mut stack = vec![(x as usize, y as usize)];
+    let (mut y0, mut y1) = (y as usize, y as usize);
     while let Some((sx, sy)) = stack.pop() {
-        let row = (sy * w) as usize;
-        if mask.data[row + sx as usize] != 0 {
+        let row = sy * wu;
+        if d[row + sx] != 1 {
             continue;
         }
         let (mut l, mut r) = (sx, sx);
-        while l > 0 && mask.data[row + l as usize - 1] == 0 && similar(reference.pixel(l - 1, sy)) {
+        while l > 0 && d[row + l - 1] == 1 {
             l -= 1;
         }
-        while r + 1 < w && mask.data[row + r as usize + 1] == 0 && similar(reference.pixel(r + 1, sy)) {
+        while r + 1 < wu && d[row + r + 1] == 1 {
             r += 1;
         }
-        for px in l..=r {
-            mask.data[row + px as usize] = 255;
-        }
+        d[row + l..=row + r].fill(255);
+        (y0, y1) = (y0.min(sy), y1.max(sy));
         for ny in [sy.wrapping_sub(1), sy + 1] {
-            if ny >= h {
+            if ny >= h as usize {
                 continue;
             }
-            let nrow = (ny * w) as usize;
+            let nrow = ny * wu;
             let mut px = l;
             while px <= r {
-                if mask.data[nrow + px as usize] == 0 && similar(reference.pixel(px, ny)) {
+                if d[nrow + px] == 1 {
                     stack.push((px, ny));
-                    // Skip the rest of this run; it is filled from the pushed point.
-                    while px <= r && similar(reference.pixel(px, ny)) {
+                    // The rest of this run is filled from the pushed point.
+                    while px <= r && d[nrow + px] == 1 {
                         px += 1;
                     }
                 } else {
@@ -93,23 +94,49 @@ pub fn flood(reference: &Rgba8, x: i32, y: i32, tolerance: f32, grow: u32) -> Op
             }
         }
     }
+    // Similar pixels the fill did not reach are not filled.
+    for m in d[y0 * wu..(y1 + 1) * wu].iter_mut() {
+        *m = if *m == 255 { 255 } else { 0 };
+    }
+    d[..y0 * wu].fill(0);
+    d[(y1 + 1) * wu..].fill(0);
     for _ in 0..grow {
-        let src = mask.data.clone();
-        for yy in 0..h {
-            for xx in 0..w {
-                let i = (yy * w + xx) as usize;
-                if src[i] != 0 {
-                    continue;
-                }
-                let near = (xx > 0 && src[i - 1] != 0) || (xx + 1 < w && src[i + 1] != 0) || (yy > 0 && src[i - w as usize] != 0) || (yy + 1 < h && src[i + w as usize] != 0);
-                if near {
-                    mask.data[i] = 255;
-                }
-            }
-        }
+        (y0, y1) = (y0.saturating_sub(1), (y1 + 1).min(h as usize - 1));
+        grow_rows(&mut mask.data, wu, y0, y1);
     }
     mask.update_bounds();
     Some(mask)
+}
+
+/// Grows the covered area (255) by one pixel up, down, left and right, in rows `y0..=y1`
+/// (the rows outside are empty and stay so).
+fn grow_rows(data: &mut [u8], w: usize, y0: usize, y1: usize) {
+    let src = data[y0.saturating_sub(1) * w..((y1 + 2) * w).min(data.len())].to_vec();
+    let base = y0.saturating_sub(1);
+    let h = data.len() / w;
+    for y in y0..=y1 {
+        let at = |yy: usize| &src[(yy - base) * w..][..w];
+        let (row, out) = (at(y), &mut data[y * w..][..w]);
+        // Left and right neighbours.
+        out[0] = row[0] | row.get(1).copied().unwrap_or(0);
+        if w > 1 {
+            out[w - 1] = row[w - 1] | row[w - 2];
+            for (o, win) in out[1..w - 1].iter_mut().zip(row.windows(3)) {
+                *o = win[0] | win[1] | win[2];
+            }
+        }
+        // Up and down.
+        if y > 0 {
+            for (o, &a) in out.iter_mut().zip(at(y - 1)) {
+                *o |= a;
+            }
+        }
+        if y + 1 < h {
+            for (o, &b) in out.iter_mut().zip(at(y + 1)) {
+                *o |= b;
+            }
+        }
+    }
 }
 
 /// A filled rectangle between two corners (canvas pixels), with soft edges at fractions.
@@ -143,7 +170,7 @@ fn shape(width: u32, height: u32, (x0, y0, x1, y1): (f64, f64, f64, f64), f: imp
     for y in by0..by1 {
         for x in bx0..bx1 {
             let c = f(x as f64 + 0.5, y as f64 + 0.5);
-            mask.data[(y * width + x) as usize] = (c * 255.0).round() as u8;
+            mask.data[(y * width + x) as usize] = (c * 255.0 + 0.5) as u8;
         }
     }
     mask.update_bounds();
@@ -168,16 +195,18 @@ pub fn paint_mask(layer: &mut TiledLayer, mask: &Mask, color: [u8; 3], opacity: 
                 continue;
             }
             let tile = layer.tile_mut(key);
+            let n = ((px0 + t).min(mask.width) - px0) as usize;
             for y in py0..(py0 + t).min(mask.height) {
-                for x in px0..(px0 + t).min(mask.width) {
-                    let m = mask.data[(y * mask.width + x) as usize];
-                    if m == 0 {
-                        continue;
+                let m_row = &mask.data[(y * mask.width + px0) as usize..][..n];
+                let start = ((y - py0) * t * 4) as usize;
+                let t_row = tile.0[start..start + n * 4].as_chunks_mut::<4>().0;
+                for (&m, d) in m_row.iter().zip(t_row) {
+                    match m {
+                        0 => {}
+                        // What "over" gives for a fully covered pixel at full opacity.
+                        255 if opacity == 255 => *d = [color[0], color[1], color[2], 255],
+                        _ => over(d, [color[0], color[1], color[2], m], opacity),
                     }
-                    let (lx, ly) = ((x - px0) as i32, (y - py0) as i32);
-                    let mut d = tile.get(lx, ly);
-                    over(&mut d, [color[0], color[1], color[2], m], opacity);
-                    tile.set(lx, ly, d);
                 }
             }
             changed.push(key);
@@ -192,11 +221,15 @@ pub fn gradient(layer: &mut TiledLayer, width: u32, height: u32, a: (f64, f64), 
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
     let mut mask = Mask::new(width, height);
-    for y in 0..height {
-        for x in 0..width {
-            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-            let t = if len2 < 1e-9 { 0.0 } else { (((px - a.0) * dx + (py - a.1) * dy) / len2).clamp(0.0, 1.0) };
-            mask.data[(y * width + x) as usize] = ((1.0 - t) * 255.0).round() as u8;
+    // t = ((pixel centre - a) . (b - a)) / |b - a|^2, which grows by dx / len2 per pixel along
+    // a row.
+    let (step, len2) = if len2 < 1e-9 { (0.0, 1.0) } else { (dx / len2, len2) };
+    for (y, row) in mask.data.chunks_exact_mut(width as usize).enumerate() {
+        let start = if dx == 0.0 && dy == 0.0 { 0.0 } else { ((0.5 - a.0) * dx + (y as f64 + 0.5 - a.1) * dy) / len2 };
+        for (x, m) in row.iter_mut().enumerate() {
+            let t = (start + x as f64 * step).clamp(0.0, 1.0);
+            // + 0.5 and truncate: rounding (the value is never negative).
+            *m = ((1.0 - t) * 255.0 + 0.5) as u8;
         }
     }
     mask.update_bounds();

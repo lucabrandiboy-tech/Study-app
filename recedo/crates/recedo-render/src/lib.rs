@@ -58,8 +58,6 @@ pub struct CanvasDisplay {
     chunks: Vec<Chunk>,
     pipeline: wgpu::RenderPipeline,
     srgb_target: bool,
-    /// Scratch for converting a tile to premultiplied alpha.
-    scratch: Vec<u8>,
 }
 
 fn mip_count(w: u32, h: u32) -> u32 {
@@ -167,43 +165,48 @@ impl CanvasDisplay {
                 chunks.push(Chunk { x, y, w, h, texture, uniform, bind_group, levels });
             }
         }
-        CanvasDisplay { width, height, chunks, pipeline, srgb_target: target_format.is_srgb(), scratch: Vec::new() }
+        CanvasDisplay { width, height, chunks, pipeline, srgb_target: target_format.is_srgb() }
     }
 
     pub fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
 
-    /// Uploads changed tiles of the projection.
+    /// Uploads changed tiles of the projection, and the parts of the mip levels they change.
+    /// Neighbouring changed tiles in a row of tiles go up as one rectangle (one GPU copy
+    /// instead of many small ones).
     pub fn upload(&mut self, queue: &wgpu::Queue, projection: &Projection, tiles: &[TileKey]) {
         let img = &projection.image;
-        // Per chunk, the level-1 blocks the changed tiles fall in.
-        let mut blocks: Vec<std::collections::HashSet<(u32, u32)>> = vec![Default::default(); self.chunks.len()];
-        for &key in tiles {
-            let Some((x, y, w, h)) = projection.tile_rect(key) else { continue };
-            let Some(ci) = self.chunks.iter().position(|c| x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h) else { continue };
-            let chunk = &self.chunks[ci];
-            self.scratch.clear();
-            for row in 0..h {
-                let start = ((y + row) as usize * img.width as usize + x as usize) * 4;
-                for p in img.data[start..start + w as usize * 4].as_chunks::<4>().0 {
-                    self.scratch.extend_from_slice(&premultiply(*p));
+        let t = TILE as u32;
+        for chunk in &mut self.chunks {
+            // This chunk's changed tiles: columns per tile row, in the chunk's own tiles.
+            let mut rows: std::collections::BTreeMap<u32, Vec<u32>> = Default::default();
+            for &key in tiles {
+                let Some((x, y, _, _)) = projection.tile_rect(key) else { continue };
+                if x >= chunk.x && x < chunk.x + chunk.w && y >= chunk.y && y < chunk.y + chunk.h {
+                    rows.entry((y - chunk.y) / t).or_default().push((x - chunk.x) / t);
                 }
             }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &chunk.texture, mip_level: 0, origin: wgpu::Origin3d { x: x - chunk.x, y: y - chunk.y, z: 0 }, aspect: wgpu::TextureAspect::All },
-                &self.scratch,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            );
-            // A level-0 tile (64 px) is half a level-1 block (64 level-1 px = 128 level-0 px).
-            let (lx, ly) = (x - chunk.x, y - chunk.y);
-            blocks[ci].insert((lx / (2 * BLOCK), ly / (2 * BLOCK)));
-        }
-        for (ci, mut level_blocks) in blocks.into_iter().enumerate() {
-            let chunk = &mut self.chunks[ci];
+            if rows.is_empty() {
+                continue;
+            }
+            // Level 0, and the level-1 blocks under it (a 64 px block of level 1 is 2 x 2 tiles).
+            let mut rects = Vec::new();
+            let mut blocks = std::collections::HashSet::new();
+            for (&ty, cols) in &mut rows {
+                for (a, b) in runs(cols) {
+                    rects.push((a * t, ty * t, ((b + 1) * t).min(chunk.w), ((ty + 1) * t).min(chunk.h)));
+                    blocks.extend((a / 2..=b / 2).map(|bx| (bx, ty / 2)));
+                }
+            }
+            let (cx, cy) = (chunk.x, chunk.y);
+            let pixels: Vec<Vec<u8>> = rects.par_iter().map(|&(x0, y0, x1, y1)| premultiplied(img, cx + x0, cy + y0, x1 - x0, y1 - y0)).collect();
+            for (&rect, data) in rects.iter().zip(&pixels) {
+                write_level(queue, &chunk.texture, 0, rect, data);
+            }
+            // Each mip level: the changed blocks, in runs along each row of blocks.
             for n in 0..chunk.levels.len() {
-                if level_blocks.is_empty() {
+                if blocks.is_empty() {
                     break;
                 }
                 let (prev, rest) = chunk.levels.split_at_mut(n);
@@ -212,28 +215,30 @@ impl CanvasDisplay {
                     0 => Above::Picture { img, x: chunk.x, y: chunk.y, w: chunk.w, h: chunk.h },
                     _ => Above::Level(&prev[n - 1]),
                 };
-                let rects: Vec<(u32, u32, u32, u32)> = level_blocks
-                    .iter()
-                    .map(|&(bx, by)| (bx * BLOCK, by * BLOCK))
-                    .filter(|&(x0, y0)| x0 < level.w && y0 < level.h)
-                    .map(|(x0, y0)| (x0, y0, (x0 + BLOCK).min(level.w), (y0 + BLOCK).min(level.h)))
-                    .collect();
-                // The blocks are independent: computed on all cores, then stored and uploaded.
+                let mut by_row: std::collections::BTreeMap<u32, Vec<u32>> = Default::default();
+                for &(bx, by) in &blocks {
+                    by_row.entry(by).or_default().push(bx);
+                }
+                let mut rects = Vec::new();
+                for (&by, cols) in &mut by_row {
+                    for (a, b) in runs(cols) {
+                        let (x0, y0) = (a * BLOCK, by * BLOCK);
+                        if x0 < level.w && y0 < level.h {
+                            rects.push((x0, y0, ((b + 1) * BLOCK).min(level.w), ((by + 1) * BLOCK).min(level.h)));
+                        }
+                    }
+                }
+                // Independent rectangles: computed on all cores, then stored and uploaded.
                 let done: Vec<Vec<u8>> = rects.par_iter().map(|&r| downsample(above, r)).collect();
-                for (&(x0, y0, x1, y1), pixels) in rects.iter().zip(&done) {
+                for (&(x0, y0, x1, y1), data) in rects.iter().zip(&done) {
                     let row = ((x1 - x0) * 4) as usize;
-                    for (py, src) in (y0..y1).zip(pixels.chunks_exact(row)) {
+                    for (py, src) in (y0..y1).zip(data.chunks_exact(row)) {
                         let i = ((py * level.w + x0) * 4) as usize;
                         level.data[i..i + row].copy_from_slice(src);
                     }
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo { texture: &chunk.texture, mip_level: n as u32 + 1, origin: wgpu::Origin3d { x: x0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
-                        pixels,
-                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some((x1 - x0) * 4), rows_per_image: Some(y1 - y0) },
-                        wgpu::Extent3d { width: x1 - x0, height: y1 - y0, depth_or_array_layers: 1 },
-                    );
+                    write_level(queue, &chunk.texture, n as u32 + 1, (x0, y0, x1, y1), data);
                 }
-                level_blocks = level_blocks.iter().map(|&(bx, by)| (bx / 2, by / 2)).collect();
+                blocks = blocks.iter().map(|&(bx, by)| (bx / 2, by / 2)).collect();
             }
         }
     }
@@ -327,24 +332,68 @@ impl Above<'_> {
 fn downsample(above: Above, (x0, y0, x1, y1): (u32, u32, u32, u32)) -> Vec<u8> {
     let n = 2 * (x1 - x0);
     let (mut top, mut bottom) = (Vec::with_capacity(n as usize), Vec::with_capacity(n as usize));
-    let mut out = Vec::with_capacity(((x1 - x0) * (y1 - y0) * 4) as usize);
-    for py in y0..y1 {
+    let row = (x1 - x0) as usize * 4;
+    let mut out = vec![0u8; row * (y1 - y0) as usize];
+    for (py, dst) in (y0..y1).zip(out.chunks_exact_mut(row)) {
         above.row(2 * py, 2 * x0, n, &mut top);
         above.row(2 * py + 1, 2 * x0, n, &mut bottom);
-        for (t, b) in top.as_chunks::<2>().0.iter().zip(bottom.as_chunks::<2>().0) {
+        for ((d, t), b) in dst.as_chunks_mut::<4>().0.iter_mut().zip(top.as_chunks::<2>().0).zip(bottom.as_chunks::<2>().0) {
             for c in 0..4 {
-                out.push(((t[0][c] as u32 + t[1][c] as u32 + b[0][c] as u32 + b[1][c] as u32 + 2) / 4) as u8);
+                d[c] = ((t[0][c] as u32 + t[1][c] as u32 + b[0][c] as u32 + b[1][c] as u32 + 2) / 4) as u8;
             }
         }
     }
     out
 }
 
+/// Runs of consecutive numbers in `v` (sorted and deduplicated here), as (first, last).
+fn runs(v: &mut Vec<u32>) -> Vec<(u32, u32)> {
+    v.sort_unstable();
+    v.dedup();
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for &x in v.iter() {
+        match out.last_mut() {
+            Some(r) if r.1 + 1 == x => r.1 = x,
+            _ => out.push((x, x)),
+        }
+    }
+    out
+}
+
+/// A rectangle of the projection, premultiplied (what the textures hold).
+fn premultiplied(img: &Rgba8, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+    let row = w as usize * 4;
+    let mut out = vec![0u8; row * h as usize];
+    for (r, dst) in out.chunks_exact_mut(row).enumerate() {
+        let start = ((y as usize + r) * img.width as usize + x as usize) * 4;
+        for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(img.data[start..start + row].as_chunks::<4>().0) {
+            *d = premultiply(*s);
+        }
+    }
+    out
+}
+
+/// Copies `data` (rows of the rectangle x0..x1, y0..y1) into mip level `level`.
+fn write_level(queue: &wgpu::Queue, texture: &wgpu::Texture, level: u32, (x0, y0, x1, y1): (u32, u32, u32, u32), data: &[u8]) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture, mip_level: level, origin: wgpu::Origin3d { x: x0, y: y0, z: 0 }, aspect: wgpu::TextureAspect::All },
+        data,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some((x1 - x0) * 4), rows_per_image: Some(y1 - y0) },
+        wgpu::Extent3d { width: x1 - x0, height: y1 - y0, depth_or_array_layers: 1 },
+    );
+}
+
 /// Straight to premultiplied alpha, rounded (what the display textures hold).
 fn premultiply(p: [u8; 4]) -> [u8; 4] {
-    let a = p[3] as u32;
-    let pm = |c: u8| ((c as u32 * a + 127) / 255) as u8;
-    [pm(p[0]), pm(p[1]), pm(p[2]), p[3]]
+    match p[3] {
+        // What the formula gives for these, without the arithmetic.
+        255 => p,
+        0 => [0; 4],
+        a => {
+            let pm = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
+            [pm(p[0]), pm(p[1]), pm(p[2]), a]
+        }
+    }
 }
 
 fn srgb_to_linear(c: f64) -> f64 {

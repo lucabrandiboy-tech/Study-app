@@ -144,12 +144,26 @@ pub fn composite_band(rows: &mut [u8], width: usize, row: i32, layer: &TiledLaye
 /// Composites the top-left `cols` x `rows` pixels of `tile` over `dst`, whose rows are
 /// `stride` pixels apart.
 pub fn composite_tile(dst: &mut [u8], stride: usize, tile: &Tile, cols: usize, rows: usize, opacity: u8, mode: BlendMode) {
+    let plain = mode == BlendMode::Normal && opacity == 255;
     for ty in 0..rows {
         let src = &tile.0[ty * TILE as usize * 4..][..cols * 4];
         let start = ty * stride * 4;
-        for (d, s) in dst[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
-            if s[3] != 0 || mode != BlendMode::Normal {
-                blend(d, *s, opacity, mode);
+        let pixels = dst[start..start + cols * 4].as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0);
+        if plain {
+            // Normal at full opacity: an opaque pixel replaces what is below (exactly what
+            // "over" gives), a clear one leaves it.
+            for (d, s) in pixels {
+                match s[3] {
+                    0 => {}
+                    255 => *d = *s,
+                    _ => over(d, *s, 255),
+                }
+            }
+        } else {
+            for (d, s) in pixels {
+                if s[3] != 0 || mode != BlendMode::Normal {
+                    blend(d, *s, opacity, mode);
+                }
             }
         }
     }
