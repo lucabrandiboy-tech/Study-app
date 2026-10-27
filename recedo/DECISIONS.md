@@ -203,7 +203,7 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Keyless public sources only, called straight from the browser (CORS), the same ones the Study app uses, plus the Internet Archive and Commons for videos | No account, key or server; nothing to pay or leak. There is no keyless way to search YouTube, so YouTube is by pasted link (the no-cookie player). | Unit checks of every source's answer format; browser test with stand-in answers |
 | Nothing about a search is kept: no address-bar or storage entry, `cache: no-store`, no referrer, the offline worker ignores other sites, no form around the search box | The user asked that searches are not saved. | Browser test reads the address and storage afterwards |
 | Keys typed in the panel never reach the painting's shortcuts; a press on the canvas takes the keyboard back | Otherwise B, E, S... in a search would change tools, and after watching a video the shortcuts would stay dead. | Browser test |
-| The Study app's word filter on pictures and videos | Commons and the Internet Archive have no safe-search switch (Openverse is asked for `mature=false`). | Unit check |
+| No word filter on results (only Openverse's own `mature=false`) | The first version used the Study app's filter and also dropped Commons files whose category list had not arrived (Commons spreads those lists over several answers), which hid most results. Removed at the user's request. | Unit checks |
 
 ## 10. Licences
 
