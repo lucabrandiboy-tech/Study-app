@@ -73,6 +73,8 @@ pub enum Tool {
     Zoom,
     Rotate,
     Measure,
+    /// Draw around part of the selected layer, then scale or move that part.
+    LassoTransform,
 }
 
 /// The groups the full tool list is shown in.
@@ -103,7 +105,7 @@ impl ToolGroup {
 
 impl Tool {
     /// Every tool, group by group.
-    pub const ALL: [Tool; 31] = [
+    pub const ALL: [Tool; 32] = [
         Tool::Brush,
         Tool::Eraser,
         Tool::Spray,
@@ -129,6 +131,7 @@ impl Tool {
         Tool::SelectLasso,
         Tool::MagicWand,
         Tool::Move,
+        Tool::LassoTransform,
         Tool::Crop,
         Tool::Text,
         Tool::Pan,
@@ -138,7 +141,7 @@ impl Tool {
     ];
 
     /// The tools on the side bar until the user picks their own.
-    pub const DEFAULT_BAR: [Tool; 15] = [
+    pub const DEFAULT_BAR: [Tool; 16] = [
         Tool::Brush,
         Tool::Eraser,
         Tool::Eyedropper,
@@ -152,9 +155,15 @@ impl Tool {
         Tool::SelectRect,
         Tool::MagicWand,
         Tool::Move,
+        Tool::LassoTransform,
         Tool::Text,
         Tool::Pan,
     ];
+
+    /// The side bar's standard tools before the lasso transform came (settings still holding
+    /// exactly these get the new standard set).
+    pub const OLD_DEFAULT_BAR: [&'static str; 15] =
+        ["brush", "eraser", "eyedropper", "fill", "gradient", "smudge", "blur", "line", "rectangle", "ellipse", "select_rect", "magic_wand", "move", "text", "pan"];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -184,6 +193,7 @@ impl Tool {
             Tool::SelectLasso => "Lasso select",
             Tool::MagicWand => "Magic wand",
             Tool::Move => "Move",
+            Tool::LassoTransform => "Lasso transform",
             Tool::Crop => "Crop",
             Tool::Text => "Text",
             Tool::Zoom => "Zoom",
@@ -221,6 +231,7 @@ impl Tool {
             Tool::SelectLasso => "select_lasso",
             Tool::MagicWand => "magic_wand",
             Tool::Move => "move",
+            Tool::LassoTransform => "lasso_transform",
             Tool::Crop => "crop",
             Tool::Text => "text",
             Tool::Zoom => "zoom",
@@ -239,7 +250,7 @@ impl Tool {
             Tool::Smudge | Tool::Blur | Tool::Sharpen | Tool::Dodge | Tool::Burn | Tool::Sponge | Tool::Recolour | Tool::Clone | Tool::Push => ToolGroup::Retouch,
             Tool::Fill | Tool::Gradient | Tool::LassoFill | Tool::MagicEraser | Tool::Line | Tool::Rectangle | Tool::Ellipse => ToolGroup::FillAndShapes,
             Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::MagicWand => ToolGroup::Select,
-            Tool::Move | Tool::Crop | Tool::Text => ToolGroup::Arrange,
+            Tool::Move | Tool::LassoTransform | Tool::Crop | Tool::Text => ToolGroup::Arrange,
             Tool::Pan | Tool::Zoom | Tool::Rotate | Tool::Measure => ToolGroup::View,
         }
     }
@@ -272,6 +283,7 @@ impl Tool {
             Tool::SelectLasso => "Draw around what to select (Shift adds, Alt takes away)",
             Tool::MagicWand => "Click to select an area of one colour (Shift adds, Alt takes away)",
             Tool::Move => "Drag the selected pixels, or the whole layer; arrow keys nudge",
+            Tool::LassoTransform => "Draw around part of this layer, then drag a corner to scale it (Shift keeps its shape) or inside to move it; Enter puts it down",
             Tool::Crop => "Drag over the part to keep, then Crop (Enter)",
             Tool::Text => "Click where the text goes, type it, then Place (Ctrl+Enter)",
             Tool::Pan => "Drag to move the view (or hold Space)",
@@ -476,9 +488,52 @@ enum Interaction {
     Lasso { tool: Tool, points: Vec<(f64, f64)> },
     /// The zoom tool held down: dragging zooms; a click without moving zooms a step.
     ZoomTool { anchor: (f64, f64), last_y: f64, moved: f64, out: bool },
+    /// A handle of the lasso transform's box dragged; `from` is the box when the pen went
+    /// down at `start` (canvas pixels).
+    TransformDrag { handle: Handle, start: (f64, f64), from: Rect4 },
     /// The pen is down but nothing happens until it lifts (e.g. a locked layer).
     Ignore,
 }
+
+/// A box in canvas pixels: left, top, right, bottom.
+pub type Rect4 = (f64, f64, f64, f64);
+
+/// What of the lasso transform's box is dragged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Handle {
+    /// A corner: 0 top left, 1 top right, 2 bottom right, 3 bottom left.
+    Corner(u8),
+    /// The middle of a side: 0 top, 1 right, 2 bottom, 3 left.
+    Side(u8),
+    /// Inside: moves it.
+    Inside,
+}
+
+/// Part of a layer lifted by the lasso transform, shown scaled into `rect` until it is put
+/// down (Enter, another tool or command) or cancelled (Escape).
+pub struct Transform {
+    /// The layer it came from (only that one changes).
+    pub layer: usize,
+    /// The painting before, for undo and Escape.
+    before: Box<Document>,
+    /// The layer with the part taken out.
+    rest: TiledLayer,
+    lifted: select::Lifted,
+    /// Where the part was, and where it is now (canvas pixels).
+    pub src: Rect4,
+    pub rect: Rect4,
+    /// The outline drawn round it, where it was drawn.
+    pub outline: Vec<CanvasPoint>,
+    /// Tiles the part covered where it came from, and those the scaled part covers now.
+    origin: HashSet<TileKey>,
+    shown: HashSet<TileKey>,
+    /// The box moved since the pixels were last redone (they are redone once a frame, not
+    /// for every pen sample).
+    pending: bool,
+}
+
+/// How near (screen pixels) the pen must be to a handle to take it.
+pub const HANDLE_REACH: f64 = 12.0;
 
 #[derive(Clone, Debug)]
 enum JobKind {
@@ -550,6 +605,8 @@ pub struct Editor {
     fit_pending: bool,
     /// Goes up whenever pixels change (the layer thumbnails follow it).
     pub pixels_rev: u64,
+    /// The lasso transform's part, while it is being scaled or moved.
+    pub transform: Option<Transform>,
     /// The view just after the painting was fitted to the window, while it is still that
     /// (no pan, zoom or turn since): a new canvas area size fits it again.
     fitted: Option<View>,
@@ -600,6 +657,7 @@ impl Editor {
             refresh_all: true,
             fit_pending: true,
             pixels_rev: 0,
+            transform: None,
             fitted: None,
             jobs: Vec::new(),
             recovered_from: None,
@@ -619,7 +677,8 @@ impl Editor {
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        self.autosaver.has_unsaved_changes()
+        // A lasso transform not yet put down counts once it was scaled or moved.
+        self.autosaver.has_unsaved_changes() || self.transform.as_ref().is_some_and(|t| t.rect != t.src)
     }
 
     pub fn is_busy_saving(&self) -> bool {
@@ -688,6 +747,9 @@ impl Editor {
 
     /// Brings the projection up to date and says what the screen must re-upload.
     pub fn take_refresh(&mut self) -> Refresh {
+        if self.transform.as_ref().is_some_and(|t| t.pending) {
+            self.update_transform();
+        }
         // While a stroke paints one layer, the projection keeps the layers below it combined.
         let stroke_layer = match &self.interaction {
             Interaction::Stroke(s) => Some(s.layer()),
@@ -824,6 +886,15 @@ impl Editor {
             Interaction::Ignore
         } else if tool.is_shape() {
             Interaction::Shape { tool, start: c, end: c }
+        } else if tool == Tool::LassoTransform {
+            match self.transform_handle_at(at) {
+                Some(handle) => Interaction::TransformDrag { handle, start: c, from: self.transform.as_ref().expect("a handle").rect },
+                None => {
+                    // Away from the box: the part goes down, and a new outline starts.
+                    self.commit_transform();
+                    Interaction::Lasso { tool, points: vec![c] }
+                }
+            }
         } else if matches!(tool, Tool::LassoFill | Tool::SelectLasso) {
             Interaction::Lasso { tool, points: vec![c] }
         } else if let Some(kind) = tool.retouch(self.tools.sponge_saturates) {
@@ -960,6 +1031,13 @@ impl Editor {
                 self.view.zoom_by(factor, anchor);
             }
             Interaction::Pick { all_layers } => pick = Some(*all_layers),
+            Interaction::TransformDrag { handle, start, from } => {
+                let rect = drag_box(*handle, *from, *start, canvas, shift);
+                if let Some(t) = &mut self.transform {
+                    t.rect = rect;
+                    t.pending = true;
+                }
+            }
             Interaction::Shape { tool, start, end } => {
                 // Shift straightens; for selections it was the "add" key when the pen went down.
                 *end = if shift && !tool.is_select() && *tool != Tool::Crop { constrain(*tool, *start, canvas) } else { canvas };
@@ -993,6 +1071,7 @@ impl Editor {
             Interaction::Shape { tool, start, end } => self.commit_shape(tool, start, end, now_us),
             Interaction::Lasso { tool, points } => self.commit_lasso(tool, points),
             Interaction::ZoomTool { anchor, moved, out, .. } if moved < 3.0 => self.view.step_zoom(!out, anchor),
+            Interaction::TransformDrag { .. } => self.update_transform(),
             _ => {}
         }
     }
@@ -1165,6 +1244,9 @@ impl Editor {
         if points.len() < 3 {
             return;
         }
+        if tool == Tool::LassoTransform {
+            return self.start_transform(points);
+        }
         let mask = fill::polygons(self.doc.width, self.doc.height, &[points]);
         if tool == Tool::SelectLasso {
             return self.select_mask(mask);
@@ -1178,6 +1260,110 @@ impl Editor {
         if self.finish_paint("Lasso fill", before) {
             self.remember_color();
         }
+    }
+
+    // ----- lasso transform --------------------------------------------------------------
+
+    /// A finished outline with the lasso transform: lifts what it surrounds on the selected
+    /// layer, to be scaled or moved.
+    fn start_transform(&mut self, points: Vec<CanvasPoint>) {
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing to transform."));
+            return;
+        }
+        let (w, h) = (self.doc.width, self.doc.height);
+        let mask = fill::polygons(w, h, std::slice::from_ref(&points));
+        let a = self.active;
+        let (rest, lifted) = select::lift(&self.doc.layers[a].pixels, &mask);
+        if lifted.tile_count() == 0 || mask.is_empty() {
+            let name = self.doc.layers[a].name.clone();
+            self.notice(NoticeKind::Info, format!("Nothing there to transform: draw around some paint on layer \"{name}\"."));
+            return;
+        }
+        let (x0, y0, x1, y1) = mask.bounds;
+        let src = (x0 as f64, y0 as f64, x1 as f64, y1 as f64);
+        let origin: HashSet<TileKey> = lifted.tile_keys().collect();
+        let lifted = select::Lifted::new(&lifted, (x0 as i32, y0 as i32, x1 as i32, y1 as i32));
+        self.transform = Some(Transform { layer: a, before: Box::new(self.doc.clone()), rest, lifted, src, rect: src, outline: points, shown: origin.clone(), origin, pending: false });
+        self.update_transform();
+        self.notice(NoticeKind::Info, "Drag a corner or side to scale (Shift keeps the shape), inside to move. Enter puts it down, Escape cancels.");
+    }
+
+    /// Shows the part scaled into its box on its layer.
+    fn update_transform(&mut self) {
+        let size = (self.doc.width, self.doc.height);
+        let Some(t) = &mut self.transform else { return };
+        t.pending = false;
+        let floating = t.lifted.scaled(t.rect, size);
+        let mut pixels = t.rest.clone();
+        select::put_down(&mut pixels, &floating);
+        let now: HashSet<TileKey> = floating.tile_keys().collect();
+        // Where it was shown, and where it is now (the first time: where it came from).
+        let dirty: Vec<TileKey> = t.shown.union(&now).copied().collect();
+        t.shown = now;
+        let layer = t.layer;
+        if let Some(l) = self.doc.layers.get_mut(layer) {
+            l.pixels = pixels;
+        }
+        self.mark_tiles(dirty);
+    }
+
+    /// Puts the lasso transform's part down where it is shown: one undo step. Unchanged, the
+    /// layer is left exactly as it was.
+    pub fn commit_transform(&mut self) {
+        let Some(t) = self.transform.take() else { return };
+        if t.rect == t.src {
+            self.restore_layer(&t);
+            return;
+        }
+        self.history.record("Transform", &t.before);
+        self.last_edit = None;
+        self.autosaver.changed(Instant::now());
+    }
+
+    /// Gives the lasso transform's part `percent` of its original width and height, about the
+    /// middle of its box.
+    pub fn scale_transform(&mut self, percent: f64) {
+        let Some(t) = &mut self.transform else { return };
+        let k = (percent / 100.0).max(0.01);
+        let (cx, cy) = ((t.rect.0 + t.rect.2) / 2.0, (t.rect.1 + t.rect.3) / 2.0);
+        let (w, h) = (((t.src.2 - t.src.0) * k).max(1.0), ((t.src.3 - t.src.1) * k).max(1.0));
+        t.rect = (cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0);
+        self.update_transform();
+    }
+
+    /// Escape: the part goes back as it was.
+    pub fn cancel_transform(&mut self) {
+        if let Some(t) = self.transform.take() {
+            self.restore_layer(&t);
+        }
+    }
+
+    fn restore_layer(&mut self, t: &Transform) {
+        if let (Some(l), Some(b)) = (self.doc.layers.get_mut(t.layer), t.before.layers.get(t.layer)) {
+            l.pixels = b.pixels.clone();
+        }
+        let tiles: Vec<TileKey> = t.shown.union(&t.origin).copied().collect();
+        self.mark_tiles(tiles);
+    }
+
+    /// The handle of the lasso transform's box under a screen point, if any.
+    fn transform_handle_at(&self, at: (f64, f64)) -> Option<Handle> {
+        let t = self.transform.as_ref()?;
+        let (x0, y0, x1, y1) = t.rect;
+        let near = |c: (f64, f64)| {
+            let s = self.view.to_screen(c.0, c.1);
+            (s.0 - at.0).hypot(s.1 - at.1) <= HANDLE_REACH
+        };
+        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        if let Some(i) = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().position(near) {
+            return Some(Handle::Corner(i as u8));
+        }
+        if let Some(i) = [(mx, y0), (x1, my), (mx, y1), (x0, my)].into_iter().position(near) {
+            return Some(Handle::Side(i as u8));
+        }
+        let c = self.view.to_canvas(at.0, at.1);
+        (c.0 >= x0 && c.0 <= x1 && c.1 >= y0 && c.1 <= y1).then_some(Handle::Inside)
     }
 
     // ----- selection ------------------------------------------------------------------------
@@ -1552,10 +1738,13 @@ impl Editor {
 
     // ----- undo -----------------------------------------------------------------------------
 
+    /// Ends what the pen is doing, and puts down a lasso transform's part: commands and
+    /// undo act on the painting as it shows.
     fn finish_interaction(&mut self) {
         if self.owner.is_some() {
             self.release(recedo_tablet::clock::now_us());
         }
+        self.commit_transform();
     }
 
     pub fn undo(&mut self) {
@@ -1688,6 +1877,9 @@ impl Editor {
 
     pub fn select_layer(&mut self, index: usize) {
         if index < self.doc.layers.len() {
+            if index != self.active {
+                self.commit_transform();
+            }
             self.active = index;
             self.last_edit = None;
         }
@@ -1760,6 +1952,7 @@ impl Editor {
     // ----- files ----------------------------------------------------------------------------
 
     fn replace_document(&mut self, doc: Document) {
+        self.transform = None;
         self.finish_interaction();
         self.remove_recovery_copies();
         self.doc = doc;
@@ -1988,6 +2181,49 @@ impl Editor {
 pub type CanvasPoint = (f64, f64);
 
 /// Shift while dragging a shape: lines and gradients at multiples of 15°, squares and circles.
+/// The lasso transform's box after dragging `handle` from `start` to `at` (canvas pixels).
+/// The opposite corner or side stays put; Shift keeps the box's proportions at a corner. The
+/// box never gets smaller than a pixel and does not turn inside out.
+fn drag_box(handle: Handle, from: Rect4, start: (f64, f64), at: (f64, f64), shift: bool) -> Rect4 {
+    let (x0, y0, x1, y1) = from;
+    let (dx, dy) = (at.0 - start.0, at.1 - start.1);
+    const MIN: f64 = 1.0;
+    match handle {
+        Handle::Inside => (x0 + dx, y0 + dy, x1 + dx, y1 + dy),
+        Handle::Side(i) => match i {
+            0 => (x0, (y0 + dy).min(y1 - MIN), x1, y1),
+            1 => (x0, y0, (x1 + dx).max(x0 + MIN), y1),
+            2 => (x0, y0, x1, (y1 + dy).max(y0 + MIN)),
+            _ => ((x0 + dx).min(x1 - MIN), y0, x1, y1),
+        },
+        Handle::Corner(i) => {
+            // The fixed corner, and which way the dragged one lies from it.
+            let (fx, fy, sx, sy) = match i {
+                0 => (x1, y1, -1.0, -1.0),
+                1 => (x0, y1, 1.0, -1.0),
+                2 => (x0, y0, 1.0, 1.0),
+                _ => (x1, y0, -1.0, 1.0),
+            };
+            let (w0, h0) = (x1 - x0, y1 - y0);
+            let corner = |i: u8| match i {
+                0 => (x0, y0),
+                1 => (x1, y0),
+                2 => (x1, y1),
+                _ => (x0, y1),
+            };
+            let c = corner(i);
+            let (mut w, mut h) = (((c.0 + dx - fx) * sx).max(MIN), ((c.1 + dy - fy) * sy).max(MIN));
+            if shift {
+                let k = (w / w0).max(h / h0);
+                (w, h) = ((w0 * k).max(MIN), (h0 * k).max(MIN));
+            }
+            let (ax, bx) = if sx > 0.0 { (fx, fx + w) } else { (fx - w, fx) };
+            let (ay, by) = if sy > 0.0 { (fy, fy + h) } else { (fy - h, fy) };
+            (ax, ay, bx, by)
+        }
+    }
+}
+
 fn constrain(tool: Tool, a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     match tool {

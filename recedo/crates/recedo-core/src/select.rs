@@ -312,6 +312,178 @@ fn keep_inside(layer: &mut TiledLayer, w: u32, h: u32) {
     layer.compact();
 }
 
+/// Pixels lifted out of a layer to be scaled: a straight-alpha copy of the area
+/// (`x0`, `y0`, `w` × `h`) they came from.
+#[derive(Clone, Debug)]
+pub struct Lifted {
+    pub x0: i32,
+    pub y0: i32,
+    pub w: u32,
+    pub h: u32,
+    px: Vec<[u8; 4]>,
+}
+
+impl Lifted {
+    /// Copies the area `(x0, y0, x1, y1)` (exclusive) of `layer`.
+    pub fn new(layer: &TiledLayer, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Lifted {
+        let (w, h) = ((x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32);
+        let mut px = Vec::with_capacity((w * h) as usize);
+        for y in y0..y0 + h as i32 {
+            for x in x0..x0 + w as i32 {
+                px.push(layer.pixel(x, y));
+            }
+        }
+        Lifted { x0, y0, w, h, px }
+    }
+
+    /// The pixel at (x, y) of the copy, premultiplied, 0..=1.
+    fn premul(&self, x: usize, y: usize) -> [f32; 4] {
+        let [r, g, b, a] = self.px[y * self.w as usize + x];
+        let a = a as f32 / 255.0;
+        [r as f32 / 255.0 * a, g as f32 / 255.0 * a, b as f32 / 255.0 * a, a]
+    }
+
+    /// The pixels scaled into `dst` (x0, y0, x1, y1 in canvas pixels), as a layer holding
+    /// only them, cut to a `width` × `height` canvas. Enlarging blends neighbours (bilinear);
+    /// shrinking averages everything each new pixel covers, so thin lines stay; past the
+    /// copy's edge its edge pixels continue (the box ends the picture), and a pixel the box
+    /// only partly covers gets that share. At the original size and place the copy comes back
+    /// unchanged.
+    ///
+    /// Done in two passes (across, then down) with each new column's and row's weights
+    /// worked out once, a band of tile rows at a time.
+    pub fn scaled(&self, dst: (f64, f64, f64, f64), (width, height): (u32, u32)) -> TiledLayer {
+        let mut out = TiledLayer::new();
+        let (dx0, dy0, dx1, dy1) = (dst.0.min(dst.2), dst.1.min(dst.3), dst.0.max(dst.2), dst.1.max(dst.3));
+        if dx1 - dx0 < 0.5 || dy1 - dy0 < 0.5 {
+            return out;
+        }
+        let px0 = (dx0.floor() as i64).max(0);
+        let py0 = (dy0.floor() as i64).max(0);
+        let px1 = (dx1.ceil() as i64).min(width as i64);
+        let py1 = (dy1.ceil() as i64).min(height as i64);
+        if px0 >= px1 || py0 >= py1 {
+            return out;
+        }
+        let cols = Taps::new(px0, px1, dx0, dx1, self.w);
+        let rows = Taps::new(py0, py1, dy0, dy1, self.h);
+        let n = (px1 - px0) as usize;
+        let t = TILE as i64;
+        // One band of tile rows at a time: the rows of the copy it needs, scaled across.
+        let mut band_y = py0.div_euclid(t) * t;
+        let mut across: Vec<[f32; 4]> = Vec::new();
+        let mut line: Vec<[f32; 4]> = Vec::with_capacity(self.w as usize);
+        while band_y < py1 {
+            let (y0, y1) = (band_y.max(py0), (band_y + t).min(py1));
+            let (lo, hi) = rows.span(y0 - py0, y1 - py0);
+            across.clear();
+            across.resize((hi - lo + 1) * n, [0.0; 4]);
+            for sy in lo..=hi {
+                // The copy's row, premultiplied once.
+                line.clear();
+                line.extend((0..self.w as usize).map(|sx| self.premul(sx, sy)));
+                let row = &mut across[(sy - lo) * n..][..n];
+                for (i, out_px) in row.iter_mut().enumerate() {
+                    let mut acc = [0.0f32; 4];
+                    for &(sx, w) in cols.of(i) {
+                        let p = line[sx];
+                        for c in 0..4 {
+                            acc[c] += p[c] * w;
+                        }
+                    }
+                    *out_px = acc;
+                }
+            }
+            // Down, a tile at a time.
+            let mut tx = px0.div_euclid(t);
+            while tx * t < px1 {
+                let (x0, x1) = ((tx * t).max(px0), ((tx + 1) * t).min(px1));
+                let mut tile = Box::new([0u8; crate::tiles::TILE_BYTES]);
+                let mut any = false;
+                for y in y0..y1 {
+                    let taps = rows.of((y - py0) as usize);
+                    for x in x0..x1 {
+                        let i = (x - px0) as usize;
+                        let mut acc = [0.0f32; 4];
+                        for &(sy, w) in taps {
+                            let p = across[(sy - lo) * n + i];
+                            for c in 0..4 {
+                                acc[c] += p[c] * w;
+                            }
+                        }
+                        if acc[3] * 255.0 < 0.5 {
+                            continue;
+                        }
+                        // Rounded by adding a half (the float-to-int cast saturates); f32
+                        // round() is a library call on plain x86-64, four per pixel.
+                        let q = |v: f32| (v * 255.0 + 0.5) as u8;
+                        let inv = 1.0 / acc[3];
+                        let at = (((y - band_y) * t + (x - tx * t)) * 4) as usize;
+                        tile[at..at + 4].copy_from_slice(&[q(acc[0] * inv), q(acc[1] * inv), q(acc[2] * inv), q(acc[3])]);
+                        any = true;
+                    }
+                }
+                if any {
+                    out.put_tile((tx as i32, (band_y / t) as i32), Some(std::sync::Arc::new(crate::tiles::Tile(tile))));
+                }
+                tx += 1;
+            }
+            band_y += t;
+        }
+        out
+    }
+}
+
+/// For each new column (or row) of a scaled copy, the copy's columns it takes from and how
+/// much of each: bilinear samples, several per new pixel when shrinking (up to 16), weighted
+/// by how much of the new pixel the box covers.
+struct Taps {
+    start: Vec<usize>,
+    taps: Vec<(usize, f32)>,
+}
+
+impl Taps {
+    fn new(p0: i64, p1: i64, d0: f64, d1: f64, src: u32) -> Taps {
+        let scale = (d1 - d0) / src as f64;
+        let k = (1.0 / scale).ceil().clamp(1.0, 16.0) as usize;
+        let last = src as i64 - 1;
+        let (mut start, mut taps) = (Vec::new(), Vec::new());
+        for p in p0..p1 {
+            start.push(taps.len());
+            let cover = ((p + 1) as f64).min(d1) - (p as f64).max(d0);
+            let first = taps.len();
+            for i in 0..k {
+                let u = ((p as f64 + (i as f64 + 0.5) / k as f64) - d0) / scale - 0.5;
+                let x = u.floor();
+                let f = u - x;
+                for (s, w) in [(x as i64, 1.0 - f), (x as i64 + 1, f)] {
+                    if w <= 0.0 {
+                        continue;
+                    }
+                    let s = s.clamp(0, last) as usize;
+                    let w = (w * cover / k as f64) as f32;
+                    match taps[first..].iter_mut().find(|t: &&mut (usize, f32)| t.0 == s) {
+                        Some(t) => t.1 += w,
+                        None => taps.push((s, w)),
+                    }
+                }
+            }
+        }
+        start.push(taps.len());
+        Taps { start, taps }
+    }
+
+    fn of(&self, i: usize) -> &[(usize, f32)] {
+        &self.taps[self.start[i]..self.start[i + 1]]
+    }
+
+    /// The lowest and highest source index the new ones `a..b` use.
+    fn span(&self, a: i64, b: i64) -> (usize, usize) {
+        let all = &self.taps[self.start[a as usize]..self.start[b as usize]];
+        (all.iter().map(|t| t.0).min().unwrap_or(0), all.iter().map(|t| t.0).max().unwrap_or(0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,5 +643,55 @@ mod tests {
         assert_eq!(c.layers[0].pixels.pixel(10, 10), [255, 255, 255, 255], "the background stays filled");
         assert_eq!(c.flatten().pixel(30, 20), [0, 0, 255, 255]);
         assert_eq!(c.flatten().pixel(30, 21), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn lifted_pixels_scale_up_down_and_back() {
+        let mut l = TiledLayer::new();
+        // A 4 × 2 block: red left half, half-transparent blue right half, at (10, 20).
+        for y in 20..22 {
+            for x in 10..14 {
+                l.set_pixel(x, y, if x < 12 { [255, 0, 0, 255] } else { [0, 0, 255, 128] });
+            }
+        }
+        let lifted = Lifted::new(&l, (10, 20, 14, 22));
+        // Same size, same place: exactly the same pixels.
+        let same = lifted.scaled((10.0, 20.0, 14.0, 22.0), (100, 100));
+        for y in 18..24 {
+            for x in 8..16 {
+                assert_eq!(same.pixel(x, y), l.pixel(x, y), "({x}, {y})");
+            }
+        }
+        // Twice the size from (40, 40): 8 × 4, the colours where they were.
+        let big = lifted.scaled((40.0, 40.0, 48.0, 44.0), (100, 100));
+        assert_eq!(big.pixel(40, 40), [255, 0, 0, 255]);
+        let right = big.pixel(47, 43);
+        assert_eq!((right[2], right[3]), (255, 128), "{right:?}");
+        assert_eq!(big.pixel(48, 40)[3], 0, "nothing past the new edge");
+        assert_eq!(big.pixel(39, 40)[3], 0);
+        // An edge half way through a pixel: that pixel half covered (blue at 128 → 64).
+        let part = lifted.scaled((40.0, 40.0, 47.5, 44.0), (100, 100));
+        assert!((62..=66).contains(&part.pixel(47, 42)[3]), "{:?}", part.pixel(47, 42));
+        // Half the size: 2 × 1, each pixel the average of what it covers.
+        let small = lifted.scaled((0.0, 0.0, 2.0, 1.0), (100, 100));
+        assert_eq!(small.pixel(0, 0), [255, 0, 0, 255]);
+        assert_eq!(small.pixel(1, 0)[2..], [255, 128]);
+        assert_eq!(small.pixel(2, 0)[3], 0);
+        // Cut to the canvas.
+        let off = lifted.scaled((98.0, 98.0, 106.0, 102.0), (100, 100));
+        assert!(off.pixel(99, 99)[3] > 0 && off.pixel(100, 99)[3] == 0);
+    }
+
+    #[test]
+    fn a_thin_line_survives_shrinking() {
+        let mut l = TiledLayer::new();
+        for x in 0..100 {
+            l.set_pixel(x, 50, [0, 0, 0, 255]);
+        }
+        let lifted = Lifted::new(&l, (0, 0, 100, 100));
+        let small = lifted.scaled((0.0, 0.0, 25.0, 25.0), (100, 100));
+        // A quarter the size: the 1 px line covers a quarter of a pixel row.
+        let row: Vec<u8> = (0..25).map(|x| small.pixel(x, 12)[3]).collect();
+        assert!(row.iter().all(|&a| (55..=72).contains(&a)), "{row:?}");
     }
 }

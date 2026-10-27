@@ -219,6 +219,9 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Stroke samples are painted by the real brush engine and kept as textures until the brush or colour changes | A drawn picture of a stroke would not show what the brush does (taper, softness, build-up). | Engine tests of the samples |
 | Layer thumbnails average every painted pixel (every second one past 2 megapixels), only from the tiles that exist, at most every 0.4 s while painting, and ask for a redraw when they wait | Sampling a few points missed thin lines; redoing every frame while painting is too slow at 4K; without the redraw request the last update could be skipped until the mouse moved. | Engine test; UI test (fails without the request) |
 | A second colour, swapped with X | Clip Studio shows two colours; X is Krita's key for the same. | UI and browser tests |
+| The lasso transform's part floats until something else happens: Enter, another tool, any command (undo, save, another layer) puts it down as one undo step | Clip Studio and Krita work this way; tying it to the editor's "finish what the pen is doing" step means no command can act on a half-done transform, and Ctrl+Z right after scaling undoes the scaling. | Editor and UI tests |
+| Scaling resamples in two passes (across, then down) with each new column's and row's weights worked once: bilinear when enlarging, an average of up to 16 samples per axis when shrinking, edge pixels continued past the copy's edge and partly covered pixels weighted | Bilinear alone drops thin lines when shrinking; the first version, sampling in 2-D for every new pixel and writing through the tile map pixel by pixel, took 398 ms for a 1500×1000 part at 1.5×; this one 91 ms. | Engine tests; timing |
+| While dragging, the part's pixels are redone once per screen frame, not per pen sample | A tablet sends up to 200 samples a second; the box itself follows every one. | Editor test |
 
 ## 11. Licences
 

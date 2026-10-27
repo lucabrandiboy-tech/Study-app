@@ -682,7 +682,7 @@ fn paint_rect(e: &mut Editor, x0: i32, y0: i32, x1: i32, y1: i32, f: impl Fn(i32
 
 #[test]
 fn the_tool_list_is_complete_and_consistent() {
-    assert_eq!(Tool::ALL.len(), 31);
+    assert_eq!(Tool::ALL.len(), 32);
     let names: HashSet<&str> = Tool::ALL.iter().map(|t| t.name()).collect();
     assert_eq!(names.len(), Tool::ALL.len(), "names are distinct");
     let keys: Vec<&str> = Tool::ALL.iter().filter_map(|t| t.key()).collect();
@@ -700,9 +700,9 @@ fn the_tool_list_is_complete_and_consistent() {
         }
     }
     assert!(Tool::DEFAULT_BAR.iter().all(|t| Tool::ALL.contains(t)));
-    // 22 tools more than the 9 there were.
+    // 23 tools more than the 9 there were (22, then the lasso transform).
     let old = [Tool::Brush, Tool::Eraser, Tool::Eyedropper, Tool::Pan, Tool::Fill, Tool::Line, Tool::Rectangle, Tool::Ellipse, Tool::Gradient];
-    assert_eq!(Tool::ALL.iter().filter(|t| !old.contains(t)).count(), 22);
+    assert_eq!(Tool::ALL.iter().filter(|t| !old.contains(t)).count(), 23);
 }
 
 #[test]
@@ -1065,4 +1065,127 @@ fn selection_to_a_new_layer() {
     e.selection_to_layer(true);
     assert_eq!(e.doc.layers[e.active - 1].pixels.pixel(30, 30)[3], 0, "cut: gone below");
     assert_eq!(steps(&e), vec!["Select", "Copy to new layer", "Cut to new layer"]);
+}
+
+/// Draws a closed freehand outline through `points` (screen pixels) with the current tool.
+fn outline(e: &mut Editor, points: &[(f64, f64)], mods: Modifiers) {
+    for (i, &(x, y)) in points.iter().enumerate() {
+        e.pen(&pt(i as u64, x, y, true), true, mods);
+    }
+    let &(x, y) = points.last().unwrap();
+    e.pen(&pt(points.len() as u64, x, y, false), true, mods);
+}
+
+/// Drags from `a` to `b` (screen pixels) in ten steps.
+fn drag_with_mods(e: &mut Editor, a: (f64, f64), b: (f64, f64), mods: Modifiers) {
+    for i in 0..=10 {
+        let t = i as f64 / 10.0;
+        e.pen(&pt(100 + i, a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, true), true, mods);
+    }
+    e.pen(&pt(120, b.0, b.1, false), true, mods);
+}
+
+#[test]
+fn the_lasso_transform_scales_what_was_drawn_round_on_the_selected_layer_only() {
+    let mut e = editor();
+    let a = e.active;
+    // A red 40 × 40 square on Layer 1 at (100, 100); a blue one on the background there too.
+    for y in 100..140 {
+        for x in 100..140 {
+            e.doc.layers[a].pixels.set_pixel(x, y, [255, 0, 0, 255]);
+            e.doc.layers[0].pixels.set_pixel(x + 60, y, [0, 0, 255, 255]);
+        }
+    }
+    let background = e.doc.layers[0].pixels.clone();
+    let original = e.doc.layers[a].pixels.clone();
+    e.tool = Tool::LassoTransform;
+    // Round the red square only (not the blue one at 160..200).
+    outline(&mut e, &[(90.0, 90.0), (150.0, 90.0), (150.0, 150.0), (90.0, 150.0), (90.0, 92.0)], Modifiers::default());
+    let t = e.transform.as_ref().expect("lifted");
+    assert_eq!(t.layer, a);
+    let src = t.src;
+    assert!(src.0 <= 100.0 && src.2 >= 140.0 && src.2 <= 152.0, "{src:?}");
+    // Nothing changed yet.
+    assert_eq!(e.doc.layers[a].pixels.pixel(120, 120), [255, 0, 0, 255]);
+    // Drag the bottom-right corner so the box is twice as wide and tall.
+    let (w, h) = (src.2 - src.0, src.3 - src.1);
+    drag_with_mods(&mut e, (src.2, src.3), (src.0 + 2.0 * w, src.1 + 2.0 * h), Modifiers::default());
+    let r = e.transform.as_ref().unwrap().rect;
+    assert!((r.2 - r.0 - 2.0 * w).abs() < 0.01 && (r.3 - r.1 - 2.0 * h).abs() < 0.01, "{r:?}");
+    assert!(!e.transform.as_ref().unwrap().pending, "the pixels are redone when the pen lifts");
+    // The square is twice the size now: from 100 + (100 - x0) to ... on the layer.
+    let at = |c: f64, x0: f64| x0 + (c - x0) * 2.0;
+    let (x0, y0) = (src.0, src.1);
+    let px = |e: &Editor, x: f64, y: f64| e.doc.layers[a].pixels.pixel(x as i32, y as i32);
+    assert_eq!(px(&e, at(138.0, x0), at(138.0, y0)), [255, 0, 0, 255], "inside the bigger square");
+    assert_eq!(px(&e, at(142.0, x0), at(142.0, y0))[3], 0, "past it");
+    assert_eq!(e.doc.layers[0].pixels, background, "the other layer is untouched");
+    assert!(e.history.entries().0.is_empty(), "not an undo step until it is put down");
+    assert!(e.has_unsaved_changes(), "but an unsaved change (closing asks first)");
+    // Enter (here: put down): one undo step; undo brings the square back as it was.
+    e.commit_transform();
+    assert!(e.transform.is_none());
+    assert_eq!(e.history.entries().0, vec!["Transform"]);
+    e.undo();
+    assert_eq!(e.doc.layers[a].pixels, original, "undo: as before");
+    // Escape puts it back exactly, with no undo step.
+    outline(&mut e, &[(90.0, 90.0), (150.0, 90.0), (150.0, 150.0), (90.0, 150.0), (90.0, 92.0)], Modifiers::default());
+    let src = e.transform.as_ref().unwrap().src;
+    drag_with_mods(&mut e, ((src.0 + src.2) / 2.0, (src.1 + src.3) / 2.0), ((src.0 + src.2) / 2.0 + 100.0, (src.1 + src.3) / 2.0), Modifiers::default());
+    assert_eq!(e.doc.layers[a].pixels.pixel(120, 120)[3], 0, "moved away");
+    e.cancel_transform();
+    assert_eq!(e.doc.layers[a].pixels, original);
+    assert_eq!(e.history.entries().1, 0);
+    // While the pen is still down the box follows it at once; the pixels are redone once
+    // a frame (when the screen asks for the picture).
+    outline(&mut e, &[(90.0, 90.0), (150.0, 90.0), (150.0, 150.0), (90.0, 150.0), (90.0, 92.0)], Modifiers::default());
+    let src = e.transform.as_ref().unwrap().src;
+    let mid = ((src.0 + src.2) / 2.0, (src.1 + src.3) / 2.0);
+    e.pen(&pt(200, mid.0, mid.1, true), true, Modifiers::default());
+    e.pen(&pt(201, mid.0 + 150.0, mid.1, true), true, Modifiers::default());
+    assert!(e.transform.as_ref().unwrap().pending);
+    assert_eq!(e.doc.layers[a].pixels.pixel(120, 120), [255, 0, 0, 255], "not redone yet");
+    e.take_refresh();
+    assert!(!e.transform.as_ref().unwrap().pending);
+    assert_eq!(e.doc.layers[a].pixels.pixel(120, 120)[3], 0, "redone for the frame");
+    assert_eq!(e.doc.layers[a].pixels.pixel(270, 120), [255, 0, 0, 255]);
+    e.pen(&pt(202, mid.0 + 150.0, mid.1, false), true, Modifiers::default());
+    e.cancel_transform();
+    // Shift at a corner keeps the proportions.
+    outline(&mut e, &[(90.0, 90.0), (150.0, 90.0), (150.0, 150.0), (90.0, 150.0), (90.0, 92.0)], Modifiers::default());
+    let src = e.transform.as_ref().unwrap().src;
+    let shift = Modifiers { shift: true, ..Modifiers::default() };
+    drag_with_mods(&mut e, (src.2, src.3), (src.2 + 60.0, src.3 + 10.0), shift);
+    let r = e.transform.as_ref().unwrap().rect;
+    let (k1, k2) = ((r.2 - r.0) / (src.2 - src.0), (r.3 - r.1) / (src.3 - src.1));
+    assert!((k1 - k2).abs() < 1e-9 && k1 > 1.5, "{k1} {k2}");
+    // A command puts it down first (here: undo, which then takes it back).
+    e.undo();
+    assert!(e.transform.is_none());
+    assert_eq!(e.doc.layers[a].pixels, original);
+    // Drawn round nothing: a message, nothing lifted.
+    outline(&mut e, &[(300.0, 200.0), (380.0, 200.0), (380.0, 280.0), (300.0, 280.0)], Modifiers::default());
+    assert!(e.transform.is_none());
+    assert!(e.notices.iter().any(|n| n.text.starts_with("Nothing there to transform")), "{:?}", e.notices);
+    // A locked layer is refused.
+    e.set_layer_locked(a, true);
+    outline(&mut e, &[(90.0, 90.0), (150.0, 90.0), (150.0, 150.0), (90.0, 150.0)], Modifiers::default());
+    assert!(e.transform.is_none());
+    assert!(e.notices.iter().any(|n| n.text.contains("locked")));
+}
+
+#[test]
+fn the_transform_box_drags_by_its_corners_sides_and_inside() {
+    let from = (10.0, 20.0, 50.0, 40.0);
+    // Inside: moved.
+    assert_eq!(drag_box(Handle::Inside, from, (30.0, 30.0), (35.0, 25.0), false), (15.0, 15.0, 55.0, 35.0));
+    // Right side: only the width.
+    assert_eq!(drag_box(Handle::Side(1), from, (50.0, 30.0), (70.0, 99.0), false), (10.0, 20.0, 70.0, 40.0));
+    // Top-left corner: the bottom-right stays.
+    assert_eq!(drag_box(Handle::Corner(0), from, (10.0, 20.0), (0.0, 10.0), false), (0.0, 10.0, 50.0, 40.0));
+    // Past the opposite corner: a pixel wide at least, never inside out.
+    let r = drag_box(Handle::Corner(2), from, (50.0, 40.0), (0.0, 0.0), false);
+    assert_eq!(r, (10.0, 20.0, 11.0, 21.0));
+    // Shift: proportions kept (40 × 20 → 80 × 40).
+    assert_eq!(drag_box(Handle::Corner(2), from, (50.0, 40.0), (90.0, 45.0), true), (10.0, 20.0, 90.0, 60.0));
 }

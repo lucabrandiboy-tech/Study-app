@@ -378,6 +378,10 @@ impl AppUi {
             }
         }
         self.writing = ed.text_edit.is_some();
+        // Another tool puts the lasso transform's part down.
+        if ed.transform.is_some() && ed.tool != Tool::LassoTransform {
+            ed.commit_transform();
+        }
         self.last_tool = ed.tool;
         FrameOutput { canvas_rect, requests }
     }
@@ -432,6 +436,7 @@ impl AppUi {
         }
         if hit(none, Key::Enter) {
             ed.apply_crop();
+            ed.commit_transform();
         }
         if hit(none, Key::X) {
             ed.swap_colors();
@@ -439,6 +444,7 @@ impl AppUi {
         if hit(none, Key::Escape) {
             ed.cancel_crop();
             ed.cancel_text();
+            ed.cancel_transform();
             if self.canvas_only {
                 self.set_canvas_only(false, requests);
             }
@@ -1316,6 +1322,29 @@ impl AppUi {
             }
             light.push(egui::Shape::line_segment([to(points[points.len() - 1]), to(points[0])], Stroke::new(1.0, Color32::from_white_alpha(110))));
         }
+        // The lasso transform: the outline drawn, scaled with the part, its box and handles.
+        if let Some(t) = &ed.transform {
+            let (s, r) = (t.src, t.rect);
+            let map = |p: (f64, f64)| {
+                let u = if s.2 > s.0 { (p.0 - s.0) / (s.2 - s.0) } else { 0.0 };
+                let v = if s.3 > s.1 { (p.1 - s.1) / (s.3 - s.1) } else { 0.0 };
+                to((r.0 + u * (r.2 - r.0), r.1 + v * (r.3 - r.1)))
+            };
+            let n = t.outline.len();
+            for i in 0..n {
+                light.push(egui::Shape::line_segment([map(t.outline[i]), map(t.outline[(i + 1) % n])], Stroke::new(1.0, Color32::from_white_alpha(140))));
+            }
+            let c = [to((r.0, r.1)), to((r.2, r.1)), to((r.2, r.3)), to((r.0, r.3))];
+            for i in 0..4 {
+                ants(&mut dark, &mut light, c[i], c[(i + 1) % 4]);
+            }
+            let (mx, my) = ((r.0 + r.2) / 2.0, (r.1 + r.3) / 2.0);
+            for h in c.into_iter().chain([to((mx, r.1)), to((r.2, my)), to((mx, r.3)), to((r.0, my))]) {
+                let b = egui::Rect::from_center_size(h, vec2(8.0, 8.0));
+                light.push(egui::Shape::rect_filled(b, 1.0, Color32::WHITE));
+                light.push(egui::Shape::rect_stroke(b, 1.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Outside));
+            }
+        }
         // The crop rectangle, and the rest of the canvas dimmed.
         let crop = match ed.shape_preview() {
             Some((Tool::Crop, a, b)) => Some((a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1))),
@@ -1578,10 +1607,11 @@ impl AppUi {
                             ui.label(text);
                         };
                         tip(ui, "Draw", "Paint with the pen or mouse. [ and ] change the brush size, E switches to the eraser, Ctrl+Z undoes. Pressing harder paints thicker.");
-                        tip(ui, "Tools", "The icons on the far left are your tools (point at one for its name and key). The grid button at the top lists all 31: click one to use it, tick \"On bar\" to keep it there. Sub tool shows the brushes (or the tools of the same kind), Tool property their settings.");
+                        tip(ui, "Tools", "The icons on the far left are your tools (point at one for its name and key). The grid button at the top lists all 32: click one to use it, tick \"On bar\" to keep it there. Sub tool shows the brushes (or the tools of the same kind), Tool property their settings.");
                         tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it. G hides everything but the painting (G or Escape brings it back).");
                         tip(ui, "Layers and colour", "The colour wheel is on the left: the ring picks the colour, the square how light and strong it is; X swaps it with the second colour. Layers are on the right: the Opacity slider there makes the selected layer see-through. Ctrl+click on the painting picks a colour.");
                         tip(ui, "Selections", "Box select (R), the magic wand (W) and the others keep painting inside the selection. The Select menu has the rest.");
+                        tip(ui, "Scaling part of a layer", "The lasso transform: draw round what to change, then drag a corner to make it bigger or smaller (Shift keeps its shape), or drag inside to move it. Enter puts it down, Escape cancels.");
                         if self.web {
                             tip(ui, "Reference", "\"Reference\" in the toolbar opens a box on the right to search pictures, videos and articles, or play a YouTube link, while you draw.");
                             tip(ui, "Saving", "File > Save as… downloads a .kra file (Krita opens it too); File > Export as PNG or JPEG for a picture. Your painting is also kept in this browser, so it comes back if the tab closes.");
@@ -1910,6 +1940,33 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
         Tool::Gradient => {
             ui.strong("Gradient");
             ui.weak("Drag from where the colour is full to where it fades out. Hold Shift for angles in 15° steps.");
+        }
+        Tool::LassoTransform => {
+            ui.strong("Lasso transform");
+            let layer = ed.doc.layers.get(ed.active).map_or(String::new(), |l| l.name.clone());
+            match &ed.transform {
+                None => {
+                    ui.label(format!("Draw around part of the selected layer (\"{layer}\"). Only that layer changes."));
+                }
+                Some(t) => {
+                    let (w0, h0) = (t.src.2 - t.src.0, t.src.3 - t.src.1);
+                    let (w, h) = (t.rect.2 - t.rect.0, t.rect.3 - t.rect.1);
+                    ui.label(format!("{w0:.0} × {h0:.0} px, now {w:.0} × {h:.0} px"));
+                    let mut pct = (w / w0 * 100.0).round();
+                    if ui.add(egui::Slider::new(&mut pct, 5.0..=400.0).logarithmic(true).text("Size").suffix(" %").max_decimals(0)).on_hover_text("Scales it evenly about its middle").changed() {
+                        ed.scale_transform(pct);
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Put down (Enter)").clicked() {
+                            ed.commit_transform();
+                        }
+                        if ui.button("Cancel (Escape)").clicked() {
+                            ed.cancel_transform();
+                        }
+                    });
+                }
+            }
+            ui.weak("Drag a corner to scale (Shift keeps the shape), the middle of a side to stretch one way, inside to move. Another tool puts it down too.");
         }
         Tool::Pan => {
             ui.strong("Pan");

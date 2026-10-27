@@ -2,7 +2,7 @@
 
 This is the first version of **Recedo itself**: a real painting window with a round brush,
 eraser, eyedropper, layers, undo, Krita files, PNG/JPEG export and autosave, and since then
-31 tools in all (fill, shapes, gradient, smudge and other retouch brushes, selections, move,
+32 tools in all (fill, shapes, gradient, smudge and other retouch brushes, selections, move,
 crop, text; part 5). Filters and the rest come in later phases (list at the end).
 
 ## 1. Get it running (5 minutes)
@@ -123,6 +123,11 @@ Each step says what you should see. If something is different, note the step num
 10. **G** (click the canvas first): everything but the painting hides, the reference panel
    too; **G** again or **Escape** brings it all back. Typing a g in the reference search
    box must not do this. The gradient is now **Shift+G**.
+11. **Lasso transform** (the box-with-handles icon, under the four arrows): paint something,
+   draw round it, then drag a corner. *Expected:* it gets bigger or smaller as you drag
+   (**Shift** keeps its shape), dragging inside moves it, and only the selected layer
+   changes. **Enter** puts it down; **Ctrl+Z** puts it back; **Escape** before Enter
+   cancels. Tell me if it feels slow on a big area.
 
 ## 6. What to send back
 

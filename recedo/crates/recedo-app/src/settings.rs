@@ -115,6 +115,10 @@ impl Settings {
     }
 
     pub fn sanitize(&mut self) {
+        // The old standard side bar gets the new standard one (with the lasso transform).
+        if self.hotbar.iter().map(String::as_str).eq(Tool::OLD_DEFAULT_BAR) {
+            self.set_hotbar(&Tool::DEFAULT_BAR);
+        }
         // The old default colour (a very dark blue) becomes the new one, black.
         if self.color == [20, 20, 30] {
             self.color = [0, 0, 0];
@@ -207,6 +211,14 @@ mod tests {
         s.hotbar.clear();
         s.sanitize();
         assert_eq!(s.hotbar_tools(), Tool::DEFAULT_BAR.to_vec(), "never empty");
+        // Saved with the old standard bar: the new standard one, with the lasso transform.
+        s.hotbar = Tool::OLD_DEFAULT_BAR.iter().map(|id| id.to_string()).collect();
+        s.sanitize();
+        assert!(s.hotbar_tools().contains(&Tool::LassoTransform));
+        // A bar the user chose stays as it is.
+        s.hotbar = vec!["brush".into(), "move".into()];
+        s.sanitize();
+        assert_eq!(s.hotbar_tools(), vec![Tool::Brush, Tool::Move]);
         // Every tool has its own id, and it reads back.
         let ids: std::collections::HashSet<&str> = Tool::ALL.iter().map(|t| t.id()).collect();
         assert_eq!(ids.len(), Tool::ALL.len());

@@ -717,3 +717,48 @@ fn layer_thumbnails_follow_the_painting() {
         .count();
     assert!(blue > 20, "the thumbnail shows the stroke: {blue} blue pixels");
 }
+
+#[test]
+fn the_lasso_transform_on_screen() {
+    // The box with its handles shows over the canvas; another tool puts the part down.
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    let a = s.ed.active;
+    for y in 300..420 {
+        for x in 300..420 {
+            s.ed.doc.layers[a].pixels.set_pixel(x, y, [220, 40, 40, 255]);
+        }
+    }
+    s.ed.tool = Tool::LassoTransform;
+    let sc = |s: &Session, x: f64, y: f64| s.ed.view.to_screen(x, y);
+    let path: Vec<(f64, f64)> = [(280.0, 280.0), (440.0, 280.0), (440.0, 440.0), (280.0, 440.0), (280.0, 285.0)].iter().map(|&(x, y)| sc(&s, x, y)).collect();
+    for (i, &(x, y)) in path.iter().enumerate() {
+        s.ed.pen(&PenSample::synthetic(i as u64 * 4000, x, y, 1.0, true), true, Modifiers::default());
+    }
+    s.ed.pen(&PenSample::synthetic(50_000, path[4].0, path[4].1, 0.0, false), true, Modifiers::default());
+    let src = s.ed.transform.as_ref().expect("lifted").src;
+    // Drag the bottom-right handle out by half the size again.
+    let (from, to) = (sc(&s, src.2, src.3), sc(&s, src.2 + (src.2 - src.0) / 2.0, src.3 + (src.3 - src.1) / 2.0));
+    for i in 0..=10 {
+        let t = i as f64 / 10.0;
+        s.ed.pen(&PenSample::synthetic(100_000 + i * 4000, from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t, 1.0, true), true, Modifiers::default());
+    }
+    s.ed.pen(&PenSample::synthetic(200_000, to.0, to.1, 0.0, false), true, Modifiers::default());
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    assert!(!find_text(&out, "Put down (Enter)").is_empty(), "Tool property offers to put it down");
+    let img = shot(&g, &mut r, &mut s, out, "20-lasso-transform");
+    // A white handle at the new bottom-right corner, over the canvas.
+    let h = s.ed.view.to_screen(s.ed.transform.as_ref().unwrap().rect.2, s.ed.transform.as_ref().unwrap().rect.3);
+    assert!(img.pixel(h.0 as u32, h.1 as u32)[..3].iter().all(|&v| v > 230), "handle at {h:?}: {:?}", img.pixel(h.0 as u32, h.1 as u32));
+    // The square is bigger on screen: red well past where it ended.
+    let past = s.ed.view.to_screen(430.0, 430.0);
+    assert!(img.pixel(past.0 as u32, past.1 as u32)[0] > 180 && img.pixel(past.0 as u32, past.1 as u32)[1] < 90);
+    // Picking the brush on the strip puts it down: one undo step.
+    let brush = s.ui.strip.iter().find(|(t, _)| *t == Some(Tool::Brush)).map(|(_, r)| r.center()).unwrap();
+    quiet(&g, &mut r, &mut s, click(brush));
+    assert_eq!(s.ed.tool, Tool::Brush);
+    assert!(s.ed.transform.is_none());
+    assert_eq!(s.ed.history.entries().0, vec!["Transform"]);
+}

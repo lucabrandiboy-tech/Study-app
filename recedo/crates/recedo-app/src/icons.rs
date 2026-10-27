@@ -325,6 +325,15 @@ fn draw_tool(g: &Pen, t: Tool) {
             g.fill(&[(2.0, 12.0), (5.6, 9.0), (5.6, 15.0)]);
             g.fill(&[(22.0, 12.0), (18.4, 15.0), (18.4, 9.0)]);
         }
+        Tool::LassoTransform => {
+            // A lasso loop in a box with corner handles: the part drawn round, scaled.
+            g.rect((4.0, 4.0), (20.0, 20.0), 1.0);
+            for (x, y) in [(4.0, 4.0), (20.0, 4.0), (20.0, 20.0), (4.0, 20.0)] {
+                g.fill_rect((x - 2.2, y - 2.2), (x + 2.2, y + 2.2));
+            }
+            let small: Vec<P> = LOOP.iter().map(|&(x, y)| (6.0 + (x - 5.0) * 0.75, 7.5 + (y - 4.5) * 0.75)).collect();
+            g.dashed(&small, 1.3);
+        }
         Tool::Crop => {
             g.line(&[(7.0, 3.0), (7.0, 17.0), (21.0, 17.0)], 2.2);
             g.line(&[(3.0, 7.0), (17.0, 7.0), (17.0, 21.0)], 2.2);
