@@ -117,6 +117,31 @@ fn shot(g: &Gpu, r: &mut Renderer, s: &mut Session, out: egui::FullOutput, name:
     img
 }
 
+/// An image dropped in the same frame that still draws it (a layer thumbnail or brush
+/// sample being replaced) must not be destroyed before that frame is drawn: submitting a
+/// frame that uses a destroyed texture is a wgpu error, which crashed the app.
+#[test]
+fn an_image_dropped_while_drawn_does_not_crash() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    let image = egui::ColorImage::filled([8, 8], egui::Color32::RED);
+    let mut handle = None;
+    for drop_it in [false, true] {
+        let out = s.egui.run_ui(raw(vec![]), |ui| {
+            let t = handle.get_or_insert_with(|| ui.ctx().load_texture("test image", image.clone(), egui::TextureOptions::LINEAR));
+            ui.image((t.id(), vec2(40.0, 40.0)));
+            if drop_it {
+                handle = None;
+            }
+        });
+        if drop_it {
+            assert!(!out.textures_delta.free.is_empty(), "the image is freed in the frame that draws it");
+        }
+        shot(&g, &mut r, &mut s, out, "dropped-image");
+    }
+}
+
 fn session() -> Session {
     let mut s = Session::new(Settings { last_preset: 1, ..Settings::default() }, None);
     s.ed.color = [30, 60, 160];
@@ -766,6 +791,34 @@ fn the_lasso_transform_on_screen() {
     assert_eq!(s.ed.tool, Tool::Brush);
     assert!(s.ed.transform.is_none());
     assert_eq!(s.ed.history.entries().0, vec!["Transform"]);
+}
+
+#[test]
+fn a_big_painting_shows_in_a_small_window() {
+    // Like the Windows self-test's screen check: a 3840 × 2160 painting fitted into the
+    // 1008 × 681 window (zoomed far out, so the smaller mip levels are drawn).
+    let Some(g) = gpu() else { return };
+    SCREEN.with(|sc| sc.set(Screen { w: 1008, h: 681, scale: 1.0 }));
+    let mut s = Session::new(Settings::default(), None);
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    s.ed.tools.brush.size = 120.0;
+    let y = s.ed.doc.height as f64 / 2.0;
+    let (a, b) = (s.ed.view.to_screen(800.0, y), s.ed.view.to_screen(3000.0, y));
+    for i in 0..=60 {
+        let t = i as f64 / 60.0;
+        s.ed.pen(&PenSample::synthetic(i * 4000, a.0 + (b.0 - a.0) * t, a.1, 1.0, true), true, Modifiers::default());
+    }
+    s.ed.pen(&PenSample::synthetic(300_000, b.0, b.1, 0.0, false), true, Modifiers::default());
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    let img = shot(&g, &mut r, &mut s, out, "22-big-painting-small-window");
+    SCREEN.with(|sc| sc.set(Screen { w: 1600, h: 900, scale: 1.0 }));
+    let lum = |(x, y): (f64, f64)| {
+        let p = img.pixel(x as u32, y as u32);
+        (p[0] as u32 + p[1] as u32 + p[2] as u32) / 3
+    };
+    let (dark, light) = (lum(s.ed.view.to_screen(1900.0, y)), lum(s.ed.view.to_screen(1900.0, y + 600.0)));
+    assert!(dark < 90 && light > 200, "painted spot {dark}, empty spot {light}");
 }
 
 #[test]

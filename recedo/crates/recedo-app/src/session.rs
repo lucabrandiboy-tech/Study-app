@@ -170,10 +170,12 @@ impl Renderer {
                 .forget_lifetime();
             self.egui.render(&mut pass, &prims, &sd);
         }
+        queue.submit(extra.into_iter().chain(std::iter::once(enc.finish())));
+        // Only after the frame is submitted: an image dropped this frame can still be drawn in
+        // it, and submitting a frame that uses a destroyed texture is an error (a crash).
         for id in textures.free.drain() {
             self.egui.free_texture(&id);
         }
-        queue.submit(extra.into_iter().chain(std::iter::once(enc.finish())));
     }
 }
 

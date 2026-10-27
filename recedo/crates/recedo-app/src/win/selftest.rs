@@ -590,6 +590,25 @@ fn ink_test(r: &mut Results, hwnd: HWND, c: Area) {
     r.check("ink: a pen stroke is one undo step", after == before + 1, format!("undo steps {before} -> {after} ({ok} of {} frames injected)", frames.len()));
     let cov = coverage(layer, (x0 + 10.0, y), (x1 - 10.0, y), 2);
     r.check("ink: the line is painted where the pen went", cov >= 0.97, format!("{:.0} % of points along it painted", cov * 100.0));
+    if cov < 0.97 {
+        // Which points along the line have no paint near them, and where the paint is.
+        let missed = with_app(|a| {
+            let ed = &a.session.ed;
+            (0..=40)
+                .map(|i| (x0 + 10.0 + (x1 - x0 - 20.0) * i as f64 / 40.0, y))
+                .filter(|&p| !painted_at(a, layer, p, 2))
+                .map(|p| {
+                    let (cx, cy) = ed.view.to_canvas(p.0, p.1);
+                    let rows: Vec<i32> = (-60..=60).filter(|d| ed.doc.layers[layer].pixels.pixel(cx as i32, cy as i32 + d)[3] > 0).collect();
+                    format!("screen ({:.1}, {:.1}) = canvas ({cx:.1}, {cy:.1}): paint in that column at rows {:?}..{:?} from it", p.0, p.1, rows.first(), rows.last())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+        for m in missed {
+            r.note(format!("  no paint near {m}"));
+        }
+    }
     if after != before + 1 || cov < 0.97 {
         // What the app received and where the stroke started and ended, to see why.
         r.note("pen trace (frame ids; c = touching, h = hovering):");
@@ -709,6 +728,20 @@ fn screen_test(r: &mut Results, out: &Path, capture: bool) {
             };
             let (d, l) = (lum(dark), lum(light));
             r.check("screen: the window shows the painting", d < 90 && l > 200, format!("painted spot brightness {d} (want < 90), empty spot {l} (want > 200)"));
+            if d >= 90 || l <= 200 {
+                let (view, viewport) = with_app(|a| (format!("{:?}", a.session.ed.view), a.session.ed.viewport)).unwrap_or_default();
+                let at = |p: (f64, f64)| img.pixel((p.0 as u32).min(img.width - 1), (p.1 as u32).min(img.height - 1));
+                let (vx, vy, vw, vh) = viewport;
+                let centre = (vx + vw / 2.0, vy + vh / 2.0);
+                r.note(format!(
+                    "  image {}x{}; viewport {viewport:?}; painted spot at {dark:?} is {:?}, empty spot at {light:?} is {:?}, viewport centre {:?}; view {view}",
+                    img.width,
+                    img.height,
+                    at(dark),
+                    at(light),
+                    at(centre)
+                ));
+            }
             let path = out.join("selftest-screen.png");
             if let Ok(bytes) = recedo_core::image::encode_png(&img, true) {
                 let _ = std::fs::write(&path, bytes);
