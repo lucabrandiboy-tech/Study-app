@@ -64,11 +64,11 @@ pub fn color_wheel(ui: &mut Ui, rgb: &mut [u8; 3], hsv: &mut Hsv) -> bool {
     }
     // As wide as the panel, but short enough that the swatches under it show too (the
     // panel's visible height, which a scroll area does not limit).
-    let side = ui.available_width().min(ui.clip_rect().height() - 56.0).clamp(110.0, 220.0);
+    let side = ui.available_width().min(ui.clip_rect().height() - 44.0).clamp(90.0, 170.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
     let c = rect.center();
     let outer = side / 2.0 - 1.0;
-    let ring = (side * 0.09).clamp(10.0, 18.0);
+    let ring = (side * 0.09).clamp(8.0, 14.0);
     let inner = outer - ring;
     let half = inner / std::f32::consts::SQRT_2 - 4.0;
     let square = egui::Rect::from_center_size(c, vec2(half * 2.0, half * 2.0));
@@ -186,12 +186,14 @@ pub enum Icon {
 
 /// A clickable painted icon, drawn bright when `on`; crossed out (eye) or open (lock) when off.
 pub fn icon_toggle(ui: &mut Ui, on: bool, icon: Icon) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 18.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 14.0), Sense::click());
     let visuals = ui.style().interact(&resp);
     let col = if on { visuals.fg_stroke.color } else { ui.visuals().weak_text_color() };
-    let s = Stroke::new(1.4, col);
+    let s = Stroke::new(1.2, col);
     let c = rect.center();
     let p = ui.painter();
+    // Drawn on a 20 × 18 design, at 0.8 of its size.
+    let k = 0.8;
     match icon {
         Icon::Eye => {
             // Almond outline from two arcs, and the pupil.
@@ -199,8 +201,8 @@ pub fn icon_toggle(ui: &mut Ui, on: bool, icon: Icon) -> Response {
                 (0..=12)
                     .map(|i| {
                         let t = i as f32 / 12.0;
-                        let x = c.x - 7.0 + 14.0 * t;
-                        let y = 4.5 * (std::f32::consts::PI * t).sin();
+                        let x = c.x + k * (-7.0 + 14.0 * t);
+                        let y = k * 4.5 * (std::f32::consts::PI * t).sin();
                         pos2(x, if up { c.y - y } else { c.y + y })
                     })
                     .collect()
@@ -208,23 +210,23 @@ pub fn icon_toggle(ui: &mut Ui, on: bool, icon: Icon) -> Response {
             p.add(Shape::line(arc(true), s));
             p.add(Shape::line(arc(false), s));
             if on {
-                p.circle_filled(c, 2.2, col);
+                p.circle_filled(c, 2.2 * k, col);
             } else {
-                p.line_segment([c + vec2(-6.0, 6.0), c + vec2(6.0, -6.0)], s);
+                p.line_segment([c + vec2(-6.0, 6.0) * k, c + vec2(6.0, -6.0) * k], s);
             }
         }
         Icon::Lock => {
-            let body = egui::Rect::from_center_size(c + vec2(0.0, 2.5), vec2(10.0, 7.0));
+            let body = egui::Rect::from_center_size(c + vec2(0.0, 2.5) * k, vec2(10.0, 7.0) * k);
             p.rect_stroke(body, 1.0, s, egui::StrokeKind::Inside);
             if on {
-                p.rect_filled(body.shrink(2.0), 0.0, col);
+                p.rect_filled(body.shrink(2.0 * k), 0.0, col);
             }
             // Shackle: a half ring, lifted to one side when unlocked.
-            let lift = if on { 0.0 } else { -2.5 };
+            let lift = if on { 0.0 } else { -2.5 * k };
             let pts: Vec<Pos2> = (0..=10)
                 .map(|i| {
                     let a = std::f32::consts::PI * i as f32 / 10.0;
-                    pos2(c.x - 3.0 * a.cos(), body.top() + lift - 4.0 * a.sin())
+                    pos2(c.x - 3.0 * k * a.cos(), body.top() + lift - 4.0 * k * a.sin())
                 })
                 .collect();
             p.add(Shape::line(pts, s));

@@ -69,7 +69,8 @@ pub struct Floating {
 
 /// The layout's version: an older saved layout is replaced by the current default once.
 /// 2: the Clip Studio-like layout (colour, sub tool and tool property on the left).
-pub const LAYOUT_VERSION: u32 = 2;
+/// 3: the same, narrower (the compact interface).
+pub const LAYOUT_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -92,8 +93,8 @@ impl Default for DockLayout {
             left: vec![Stack::weighted(&[Panel::Color], 1.5), Stack::weighted(&[Panel::Tools], 1.1), Stack::weighted(&[Panel::ToolOptions], 1.5)],
             right: vec![Stack::of(&[Panel::Layers, Panel::History])],
             floating: Vec::new(),
-            left_width: 250.0,
-            right_width: 260.0,
+            left_width: 196.0,
+            right_width: 200.0,
         }
     }
 }
@@ -240,7 +241,10 @@ impl DockLayout {
                 Side::Left => (egui::Panel::left("dock_left"), self.left_width),
                 Side::Right => (egui::Panel::right("dock_right"), self.right_width),
             };
-            let resp = panel.resizable(true).default_size(width).min_size(60.0).max_size(800.0).show(root, |ui| {
+            // Each dock takes at most a quarter of the window, so a small window keeps room
+            // for the painting.
+            let most = (root.available_width() * 0.25).clamp(120.0, 800.0);
+            let resp = panel.resizable(true).default_size(width.min(most)).min_size(60.0).max_size(most).show(root, |ui| {
                 let mut ops = DockOps { moves: &mut moves, floats: &mut floats, closes: &mut closes };
                 let stacks = match side {
                     Side::Left => &mut self.left,
@@ -321,7 +325,7 @@ fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], title: &dyn Fn(Panel
             ui.set_height(heights[i]);
             ui.vertical(|ui| {
                 // The tabs on a darker header strip, as in Clip Studio.
-                let header = egui::Frame::NONE.fill(HEADER_FILL).inner_margin(egui::Margin::symmetric(4, 3));
+                let header = egui::Frame::NONE.fill(HEADER_FILL).inner_margin(egui::Margin::symmetric(3, 2));
                 let (_, dropped) = ui.dnd_drop_zone::<Panel, ()>(header, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
@@ -360,7 +364,7 @@ fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], title: &dyn Fn(Panel
                 if let Some(p) = dropped {
                     ops.moves.push((*p, Target::Stack(side, i)));
                 }
-                ui.add_space(4.0);
+                ui.add_space(3.0);
                 if let Some(&active) = stack.tabs.get(stack.active) {
                     egui::ScrollArea::vertical().id_salt(("panel", active)).auto_shrink([false, false]).show(ui, |ui| content(ui, active));
                 }
@@ -477,7 +481,7 @@ mod tests {
         assert_eq!(d.left, vec![Stack { tabs: vec![Panel::Tools], active: 0, weight: 1.0 }]);
         assert_eq!(d.right, vec![Stack { tabs: vec![Panel::Layers], active: 0, weight: 10.0 }]);
         assert!(d.floating.is_empty());
-        assert_eq!((d.left_width, d.right_width), (250.0, 800.0));
+        assert_eq!((d.left_width, d.right_width), (196.0, 800.0));
         assert!(all_once(&d));
     }
 

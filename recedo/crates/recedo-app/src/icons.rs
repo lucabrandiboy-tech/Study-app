@@ -488,3 +488,32 @@ pub fn button(ui: &mut Ui, size: f32, selected: bool, enabled: bool, draw: impl 
     }
     resp
 }
+
+/// A tool's button on the strip: its icon with its name under it, `width` wide.
+pub fn tool_button(ui: &mut Ui, width: f32, height: f32, selected: bool, label: &str, draw: impl FnOnce(&Painter, Rect, Color32)) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let (fill, col) = if selected {
+            (v.selection.bg_fill, v.selection.stroke.color)
+        } else if resp.hovered() {
+            (v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color)
+        } else {
+            (Color32::TRANSPARENT, v.widgets.inactive.fg_stroke.color)
+        };
+        ui.painter().rect_filled(rect, 3.0, fill);
+        let icon = (height - 13.0).clamp(12.0, 20.0);
+        draw(ui.painter(), Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 2.0 + icon / 2.0), vec2(icon, icon)), col);
+        // The name, shrunk to fit the strip if it has to.
+        let font = egui::FontId::proportional(9.0);
+        let galley = ui.painter().layout_no_wrap(label.to_string(), font, col);
+        let scale = ((width - 4.0) / galley.size().x).min(1.0);
+        let at = egui::pos2(rect.center().x, rect.bottom() - 2.0);
+        if scale < 1.0 {
+            ui.painter().text(at, egui::Align2::CENTER_BOTTOM, label, egui::FontId::proportional(9.0 * scale), col);
+        } else {
+            ui.painter().galley(at - vec2(galley.size().x / 2.0, galley.size().y), galley, col);
+        }
+    }
+    resp
+}

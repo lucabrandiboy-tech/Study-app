@@ -32,6 +32,12 @@ JPG export: this software is based in part on the work of the Independent JPEG G
 `.kra` files name Krita's sRGB profile (`sRGB-elle-V2-srgbtrc.icc`) but do not contain it;
 Krita ships that profile itself.
 
+### Interface font (embedded)
+
+The interface's text is Inter Regular (`crates/recedo-app/assets/Inter-Regular.otf`,
+copyright 2016-2023 The Inter Project Authors, https://github.com/rsms/inter), under the
+SIL Open Font Licence 1.1; the licence's full text is in `crates/recedo-app/assets/Inter-OFL.txt`.
+
 ### Fonts (from `epaint_default_fonts`, embedded in the .exe)
 
 The text tool paints with Ubuntu Light and Hack; both licences allow using them to make

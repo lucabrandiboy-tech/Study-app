@@ -132,7 +132,7 @@ fn layout_canvas_and_painting_on_screen() {
     let c = f.canvas_rect;
     assert!(c.width() > 900.0 && c.height() > 700.0, "canvas area {c:?}");
     assert!(c.min.x > 50.0, "left dock");
-    assert!(c.max.x < screen().w as f32 - 200.0, "right dock");
+    assert!(c.max.x < screen().w as f32 - 150.0, "right dock");
     assert!(s.over_canvas(c.center().x as f64, c.center().y as f64));
     assert!(!s.over_canvas(5.0, 5.0), "the menu bar is not canvas");
     assert!(!s.over_canvas(screen().w as f64 - 20.0, 300.0), "the right dock is not canvas");
@@ -328,6 +328,7 @@ fn hex_colour_parsing() {
 #[test]
 fn every_character_the_interface_uses_has_a_glyph() {
     let ctx = egui::Context::default();
+    apply_theme(&ctx);
     let mut out = ctx.run_ui(raw(vec![]), |_| {});
     out.textures_delta.clear();
     let source = include_str!("../ui.rs").to_string() + include_str!("../dock.rs") + include_str!("../editor.rs");
@@ -761,4 +762,22 @@ fn the_lasso_transform_on_screen() {
     assert_eq!(s.ed.tool, Tool::Brush);
     assert!(s.ed.transform.is_none());
     assert_eq!(s.ed.history.entries().0, vec!["Transform"]);
+}
+
+#[test]
+fn a_small_window_keeps_room_for_the_painting() {
+    // The Windows self-test's window: 1008 × 681. The panels give way so the canvas area
+    // stays at least 500 × 400 (it was 430 wide once).
+    let Some(g) = gpu() else { return };
+    SCREEN.with(|sc| sc.set(Screen { w: 1008, h: 681, scale: 1.0 }));
+    let mut s = Session::new(Settings::default(), None);
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    let (out, f) = frames(&g, &mut r, &mut s, vec![]);
+    shot(&g, &mut r, &mut s, out, "21-small-window");
+    let c = f.canvas_rect;
+    SCREEN.with(|sc| sc.set(Screen { w: 1600, h: 900, scale: 1.0 }));
+    assert!(c.width() >= 500.0 && c.height() >= 400.0, "canvas area {c:?}");
+    // Every tool on the strip, whole.
+    let bottom = s.ui.strip.iter().map(|(_, r)| r.max.y).fold(0.0, f32::max);
+    assert!(bottom <= c.max.y, "{bottom}");
 }
