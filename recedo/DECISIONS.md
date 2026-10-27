@@ -195,7 +195,17 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | While text is being written, the keyboard stays with its text box and letters are never shortcuts; picking another tool places the text | A click on the canvas (to move the text) took the keys away, and the next letter switched tools (B to the brush, and so on). Text left unplaced would stay on screen without being in the painting. | UI tests (each fails with the old code); self-test types "hi" and places it |
 | Both shells tell the interface which of Ctrl, Shift and Alt are held (egui's `ModifiersChanged`) | egui 0.37 learns the held keys only from that event; without it Ctrl+Enter could not place text, in the browser or `recedo.exe`. | Self-test under Wine (Ctrl+Enter places text); UI test |
 
-## 9. Licences
+## 9. The reference panel (browser version)
+
+| Decision | Why | Verified by |
+|---|---|---|
+| Ordinary page code (`web/reference.js`) beside the canvas, not part of the egui interface | Pictures, articles and above all video players (YouTube's own) need the browser's page; egui cannot show a web page. The canvas element is narrowed while the panel is open, and the app follows the canvas's size every frame. | Browser test |
+| Keyless public sources only, called straight from the browser (CORS), the same ones the Study app uses, plus the Internet Archive and Commons for videos | No account, key or server; nothing to pay or leak. There is no keyless way to search YouTube, so YouTube is by pasted link (the no-cookie player). | Unit checks of every source's answer format; browser test with stand-in answers |
+| Nothing about a search is kept: no address-bar or storage entry, `cache: no-store`, no referrer, the offline worker ignores other sites, no form around the search box | The user asked that searches are not saved. | Browser test reads the address and storage afterwards |
+| Keys typed in the panel never reach the painting's shortcuts; a press on the canvas takes the keyboard back | Otherwise B, E, S... in a search would change tools, and after watching a video the shortcuts would stay dead. | Browser test |
+| The Study app's word filter on pictures and videos | Commons and the Internet Archive have no safe-search switch (Openverse is asked for `mature=false`). | Unit check |
+
+## 10. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

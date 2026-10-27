@@ -685,6 +685,8 @@ impl App {
             Request::SaveAsDialog => self.deferred.push(Deferred::SaveAs),
             Request::ExportDialog(f) => self.deferred.push(Deferred::Export(f)),
             Request::Quit => self.close_requested = true,
+            // Only the browser version has the reference panel.
+            Request::ToggleReference => {}
             Request::SetTabletApi(api) => {
                 self.set_tablet_api(api);
                 self.save_settings();

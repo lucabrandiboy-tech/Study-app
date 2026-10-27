@@ -115,6 +115,11 @@ Each step says what you should see. If something is different, note the step num
 8. **Move** (on the side bar): drag the painting around; the arrow keys move it 1 px,
    **Shift** + arrow 10 px. **Ctrl+Z** undoes.
 
+9. **Reference** (browser version, in the toolbar): search "hand drawing" with Pictures,
+   Videos and Articles; click a picture to see it big; under **Watch a link** paste a
+   YouTube link. *Expected:* everything shows in the panel on the right while you keep
+   drawing; **×** closes it. Tell me if a kind of search never shows anything.
+
 ## 6. What to send back
 
 * The step numbers that did not behave as expected, and what happened instead.

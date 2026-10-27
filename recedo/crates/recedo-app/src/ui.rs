@@ -34,6 +34,8 @@ pub enum Request {
     Quit,
     /// Switch the tablet interface.
     SetTabletApi(TabletApi),
+    /// Browser version: show or hide the reference panel (search, pictures, videos).
+    ToggleReference,
 }
 
 /// What to do once unsaved changes are saved or discarded.
@@ -104,6 +106,8 @@ pub struct AppUi {
     pub web: bool,
     /// The window with every tool, where the side bar's tools are chosen.
     pub tool_library: bool,
+    /// Browser version: the reference panel is open (the shell keeps this up to date).
+    pub reference_open: bool,
     /// The tool in the last frame, and whether text was being written then.
     last_tool: Tool,
     writing: bool,
@@ -126,6 +130,7 @@ impl AppUi {
             tablet_status: String::new(),
             web: false,
             tool_library: false,
+            reference_open: false,
             last_tool: Tool::Brush,
             writing: false,
         }
@@ -261,7 +266,12 @@ impl AppUi {
         egui::Panel::top("menu").show(root, |ui| {
             egui::MenuBar::new().ui(ui, |ui| self.menus(ui, ed, &mut requests));
         });
-        egui::Panel::top("toolbar").show(root, |ui| toolbar(ui, ed, &mut self.tool_library));
+        let reference = self.web.then_some(self.reference_open);
+        egui::Panel::top("toolbar").show(root, |ui| {
+            if toolbar(ui, ed, &mut self.tool_library, reference) {
+                requests.push(Request::ToggleReference);
+            }
+        });
         egui::Panel::bottom("status").show(root, |ui| self.status_bar(ui, ed));
         let mut dock = std::mem::take(&mut self.settings.dock);
         let canvas_rect = dock.ui(root, &mut |ui, panel| self.panel(ui, panel, ed));
@@ -573,6 +583,12 @@ impl AppUi {
                 let mut open = self.settings.dock.is_open(p);
                 if ui.checkbox(&mut open, p.title()).changed() {
                     self.settings.dock.toggle(p);
+                }
+            }
+            if self.web {
+                let mut open = self.reference_open;
+                if ui.checkbox(&mut open, "Reference (search, pictures, videos)").changed() {
+                    requests.push(Request::ToggleReference);
                 }
             }
             ui.separator();
@@ -1325,7 +1341,10 @@ impl AppUi {
 
 /// Big buttons for what a pen or a finger cannot reach by keyboard: undo, redo, brush or
 /// eraser, brush size, fit, zoom.
-fn toolbar(ui: &mut Ui, ed: &mut Editor, library: &mut bool) {
+/// `reference`: in the browser version, whether the reference panel is open. Returns true
+/// when its button was clicked.
+fn toolbar(ui: &mut Ui, ed: &mut Editor, library: &mut bool, reference: Option<bool>) -> bool {
+    let mut toggle_reference = false;
     ui.horizontal_wrapped(|ui| {
         let big = |text: &str| egui::Button::new(RichText::new(text).size(15.0)).min_size(vec2(44.0, 30.0));
         let (_, applied) = ed.history.entries();
@@ -1360,7 +1379,15 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor, library: &mut bool) {
             ed.fit_to_window();
             ed.reset_rotation();
         }
+        if let Some(open) = reference {
+            ui.separator();
+            let button = egui::Button::selectable(open, RichText::new("Reference").size(15.0)).min_size(vec2(44.0, 30.0));
+            if ui.add(button).on_hover_text("Search pictures, videos and articles, or watch a YouTube link, beside the canvas").clicked() {
+                toggle_reference = true;
+            }
+        }
     });
+    toggle_reference
 }
 
 /// Ready-made brushes (Krita has a library of these; these are the basics).

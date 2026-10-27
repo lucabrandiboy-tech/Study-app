@@ -39,5 +39,6 @@
   init({ module_or_path: "recedo_web_bg.wasm?v=__VERSION__" }).catch(e => { const s = document.getElementById("status"); s.textContent = "Recedo could not start: " + e; s.className = "error"; });
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
+<script type="module" src="reference.js?v=__VERSION__"></script>
 </body>
 </html>

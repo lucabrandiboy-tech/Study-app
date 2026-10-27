@@ -216,6 +216,8 @@ impl App {
             ..Default::default()
         };
         raw.viewports.entry(raw.viewport_id).or_default().native_pixels_per_point = Some(native);
+        // The panel can also be closed from its own × button.
+        self.session.ui.reference_open = reference_fn("isOpen").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy());
         let (out, ui_out) = self.session.ui_frame(raw);
         self.ppp = out.pixels_per_point;
         self.cursor = out.platform_output.cursor_icon;
@@ -518,6 +520,14 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
     for name in ["keydown", "keyup"] {
         let a = app.clone();
         add(&w, name, false, move |e: KeyboardEvent| {
+            // Typing in the page's own fields (the reference panel's search box) is not for
+            // the app: no shortcuts, and Backspace must keep working there.
+            let field = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| {
+                matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT") || el.closest("#reference").ok().flatten().is_some()
+            });
+            if field {
+                return;
+            }
             let mut app = a.borrow_mut();
             let pressed = e.type_() == "keydown";
             app.set_mods(egui::Modifiers { alt: e.alt_key(), ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() });
@@ -603,6 +613,12 @@ fn handle_request(app: &Rc<RefCell<App>>, r: Request) {
                 Err(e) => a.session.ed.notices.push(crate::editor::Notice { kind: crate::editor::NoticeKind::Error, text: format!("Could not export: {e}") }),
             }
             a.frame_wanted = true;
+        }
+        Request::ToggleReference => {
+            if let Some(f) = reference_fn("toggle") {
+                let _ = f.call0(&JsValue::NULL);
+            }
+            app.borrow_mut().frame_wanted = true;
         }
         Request::Quit | Request::SetTabletApi(_) => {}
     }
@@ -712,6 +728,12 @@ fn touch(app: &mut App, e: &PointerEvent, kind: &str, dpr: f64) {
 }
 
 /// Calls `window.recedoStore.<name>(...)` (the browser storage helper in index.html).
+/// A function of the reference panel (`web/reference.js`), if the page has it.
+fn reference_fn(name: &str) -> Option<js_sys::Function> {
+    let panel = js_sys::Reflect::get(&window(), &JsValue::from_str("recedoReference")).ok()?;
+    js_sys::Reflect::get(&panel, &JsValue::from_str(name)).ok()?.dyn_into().ok()
+}
+
 fn store_call(name: &str, args: &[JsValue]) -> Option<js_sys::Promise> {
     let store = js_sys::Reflect::get(&window(), &JsValue::from_str("recedoStore")).ok()?;
     let f: js_sys::Function = js_sys::Reflect::get(&store, &JsValue::from_str(name)).ok()?.dyn_into().ok()?;

@@ -9,7 +9,7 @@ cargo build --release --target wasm32-unknown-unknown -p recedo-web
 out="$here/target/web"
 rm -rf "$out" && mkdir -p "$out"
 wasm-bindgen --target web --no-typescript --out-dir "$out" target/wasm32-unknown-unknown/release/recedo_web.wasm
-cp web/manifest.webmanifest web/icon-192.png web/icon-512.png "$out/"
+cp web/reference.js web/manifest.webmanifest web/icon-192.png web/icon-512.png "$out/"
 version="$(git describe --always --dirty --abbrev=10)-$(date +%s)"
 sed "s/__VERSION__/recedo-$version/" web/sw.js > "$out/sw.js"
 sed "s/__VERSION__/$version/g" web/index.html > "$out/index.html"
