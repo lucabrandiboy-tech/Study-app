@@ -8,14 +8,6 @@
 // storage), the browser is asked not to cache the answers, the search box is outside any form
 // (so the browser keeps no autofill list), and YouTube plays from its no-cookie address.
 
-// ---------------------------------------------------------------- safety
-// Commons and the Internet Archive have no safe-search switch, so results whose words mention
-// adult or gory subjects are left out (the same rule as the Study app's search). It catches what
-// the sources label; it cannot promise to catch everything.
-const UNSAFE = /\b(nud(e|es|ity|ism|ist|ists)|naked|sex|sexy|erotic\w*|porn\w*|genitals?|genitalia|penis(es)?|vaginas?|vulvas?|nipples?|topless|lingerie|fetish\w*|bdsm|bondage|masturbat\w*|intercourse|orgasm\w*|hentai|xxx|nsfw|gore|gory|beheading|decapitat\w*)\b/i;
-const SCHOOL = /\b(a?sexual(ly)? (reproduction|selection|dimorphism|cells?)|sex(-| )(chromosomes?|cells?|linked|determination|organs?)|sex education)\b/gi;
-export const unsafeText = s => UNSAFE.test(String(s).replace(/_/g, " ").replace(SCHOOL, " "));
-
 // ---------------------------------------------------------------- fetching
 async function getJson(url, signal) {
   // Nothing kept in the browser's cache, and the sources are not told which page asked.
@@ -39,23 +31,22 @@ const sorted = pages => (pages ?? []).slice().sort((a, b) => (a.index ?? 0) - (b
 export function parseCommonsPictures(j) {
   return sorted(j.query?.pages).flatMap(p => {
     const info = p.imageinfo?.[0];
-    if (!info?.thumburl || !p.categories) return []; // without categories it cannot be checked
+    if (!info?.thumburl) return [];
     const caption = meta(info.extmetadata, "ImageDescription") || meta(info.extmetadata, "ObjectName");
-    if (unsafeText([p.title, caption, ...p.categories.map(c => c.title)].join(" | "))) return [];
     const file = p.title.replace(/^File:/i, "");
     return [{ thumb: info.thumburl, title: caption || file.replace(/\.[a-z0-9]+$/i, ""), credit: [meta(info.extmetadata, "Artist"), meta(info.extmetadata, "LicenseShortName")].filter(Boolean).join(" · "), source: "Wikimedia Commons", file, host: "commons.wikimedia.org" }];
   });
 }
 export function parseLeadPictures(j) {
   return sorted(j.query?.pages).flatMap(p => {
-    if (!p.thumbnail?.source || !p.pageimage || unsafeText(`${p.title} | ${p.pageimage}`)) return [];
+    if (!p.thumbnail?.source || !p.pageimage) return [];
     return [{ thumb: p.thumbnail.source, title: p.title, credit: "", source: "Wikipedia", file: p.pageimage, host: "en.wikipedia.org" }];
   });
 }
 export function parseOpenverse(j) {
   return (j.results ?? []).flatMap(r => {
-    const title = plain(r.title), tags = (r.tags ?? []).map(t => t.name).join(" ");
-    if (!r.thumbnail || unsafeText(`${title} | ${tags}`)) return [];
+    const title = plain(r.title);
+    if (!r.thumbnail) return [];
     const licence = r.license ? `CC ${r.license.toUpperCase()} ${r.license_version ?? ""}`.trim() : "";
     return [{ thumb: r.thumbnail, large: r.url, title: title || "Photo", credit: [plain(r.creator), licence].filter(Boolean).join(" · "), source: `Openverse${r.source ? ` (${r.source})` : ""}` }];
   });
@@ -63,14 +54,14 @@ export function parseOpenverse(j) {
 export function parseArt(j) {
   const iiif = j.config?.iiif_url ?? "https://www.artic.edu/iiif/2";
   return (j.data ?? []).flatMap(a => {
-    if (!a.image_id || unsafeText(`${a.title ?? ""} | ${a.medium_display ?? ""}`)) return [];
+    if (!a.image_id) return [];
     return [{ thumb: `${iiif}/${a.image_id}/full/400,/0/default.jpg`, large: `${iiif}/${a.image_id}/full/1686,/0/default.jpg`, title: [plain(a.title), plain(a.date_display)].filter(Boolean).join(", "), credit: plain(a.artist_display), source: "Art Institute of Chicago" }];
   });
 }
 export function parseNasa(j) {
   return (j.collection?.items ?? []).flatMap(it => {
     const d = it.data?.[0], thumb = it.links?.find(l => l.rel === "preview")?.href ?? it.links?.[0]?.href;
-    if (!d?.nasa_id || !thumb || unsafeText(`${d.title ?? ""} | ${d.description ?? ""}`)) return [];
+    if (!d?.nasa_id || !thumb) return [];
     return [{ thumb, large: thumb.replace("~thumb", "~medium"), title: plain(d.title), credit: "NASA · public domain", source: "NASA" }];
   });
 }
@@ -78,7 +69,7 @@ async function searchPictures(q, signal) {
   const e = encodeURIComponent(q);
   const r = await Promise.allSettled([
     getJson(wmApi("en.wikipedia.org", { action: "query", generator: "search", gsrsearch: q, gsrlimit: "10", prop: "pageimages", piprop: "thumbnail|name", pithumbsize: "400" }), signal).then(parseLeadPictures),
-    getJson(wmApi("commons.wikimedia.org", { action: "query", generator: "search", gsrsearch: `${q} filetype:bitmap`, gsrnamespace: "6", gsrlimit: "30", prop: "imageinfo|categories", iiprop: "url|extmetadata", iiurlwidth: "400", iiextmetadatafilter: "ImageDescription|ObjectName|Artist|LicenseShortName", iiextmetadatalanguage: "en", clshow: "!hidden", cllimit: "max" }), signal).then(parseCommonsPictures),
+    getJson(wmApi("commons.wikimedia.org", { action: "query", generator: "search", gsrsearch: `${q} filetype:bitmap`, gsrnamespace: "6", gsrlimit: "30", prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "400", iiextmetadatafilter: "ImageDescription|ObjectName|Artist|LicenseShortName", iiextmetadatalanguage: "en" }), signal).then(parseCommonsPictures),
     getJson(`https://api.openverse.org/v1/images/?q=${e}&page_size=24&mature=false`, signal).then(parseOpenverse),
     getJson(`https://api.artic.edu/api/v1/artworks/search?q=${e}&limit=15&fields=id,title,artist_display,date_display,image_id,medium_display`, signal).then(parseArt),
     getJson(`https://images-api.nasa.gov/search?q=${e}&media_type=image&page_size=10`, signal).then(parseNasa),
@@ -98,9 +89,8 @@ async function wikimediaLarge(p, signal) {
 export function parseCommonsVideos(j) {
   return sorted(j.query?.pages).flatMap(p => {
     const info = p.imageinfo?.[0];
-    if (!info?.thumburl || !p.categories) return [];
+    if (!info?.thumburl) return [];
     const caption = meta(info.extmetadata, "ImageDescription") || meta(info.extmetadata, "ObjectName");
-    if (unsafeText([p.title, caption, ...p.categories.map(c => c.title)].join(" | "))) return [];
     const file = p.title.replace(/^File:/i, "");
     return [{ thumb: info.thumburl, title: caption || file.replace(/\.[a-z0-9]+$/i, ""), credit: meta(info.extmetadata, "Artist"), source: "Wikimedia Commons",
       embed: `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(file.replace(/ /g, "_"))}?embedplayer=yes` }];
@@ -110,15 +100,15 @@ export function parseArchive(j) {
   return (j.response?.docs ?? []).flatMap(d => {
     const list = v => (Array.isArray(v) ? v.join(" ") : String(v ?? ""));
     const title = plain(list(d.title));
-    if (!d.identifier || !title || unsafeText(`${title} | ${list(d.description)} | ${list(d.subject)}`)) return [];
+    if (!d.identifier || !title) return [];
     const id = encodeURIComponent(d.identifier);
     return [{ thumb: `https://archive.org/services/img/${id}`, title, credit: plain(list(d.creator)), source: "Internet Archive", embed: `https://archive.org/embed/${id}` }];
   });
 }
 async function searchVideos(q, signal) {
   const r = await Promise.allSettled([
-    getJson(wmApi("commons.wikimedia.org", { action: "query", generator: "search", gsrsearch: `${q} filetype:video`, gsrnamespace: "6", gsrlimit: "20", prop: "imageinfo|categories", iiprop: "url|extmetadata", iiurlwidth: "400", iiextmetadatafilter: "ImageDescription|ObjectName|Artist", iiextmetadatalanguage: "en", clshow: "!hidden", cllimit: "max" }), signal).then(parseCommonsVideos),
-    getJson(`https://archive.org/advancedsearch.php?${new URLSearchParams({ q: `(${q}) AND mediatype:(movies)`, "fl[]": "identifier", rows: "24", output: "json" })}&fl[]=title&fl[]=description&fl[]=subject&fl[]=creator`, signal).then(parseArchive),
+    getJson(wmApi("commons.wikimedia.org", { action: "query", generator: "search", gsrsearch: `${q} filetype:video`, gsrnamespace: "6", gsrlimit: "20", prop: "imageinfo", iiprop: "url|extmetadata", iiurlwidth: "400", iiextmetadatafilter: "ImageDescription|ObjectName|Artist", iiextmetadatalanguage: "en" }), signal).then(parseCommonsVideos),
+    getJson(`https://archive.org/advancedsearch.php?${new URLSearchParams({ q: `(${q}) AND mediatype:(movies)`, "fl[]": "identifier", rows: "24", output: "json" })}&fl[]=title&fl[]=creator`, signal).then(parseArchive),
   ]);
   if (r.every(x => x.status === "rejected")) throw r[0].reason;
   return interleave(r.map(x => (x.status === "fulfilled" ? x.value : [])));
@@ -127,7 +117,7 @@ async function searchVideos(q, signal) {
 // ---------------------------------------------------------------- articles
 async function searchArticles(q, signal) {
   const j = await getJson(wmApi("en.wikipedia.org", { action: "query", list: "search", srsearch: q, srlimit: "12", srprop: "snippet" }), signal);
-  return (j.query?.search ?? []).filter(h => !unsafeText(h.title)).map(h => ({ title: h.title, snippet: plain(h.snippet) }));
+  return (j.query?.search ?? []).map(h => ({ title: h.title, snippet: plain(h.snippet) }));
 }
 const SKIP = /^(references|notes|sources|citations|footnotes|bibliography|external links|further reading|see also|gallery)$/i;
 /** "== Heading ==" lines between paragraphs, as a list of { heading, paras }. */
@@ -307,7 +297,6 @@ function create() {
     const q = field.value.trim();
     if (!q) return;
     stopLoading();
-    if (unsafeText(q)) { results = [note("That search isn't available here.", true)]; show(...results); return; }
     const ctl = (busy = new AbortController());
     show(note("Searching…"));
     try {
