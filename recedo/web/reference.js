@@ -175,6 +175,10 @@ const CSS = `
 #reference button.on { background: #1d5d8c; border-color: #2a73a8; color: #fff; }
 #reference .x { border: none; background: none; font-size: 20px; line-height: 1; padding: 2px 8px; color: #aaa; }
 #reference .x:hover { color: #fff; background: #3a2a2a; }
+#reference .full { padding: 4px 9px; font-size: 13px; }
+#reference.hide { display: none; }
+#reference:fullscreen { width: 100vw; left: 0; border-left: none; }
+#reference:fullscreen .grip { display: none; }
 #reference .tabs, #reference .kinds { display: flex; gap: 6px; padding: 0 12px 8px; }
 #reference .row { display: flex; gap: 6px; padding: 0 12px 8px; }
 #reference input { flex: 1; min-width: 0; font: inherit; color: #eee; background: #121215; border: 1px solid #3c3c45; border-radius: 6px; padding: 7px 10px; outline: none; }
@@ -252,9 +256,15 @@ function create() {
   tabs.firstChild.className = "on";
   const intro = () => note("Look up references while you draw: pictures and art from Wikipedia, Wikimedia Commons, Openverse, the Art Institute of Chicago and NASA; videos from Wikimedia Commons and the Internet Archive; Wikipedia articles. Searches are not saved.");
 
+  // Full screen: the reference fills the screen (Escape or the button again comes back).
+  const fullButton = el("button", { className: "full", textContent: "Full screen", title: "Fill the screen with the reference (Escape comes back)", on: { click: () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else panel.requestFullscreen?.().catch(() => {});
+  } } });
+  document.addEventListener("fullscreenchange", () => { fullButton.textContent = document.fullscreenElement === panel ? "Exit full screen" : "Full screen"; });
   panel.append(
     el("div", { className: "grip", title: "Drag to change the width" }),
-    el("div", { className: "bar" }, el("b", { textContent: "Reference" }), el("button", { className: "x", textContent: "×", title: "Close", "aria-label": "Close", on: { click: () => setOpen(false) } })),
+    el("div", { className: "bar" }, el("b", { textContent: "Reference" }), fullButton, el("button", { className: "x", textContent: "×", title: "Close", "aria-label": "Close", on: { click: () => setOpen(false) } })),
     tabs, searchPage, watchPage, body);
   document.body.append(panel);
   show(intro());
@@ -280,7 +290,7 @@ function create() {
   addEventListener("resize", () => layout());
 
   function layout() {
-    const open = panel.classList.contains("open");
+    const open = panel.classList.contains("open") && !panel.classList.contains("hide");
     const w = Math.round(Math.min(width, innerWidth * 0.7));
     panel.style.setProperty("--ref-w", `${w}px`);
     canvas.style.right = open ? `${w}px` : "0";
@@ -288,7 +298,7 @@ function create() {
   }
   function setOpen(open) {
     panel.classList.toggle("open", open);
-    if (!open) { stopLoading(); for (const m of body.querySelectorAll("iframe, video")) m.remove(); show(...(results ?? [intro()])); canvas.focus({ preventScroll: true }); }
+    if (!open) { if (document.fullscreenElement === panel) document.exitFullscreen().catch(() => {}); stopLoading(); for (const m of body.querySelectorAll("iframe, video")) m.remove(); show(...(results ?? [intro()])); canvas.focus({ preventScroll: true }); }
     else if (!watchPage.hidden) link.focus(); else field.focus();
     layout();
   }
@@ -362,7 +372,14 @@ function create() {
   }
 
   layout();
-  return { toggle: () => setOpen(!panel.classList.contains("open")), isOpen: () => panel.classList.contains("open"), open: () => setOpen(true), close: () => setOpen(false) };
+  // Hidden with the rest of the interface (G in the app): out of sight but kept as it is, a
+  // video playing on.
+  const setHidden = hide => {
+    panel.classList.toggle("hide", hide);
+    if (hide && document.fullscreenElement === panel) document.exitFullscreen().catch(() => {});
+    layout();
+  };
+  return { toggle: () => setOpen(!panel.classList.contains("open")), isOpen: () => panel.classList.contains("open"), open: () => setOpen(true), close: () => setOpen(false), setHidden };
 }
 
 if (typeof document !== "undefined" && document.getElementById("recedo")) window.recedoReference = create();

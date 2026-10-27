@@ -118,7 +118,11 @@ Each step says what you should see. If something is different, note the step num
 9. **Reference** (browser version, in the toolbar): search "hand drawing" with Pictures,
    Videos and Articles; click a picture to see it big; under **Watch a link** paste a
    YouTube link. *Expected:* everything shows in the panel on the right while you keep
-   drawing; **×** closes it. Tell me if a kind of search never shows anything.
+   drawing; **×** closes it; **Full screen** fills the screen with it (Escape comes back).
+   Tell me if a kind of search never shows anything.
+10. **G** (click the canvas first): everything but the painting hides, the reference panel
+   too; **G** again or **Escape** brings it all back. Typing a g in the reference search
+   box must not do this. The gradient is now **Shift+G**.
 
 ## 6. What to send back
 

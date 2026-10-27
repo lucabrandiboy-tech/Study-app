@@ -56,7 +56,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             tools: ToolSettings::default(),
-            color: [20, 20, 30],
+            color: [0, 0, 0],
             recent_colors: Vec::new(),
             dock: DockLayout::default(),
             tablet: TabletApi::Ink,
@@ -113,6 +113,10 @@ impl Settings {
     }
 
     pub fn sanitize(&mut self) {
+        // The old default colour (a very dark blue) becomes the new one, black.
+        if self.color == [20, 20, 30] {
+            self.color = [0, 0, 0];
+        }
         self.ui_scale = if self.ui_scale.is_finite() { self.ui_scale.clamp(0.5, 3.0) } else { 1.0 };
         self.autosave_minutes = self.autosave_minutes.clamp(1, 120);
         self.jpeg_quality = self.jpeg_quality.clamp(1, 100);

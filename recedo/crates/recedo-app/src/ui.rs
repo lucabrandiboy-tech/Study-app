@@ -36,6 +36,9 @@ pub enum Request {
     SetTabletApi(TabletApi),
     /// Browser version: show or hide the reference panel (search, pictures, videos).
     ToggleReference,
+    /// Browser version: G hid (true) or brought back the interface; the reference panel
+    /// hides with it.
+    CanvasOnly(bool),
 }
 
 /// What to do once unsaved changes are saved or discarded.
@@ -109,6 +112,8 @@ pub struct AppUi {
     pub tool_library: bool,
     /// Browser version: the reference panel is open (the shell keeps this up to date).
     pub reference_open: bool,
+    /// G: only the painting is shown.
+    pub canvas_only: bool,
     /// The tool in the last frame, and whether text was being written then.
     last_tool: Tool,
     writing: bool,
@@ -127,11 +132,12 @@ impl AppUi {
             rename: None,
             presets: builtin_presets(),
             hex: String::new(),
-            hsv: crate::widgets::Hsv(0.6, 0.8, 0.6),
+            hsv: crate::widgets::Hsv(0.0, 0.0, 0.0),
             tablet_status: String::new(),
             web: false,
             tool_library: false,
             reference_open: false,
+            canvas_only: false,
             last_tool: Tool::Brush,
             writing: false,
         }
@@ -145,6 +151,23 @@ impl AppUi {
     pub fn offer_recovery(&mut self, found: Vec<Recoverable>) {
         if !found.is_empty() {
             self.dialog = Some(Dialog::Recovery(found));
+        }
+    }
+
+    /// G: hides (or brings back) everything but the painting: menus, toolbar, panels, and in
+    /// the browser the reference panel.
+    pub fn set_canvas_only(&mut self, on: bool, requests: &mut Vec<Request>) {
+        if self.canvas_only == on {
+            return;
+        }
+        self.canvas_only = on;
+        if self.web {
+            requests.push(Request::CanvasOnly(on));
+        }
+        // The hint goes with it: once everything is back it has nothing more to say.
+        self.toasts.retain(|(_, _, text)| text != CANVAS_ONLY_HINT);
+        if on {
+            self.toasts.push((Instant::now(), NoticeKind::Info, CANVAS_ONLY_HINT.into()));
         }
     }
 
@@ -264,26 +287,34 @@ impl AppUi {
             self.shortcuts(&ctx, ed, &mut requests);
         }
 
-        egui::Panel::top("menu").show(root, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| self.menus(ui, ed, &mut requests));
-        });
-        let reference = self.web.then_some(self.reference_open);
-        egui::Panel::top("toolbar").show(root, |ui| {
-            if toolbar(ui, ed, &mut self.tool_library, reference) {
-                requests.push(Request::ToggleReference);
-            }
-        });
-        egui::Panel::bottom("status").show(root, |ui| self.status_bar(ui, ed));
-        let mut dock = std::mem::take(&mut self.settings.dock);
-        let canvas_rect = dock.ui(root, &mut |ui, panel| self.panel(ui, panel, ed));
-        self.settings.dock = dock;
+        let canvas_rect = if self.canvas_only {
+            // G: nothing but the painting.
+            root.available_rect_before_wrap()
+        } else {
+            egui::Panel::top("menu").show(root, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| self.menus(ui, ed, &mut requests));
+            });
+            let reference = self.web.then_some(self.reference_open);
+            egui::Panel::top("toolbar").show(root, |ui| {
+                if toolbar(ui, ed, &mut self.tool_library, reference) {
+                    requests.push(Request::ToggleReference);
+                }
+            });
+            egui::Panel::bottom("status").show(root, |ui| self.status_bar(ui, ed));
+            let mut dock = std::mem::take(&mut self.settings.dock);
+            let rect = dock.ui(root, &mut |ui, panel| self.panel(ui, panel, ed));
+            self.settings.dock = dock;
+            rect
+        };
         // The canvas itself is drawn by the GPU underneath; here only what goes over it, on the
         // panels' own layer after them (nothing else paints the canvas area), so every window
         // and floating panel stays on top of it.
         let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(canvas_rect);
         ed.update_outline();
         self.overlay(&painter, &ctx, ed, canvas_rect);
-        self.tool_library_window(&ctx, ed);
+        if !self.canvas_only {
+            self.tool_library_window(&ctx, ed);
+        }
         self.toasts_ui(&ctx, canvas_rect);
         self.dialogs(&ctx, ed, &mut requests);
         // Text being written: its box (in Tool options) comes to the front when writing
@@ -342,7 +373,9 @@ impl AppUi {
         } else if hit(ctrl, Key::A) {
             ed.select_all();
         }
-        if hit(ctrl_shift, Key::I) {
+        // Ctrl+I too (hit() also takes Ctrl+Shift+I): a browser may open its developer tools
+        // on Ctrl+Shift+I.
+        if hit(ctrl, Key::I) {
             ed.invert_selection();
         }
         if hit(none, Key::Backspace) {
@@ -354,6 +387,9 @@ impl AppUi {
         if hit(none, Key::Escape) {
             ed.cancel_crop();
             ed.cancel_text();
+            if self.canvas_only {
+                self.set_canvas_only(false, requests);
+            }
         }
         if ed.tool == Tool::Move {
             for (key, dx, dy) in [(Key::ArrowLeft, -1, 0), (Key::ArrowRight, 1, 0), (Key::ArrowUp, 0, -1), (Key::ArrowDown, 0, 1)] {
@@ -399,8 +435,11 @@ impl AppUi {
         if hit(none, Key::F) {
             ed.tool = Tool::Fill;
         }
-        if hit(none, Key::G) {
+        // G: only the canvas (again, or Escape: everything back); Shift+G: gradient.
+        if hit(shift, Key::G) {
             ed.tool = Tool::Gradient;
+        } else if hit(none, Key::G) {
+            self.set_canvas_only(!self.canvas_only, requests);
         }
         if hit(none, Key::V) {
             ed.tool = Tool::Line;
@@ -526,6 +565,11 @@ impl AppUi {
             }
         });
         ui.menu_button("View", |ui| {
+            if item(ui, "Only the canvas", "G") {
+                self.set_canvas_only(true, requests);
+                ui.close();
+            }
+            ui.separator();
             if item(ui, "Zoom in", "+") {
                 ed.zoom_in();
             }
@@ -593,7 +637,7 @@ impl AppUi {
                     ed.deselect();
                     ui.close();
                 }
-                if item(ui, "Invert", "Ctrl+Shift+I") {
+                if item(ui, "Invert", "Ctrl+I") {
                     ed.invert_selection();
                     ui.close();
                 }
@@ -730,7 +774,9 @@ impl AppUi {
                                             Some(k) => format!("{}  ({k})", t.name()),
                                             None => t.name().to_string(),
                                         };
-                                        if ui.add(egui::Button::selectable(ed.tool == t, name).min_size(vec2(150.0, 26.0))).on_hover_text(t.hint()).clicked() {
+                                        // A light outline, so each tool stands out as a box.
+                                        let button = egui::Button::new(name).selected(ed.tool == t).stroke(Stroke::new(1.0, Color32::from_gray(220))).min_size(vec2(150.0, 26.0));
+                                        if ui.add(button).on_hover_text(t.hint()).clicked() {
                                             ed.tool = t;
                                         }
                                         let mut on = bar.contains(&t);
@@ -895,12 +941,15 @@ impl AppUi {
                     && *ri == i
                 {
                     let r = ui.text_edit_singleline(text);
-                    r.request_focus();
+                    // Enter, Escape or a click elsewhere ends it. (Asking for the keys again
+                    // every frame kept the box open for good, with every shortcut dead.)
                     if r.lost_focus() {
                         let (idx, new) = self.rename.take().expect("renaming");
                         if !ui.input(|i| i.key_pressed(Key::Escape)) {
                             ed.rename_layer(idx, &new);
                         }
+                    } else if !r.has_focus() {
+                        r.request_focus();
                     }
                 } else {
                     let label = if opacity < 255 { format!("{name}  ({}%)", (opacity as f32 / 2.55).round()) } else { name.clone() };
@@ -1267,7 +1316,7 @@ impl AppUi {
                         };
                         tip(ui, "Draw", "Paint with the pen or mouse. [ and ] change the brush size, E switches to the eraser, Ctrl+Z undoes. Pressing harder paints thicker.");
                         tip(ui, "Tools", "The bar on the left holds your tools. \"All tools…\" at its top lists all 31: click one to use it, tick \"On bar\" to keep it there.");
-                        tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it.");
+                        tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it. G hides everything but the painting (G or Escape brings it back).");
                         tip(ui, "Layers and colour", "The panels on the right: pick a colour, add layers, change their opacity and blend mode. Ctrl+click on the painting picks a colour.");
                         tip(ui, "Selections", "Box select (R), the magic wand (W) and the others keep painting inside the selection. The Select menu has the rest.");
                         if self.web {
@@ -1755,7 +1804,7 @@ fn selection_controls(ui: &mut Ui, ed: &mut Editor) {
         if ui.add_enabled(has, egui::Button::new("Deselect")).on_hover_text("Ctrl+Shift+A").clicked() {
             ed.deselect();
         }
-        if ui.add_enabled(has, egui::Button::new("Invert")).on_hover_text("Ctrl+Shift+I").clicked() {
+        if ui.add_enabled(has, egui::Button::new("Invert")).on_hover_text("Ctrl+I").clicked() {
             ed.invert_selection();
         }
     });
@@ -1875,12 +1924,16 @@ fn ago(secs_since_1970: u64) -> String {
 }
 
 /// Shown in Help > Keyboard shortcuts.
+/// Shown when G hides everything but the painting.
+const CANVAS_ONLY_HINT: &str = "Only the canvas: G or Escape brings everything back.";
+
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("B", "Brush"),
     ("E", "Eraser on/off"),
     ("P", "Eyedropper"),
     ("F", "Fill"),
-    ("G", "Gradient"),
+    ("G", "Only the canvas (G or Escape: everything back)"),
+    ("Shift + G", "Gradient"),
     ("V", "Line"),
     ("S", "Smudge"),
     ("R  L  W", "Rectangle select, lasso select, magic wand"),
@@ -1891,7 +1944,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Shift / Alt when starting a selection", "Add to it / take away from it"),
     ("Ctrl + A", "Select all"),
     ("Ctrl + Shift + A, Ctrl + D", "Deselect"),
-    ("Ctrl + Shift + I", "Invert the selection"),
+    ("Ctrl + I, Ctrl + Shift + I", "Invert the selection"),
     ("Backspace", "Fill the selection (or the layer) with the colour"),
     ("Ctrl + Alt + J", "Copy the selection to a new layer"),
     ("Ctrl + Shift + J", "Cut the selection to a new layer"),

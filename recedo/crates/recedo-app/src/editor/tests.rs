@@ -850,6 +850,10 @@ fn selections_are_made_combined_and_undone() {
     e.deselect();
     assert!(!e.has_selection());
     assert_eq!(steps(&e), vec!["Select", "Select", "Select", "Select", "Invert selection", "Select all", "Deselect"]);
+    // Nothing selected: inverting says so and changes nothing.
+    e.invert_selection();
+    assert!(!e.has_selection() && steps(&e).len() == 7);
+    assert!(e.notices.iter().any(|n| n.text.starts_with("Nothing is selected")), "{:?}", e.notices);
     // Undo walks back through them.
     e.undo();
     assert_eq!(sel(&e, 399, 299), 255);

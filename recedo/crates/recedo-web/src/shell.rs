@@ -553,7 +553,7 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
             }
             // Keep the browser's own shortcuts (Ctrl+S saves the page, Ctrl+O opens a file,
             // Ctrl+D bookmarks, Backspace goes back, Tab, …) from acting while Recedo uses
-            // them. (A few, such as Ctrl+Shift+I for the developer tools, the browser keeps.)
+            // them. (A few, such as Ctrl+W, Ctrl+T and Ctrl+N, the browser keeps.)
             if mods.ctrl || mods.mac_cmd || key == "Tab" || (!typing && (key == "Backspace" || key.starts_with("Arrow") || key.starts_with('F') && key.len() > 1)) {
                 e.prevent_default();
             }
@@ -613,6 +613,12 @@ fn handle_request(app: &Rc<RefCell<App>>, r: Request) {
                 Err(e) => a.session.ed.notices.push(crate::editor::Notice { kind: crate::editor::NoticeKind::Error, text: format!("Could not export: {e}") }),
             }
             a.frame_wanted = true;
+        }
+        Request::CanvasOnly(on) => {
+            if let Some(f) = reference_fn("setHidden") {
+                let _ = f.call1(&JsValue::NULL, &JsValue::from_bool(on));
+            }
+            app.borrow_mut().frame_wanted = true;
         }
         Request::ToggleReference => {
             if let Some(f) = reference_fn("toggle") {

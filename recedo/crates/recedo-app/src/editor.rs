@@ -300,7 +300,7 @@ impl Tool {
             Tool::Eraser => "E",
             Tool::Eyedropper => "P",
             Tool::Fill => "F",
-            Tool::Gradient => "G",
+            Tool::Gradient => "Shift+G",
             Tool::Line => "V",
             Tool::Smudge => "S",
             Tool::SelectRect => "R",
@@ -580,7 +580,7 @@ impl Editor {
             active,
             tool: Tool::Brush,
             tools: ToolSettings::default(),
-            color: [20, 20, 30],
+            color: [0, 0, 0],
             recent_colors: Vec::new(),
             mods: Modifiers::default(),
             press_mods: Modifiers::default(),
@@ -1242,7 +1242,11 @@ impl Editor {
         self.finish_interaction();
         let inverted = match &self.doc.selection {
             Some(m) => select::invert(m),
-            None => return,
+            None => {
+                // Said, not silent: otherwise the key looks broken.
+                self.notice(NoticeKind::Info, "Nothing is selected, so there is nothing to invert. Select something first.");
+                return;
+            }
         };
         self.set_selection("Invert selection", inverted);
     }

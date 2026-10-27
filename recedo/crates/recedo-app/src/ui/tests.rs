@@ -274,6 +274,47 @@ fn shortcuts_fit_a_small_screen_and_the_select_menu_works() {
 }
 
 #[test]
+fn g_shows_only_the_canvas_and_the_new_keys() {
+    let Some(g) = gpu() else { return };
+    let mut s = Session::new(Settings::default(), None);
+    assert_eq!(s.ed.color, [0, 0, 0], "black to start with");
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    let key = |k: Key, m: egui::Modifiers| vec![Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m }];
+    let normal = quiet(&g, &mut r, &mut s, vec![]).canvas_rect;
+    let f = quiet(&g, &mut r, &mut s, key(Key::G, egui::Modifiers::NONE));
+    assert!(s.ui.canvas_only);
+    let (w, h) = (screen().w as f32, screen().h as f32);
+    assert!(f.canvas_rect.min == pos2(0.0, 0.0) && f.canvas_rect.max == pos2(w, h), "the whole window: {:?}", f.canvas_rect);
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    assert!(find_text(&out, "File").is_empty() && find_text(&out, "Layers").is_empty(), "no menus or panels");
+    shot(&g, &mut r, &mut s, out, "15-canvas-only");
+    let f = quiet(&g, &mut r, &mut s, key(Key::G, egui::Modifiers::NONE));
+    assert!(!s.ui.canvas_only && f.canvas_rect == normal, "G again: everything back");
+    assert!(s.ui.toasts.iter().all(|(_, _, t)| t != CANVAS_ONLY_HINT), "its hint goes with it");
+    quiet(&g, &mut r, &mut s, key(Key::G, egui::Modifiers::NONE));
+    let f = quiet(&g, &mut r, &mut s, key(Key::Escape, egui::Modifiers::NONE));
+    assert!(!s.ui.canvas_only && f.canvas_rect == normal, "Escape: everything back");
+    // Typed into a text field (here the layer name), G is a letter, not the shortcut.
+    s.ui.rename = Some((s.ed.active, String::new()));
+    quiet(&g, &mut r, &mut s, vec![]);
+    let mut typing = key(Key::G, egui::Modifiers::NONE);
+    typing.push(Event::Text("g".into()));
+    quiet(&g, &mut r, &mut s, typing);
+    assert!(!s.ui.canvas_only, "not while typing");
+    // Enter finishes the renaming (the layer gets the name typed); then the keys are
+    // shortcuts again.
+    quiet(&g, &mut r, &mut s, key(Key::Enter, egui::Modifiers::NONE));
+    assert!(s.ui.rename.is_none(), "Enter ends the renaming");
+    assert_eq!(s.ed.doc.layers[s.ed.active].name, "g");
+    assert!(!s.egui.egui_wants_keyboard_input(), "the keyboard is free again");
+    quiet(&g, &mut r, &mut s, key(Key::G, egui::Modifiers::SHIFT));
+    assert_eq!((s.ed.tool, s.ui.canvas_only), (Tool::Gradient, false), "Shift+G: gradient");
+    s.ed.select_all();
+    quiet(&g, &mut r, &mut s, key(Key::I, egui::Modifiers::COMMAND));
+    assert!(!s.ed.has_selection(), "Ctrl+I inverts (everything selected: nothing left)");
+}
+
+#[test]
 fn hex_colour_parsing() {
     assert_eq!(parse_hex("#ff8000"), Some([255, 128, 0]));
     assert_eq!(parse_hex("0F0"), Some([0, 255, 0]));
