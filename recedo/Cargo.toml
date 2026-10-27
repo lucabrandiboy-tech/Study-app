@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/recedo-app", "crates/recedo-core", "crates/recedo-render", "crates/recedo-tablet", "crates/recedo-tabletest", "crates/recedo-web", "crates/recedo-win", "crates/wintab-mock"]
 
 [workspace.package]
-version = "0.0.1"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"

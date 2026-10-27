@@ -192,6 +192,18 @@ impl Tool {
         }
     }
 
+    /// The name on the narrow side bar (one line there).
+    pub fn short_name(self) -> &'static str {
+        match self {
+            Tool::SelectRect => "Box select",
+            Tool::SelectEllipse => "Oval select",
+            Tool::SelectLasso => "Lasso select",
+            Tool::MagicEraser => "Magic eraser",
+            Tool::Rotate => "Rotate",
+            t => t.name(),
+        }
+    }
+
     /// The name kept in the settings (never changes, unlike the shown name).
     pub fn id(self) -> &'static str {
         match self {

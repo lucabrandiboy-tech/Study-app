@@ -236,6 +236,44 @@ fn small_screen_at_150_percent() {
 }
 
 #[test]
+fn shortcuts_fit_a_small_screen_and_the_select_menu_works() {
+    let Some(g) = gpu() else { return };
+    SCREEN.with(|sc| sc.set(Screen { w: 1366, h: 768, scale: 1.0 }));
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    s.ui.dialog = Some(Dialog::Shortcuts);
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    // The list scrolls inside the dialog: its first line and the Close button are on screen.
+    let close = find_text(&out, "Close");
+    let first = find_text(&out, "Brush");
+    assert!(close.iter().any(|c| c.max.y <= 768.0) && first.iter().any(|f| f.min.y >= 0.0), "{close:?} {first:?}");
+    shot(&g, &mut r, &mut s, out, "13-shortcuts-1366x768");
+    s.ui.dialog = Some(Dialog::GettingStarted);
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    assert!(find_text(&out, "Close").iter().any(|c| c.max.y <= 768.0) && !find_text(&out, "Getting started").is_empty());
+    shot(&g, &mut r, &mut s, out, "14-getting-started");
+    s.ui.dialog = None;
+    // Select > Select all, then Select > Clear the selection.
+    let open_select = |s: &mut Session, g: &Gpu, r: &mut Renderer| {
+        let (out, _) = frames(g, r, s, vec![]);
+        let menu = find_text(&out, "Select").into_iter().find(|m| m.min.y < 20.0).expect("the Select menu");
+        r.skip_frame(&g.device, &g.queue, &mut { out });
+        frames(g, r, s, click(menu.center())).0
+    };
+    let out = open_select(&mut s, &g, &mut r);
+    let all = find_text(&out, "Select all")[0];
+    r.skip_frame(&g.device, &g.queue, &mut { out });
+    quiet(&g, &mut r, &mut s, click(all.center()));
+    assert!(s.ed.has_selection());
+    let out = open_select(&mut s, &g, &mut r);
+    let deselect = find_text(&out, "Deselect")[0];
+    r.skip_frame(&g.device, &g.queue, &mut { out });
+    quiet(&g, &mut r, &mut s, click(deselect.center()));
+    assert!(!s.ed.has_selection());
+    SCREEN.with(|sc| sc.set(Screen { w: 1600, h: 900, scale: 1.0 }));
+}
+
+#[test]
 fn hex_colour_parsing() {
     assert_eq!(parse_hex("#ff8000"), Some([255, 128, 0]));
     assert_eq!(parse_hex("0F0"), Some([0, 255, 0]));
@@ -288,8 +326,8 @@ fn the_side_bar_and_the_tool_library() {
     let (out, f) = frames(&g, &mut r, &mut s, vec![]);
     // The side bar shows the standard tools, left of the canvas.
     for t in Tool::DEFAULT_BAR {
-        let at = find_text(&out, t.name());
-        assert!(at.iter().any(|r| r.max.x <= f.canvas_rect.min.x), "{} on the side bar", t.name());
+        let at = find_text(&out, t.short_name());
+        assert!(at.iter().any(|r| r.max.x <= f.canvas_rect.min.x), "{} on the side bar", t.short_name());
     }
     assert!(find_text(&out, "Clone").is_empty(), "not on the bar yet");
     let open = find_text(&out, "All tools…");

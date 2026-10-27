@@ -56,6 +56,7 @@ enum Dialog {
     Messages { title: String, lines: Vec<String> },
     Settings,
     Shortcuts,
+    GettingStarted,
     About,
 }
 
@@ -462,17 +463,20 @@ impl AppUi {
                 self.guarded(ed, Then::OpenDialog, requests);
                 ui.close();
             }
-            let recent = if self.web { Vec::new() } else { self.settings.recent_files.clone() };
-            ui.add_enabled_ui(!recent.is_empty(), |ui| {
-                ui.menu_button("Open recent", |ui| {
-                    for p in recent {
-                        if ui.button(p.display().to_string()).clicked() {
-                            self.guarded(ed, Then::OpenPath(p), requests);
-                            ui.close();
+            // A browser page cannot reopen files by their path, so it has no recent list.
+            if !self.web {
+                let recent = self.settings.recent_files.clone();
+                ui.add_enabled_ui(!recent.is_empty(), |ui| {
+                    ui.menu_button("Open recent", |ui| {
+                        for p in recent {
+                            if ui.button(p.display().to_string()).clicked() {
+                                self.guarded(ed, Then::OpenPath(p), requests);
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
-            });
+            }
             ui.separator();
             if item(ui, "Save", "Ctrl+S") {
                 if !ed.save() {
@@ -578,6 +582,47 @@ impl AppUi {
                 ui.close();
             }
         });
+        ui.menu_button("Select", |ui| {
+            if item(ui, "Select all", "Ctrl+A") {
+                ed.select_all();
+                ui.close();
+            }
+            let has = ed.has_selection();
+            ui.add_enabled_ui(has, |ui| {
+                if item(ui, "Deselect", "Ctrl+D") {
+                    ed.deselect();
+                    ui.close();
+                }
+                if item(ui, "Invert", "Ctrl+Shift+I") {
+                    ed.invert_selection();
+                    ui.close();
+                }
+            });
+            ui.separator();
+            if item(ui, if has { "Fill the selection with the colour" } else { "Fill the layer with the colour" }, "Backspace") {
+                ed.fill_selection();
+                ui.close();
+            }
+            if item(ui, if has { "Clear the selection" } else { "Clear the layer" }, "Delete") {
+                ed.clear_layer();
+                ui.close();
+            }
+            ui.add_enabled_ui(has, |ui| {
+                ui.separator();
+                if item(ui, "Copy to a new layer", "Ctrl+Alt+J") {
+                    ed.selection_to_layer(false);
+                    ui.close();
+                }
+                if item(ui, "Cut to a new layer", "Ctrl+Shift+J") {
+                    ed.selection_to_layer(true);
+                    ui.close();
+                }
+                if item(ui, "Crop the painting to it", "") {
+                    ed.crop_to_selection();
+                    ui.close();
+                }
+            });
+        });
         ui.menu_button("Window", |ui| {
             for p in Panel::ALL {
                 let mut open = self.settings.dock.is_open(p);
@@ -598,6 +643,10 @@ impl AppUi {
             }
         });
         ui.menu_button("Help", |ui| {
+            if ui.button("Getting started").clicked() {
+                self.dialog = Some(Dialog::GettingStarted);
+                ui.close();
+            }
             if ui.button("Keyboard shortcuts").clicked() {
                 self.dialog = Some(Dialog::Shortcuts);
                 ui.close();
@@ -635,13 +684,13 @@ impl AppUi {
                     Some(k) => format!("{} ({k})", t.hint()),
                     None => t.hint().to_string(),
                 };
-                if ui.add(egui::Button::selectable(ed.tool == *t, t.name()).min_size(vec2(0.0, 28.0))).on_hover_text(tip).clicked() {
+                if ui.add(egui::Button::selectable(ed.tool == *t, t.short_name()).min_size(vec2(0.0, 28.0))).on_hover_text(tip).clicked() {
                     ed.tool = *t;
                 }
             }
             // A tool picked from the full list that is not on the bar still shows here.
             if !bar.contains(&ed.tool) {
-                ui.add(egui::Button::selectable(true, ed.tool.name()).min_size(vec2(0.0, 28.0))).on_hover_text(ed.tool.hint());
+                ui.add(egui::Button::selectable(true, ed.tool.short_name()).min_size(vec2(0.0, 28.0))).on_hover_text(ed.tool.hint());
             }
             ui.add_space(8.0);
             let [r, g, b] = ed.color;
@@ -1206,14 +1255,46 @@ impl AppUi {
                     }
                 }
                 Dialog::Settings => keep = self.settings_ui(ui, requests),
+                Dialog::GettingStarted => {
+                    ui.heading("Getting started");
+                    let tall = (ctx.content_rect().height() - 140.0).max(160.0);
+                    egui::ScrollArea::vertical().max_height(tall).show(ui, |ui| {
+                        ui.set_max_width(520.0);
+                        let tip = |ui: &mut Ui, head: &str, text: &str| {
+                            ui.add_space(6.0);
+                            ui.strong(head);
+                            ui.label(text);
+                        };
+                        tip(ui, "Draw", "Paint with the pen or mouse. [ and ] change the brush size, E switches to the eraser, Ctrl+Z undoes. Pressing harder paints thicker.");
+                        tip(ui, "Tools", "The bar on the left holds your tools. \"All tools…\" at its top lists all 31: click one to use it, tick \"On bar\" to keep it there.");
+                        tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it.");
+                        tip(ui, "Layers and colour", "The panels on the right: pick a colour, add layers, change their opacity and blend mode. Ctrl+click on the painting picks a colour.");
+                        tip(ui, "Selections", "Box select (R), the magic wand (W) and the others keep painting inside the selection. The Select menu has the rest.");
+                        if self.web {
+                            tip(ui, "Reference", "\"Reference\" in the toolbar opens a box on the right to search pictures, videos and articles, or play a YouTube link, while you draw.");
+                            tip(ui, "Saving", "File > Save as… downloads a .kra file (Krita opens it too); File > Export as PNG or JPEG for a picture. Your painting is also kept in this browser, so it comes back if the tab closes.");
+                        } else {
+                            tip(ui, "Saving", "File > Save (.kra, Krita opens it too); File > Export as PNG or JPEG for a picture. A copy is saved every few minutes, so a crash loses little.");
+                        }
+                        tip(ui, "Panels", "Drag a panel's tab to move it; the Window menu shows or hides panels.");
+                    });
+                    ui.add_space(6.0);
+                    if ui.button("Close").clicked() {
+                        keep = false;
+                    }
+                }
                 Dialog::Shortcuts => {
                     ui.heading("Keyboard shortcuts");
-                    egui::Grid::new("keys").striped(true).show(ui, |ui| {
-                        for (k, what) in SHORTCUTS {
-                            ui.label(RichText::new(*k).monospace());
-                            ui.label(*what);
-                            ui.end_row();
-                        }
+                    // Scrolls when the screen is not tall enough for the whole list.
+                    let tall = (ctx.content_rect().height() - 140.0).max(160.0);
+                    egui::ScrollArea::vertical().max_height(tall).show(ui, |ui| {
+                        egui::Grid::new("keys").striped(true).show(ui, |ui| {
+                            for (k, what) in SHORTCUTS {
+                                ui.label(RichText::new(*k).monospace());
+                                ui.label(*what);
+                                ui.end_row();
+                            }
+                        });
                     });
                     if ui.button("Close").clicked() {
                         keep = false;
@@ -1223,7 +1304,11 @@ impl AppUi {
                     ui.heading("Recedo");
                     ui.label(format!("Version {VERSION} ({})", option_env!("RECEDO_GIT_HASH").unwrap_or("dev")));
                     ui.label("A painting app for pen tablets, compatible with Krita's .kra files.");
-                    ui.label("Licence: GPL-3.0-or-later. See LICENCES.txt for the parts it uses.");
+                    ui.label(if self.web {
+                        "Licence: GPL-3.0-or-later. Runs in your browser; your paintings stay on this computer."
+                    } else {
+                        "Licence: GPL-3.0-or-later. See LICENCES.txt for the parts it uses."
+                    });
                     if ui.button("Close").clicked() {
                         keep = false;
                     }

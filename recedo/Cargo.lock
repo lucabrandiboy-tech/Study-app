@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-app"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-core"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "epaint_default_fonts",
  "jpeg-decoder",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-render"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-tablet"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "web-time",
  "windows-sys",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-tabletest"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-web"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "recedo-win"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "egui",
  "recedo-tablet",
@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "wintab-mock"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "recedo-tablet",
  "windows-sys",
