@@ -230,6 +230,9 @@ fn small_screen_at_150_percent() {
     shot(&g, &mut r, &mut s, out, "07-1080p-at-150-percent");
     let c = f.canvas_rect;
     assert!(c.width() >= 700.0 && c.height() >= 560.0, "canvas area {c:?} of 1280 x 720 points");
+    // Every tool on the strip shows whole, above the colours.
+    let bottom = s.ui.strip.iter().map(|(_, r)| r.max.y).fold(0.0, f32::max);
+    assert!(bottom <= c.max.y - 30.0, "the strip's last icon ends at {bottom}, the canvas at {}", c.max.y);
     // The canvas area in pixels is what the editor fits the painting into.
     let (_, _, vw, vh) = s.ed.viewport;
     assert!((vw - c.width() as f64 * 1.5).abs() < 1.0 && (vh - c.height() as f64 * 1.5).abs() < 1.0);
@@ -365,17 +368,21 @@ fn the_side_bar_and_the_tool_library() {
     let mut s = session();
     let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
     let (out, f) = frames(&g, &mut r, &mut s, vec![]);
-    // The side bar shows the standard tools, left of the canvas.
+    shot(&g, &mut r, &mut s, out, "08a-main-window-tool-strip");
+    // The tool strip shows the standard tools as icons, left of the canvas, all on screen.
+    let on_strip = |s: &Session, t: Tool| s.ui.strip.iter().find(|(x, _)| *x == Some(t)).map(|(_, r)| *r);
     for t in Tool::DEFAULT_BAR {
-        let at = find_text(&out, t.short_name());
-        assert!(at.iter().any(|r| r.max.x <= f.canvas_rect.min.x), "{} on the side bar", t.short_name());
+        let at = on_strip(&s, t).unwrap_or_else(|| panic!("{} on the strip", t.name()));
+        assert!(at.max.x <= f.canvas_rect.min.x && at.max.y <= screen().h as f32, "{} at {at:?}", t.name());
     }
-    assert!(find_text(&out, "Clone").is_empty(), "not on the bar yet");
-    let open = find_text(&out, "All tools…");
-    assert_eq!(open.len(), 1);
-    r.skip_frame(&g.device, &g.queue, &mut { out });
-    // Open the full list from the side bar's button.
-    let (out, _) = frames(&g, &mut r, &mut s, click(open[0].center()));
+    assert!(on_strip(&s, Tool::Clone).is_none(), "not on the bar yet");
+    // A click on an icon picks its tool.
+    let fill = on_strip(&s, Tool::Fill).unwrap().center();
+    quiet(&g, &mut r, &mut s, click(fill));
+    assert_eq!(s.ed.tool, Tool::Fill);
+    let open = s.ui.strip.iter().find(|(x, _)| x.is_none()).map(|(_, r)| *r).expect("the All tools button");
+    // Open the full list from the strip's button.
+    let (out, _) = frames(&g, &mut r, &mut s, click(open.center()));
     assert!(s.ui.tool_library, "the button opens it");
     let opened = library_rect(&s);
     let missing: Vec<&str> = Tool::ALL
@@ -421,10 +428,11 @@ fn the_side_bar_and_the_tool_library() {
     let changed = (w.min.y as u32..w.max.y as u32).flat_map(|y| (w.min.x as u32..w.max.x as u32).map(move |x| (x, y))).filter(|&(x, y)| plain.pixel(x, y) != selected.pixel(x, y)).count();
     assert_eq!(changed, 0, "pixels of the window changed by the selection's outline");
     s.ed.deselect();
-    // Closed again, the side bar has it.
+    // Closed again, the strip has it.
     s.ui.tool_library = false;
+    s.ed.tool = Tool::Brush;
     let (out, f) = frames(&g, &mut r, &mut s, vec![]);
-    assert!(find_text(&out, "Clone").iter().any(|r| r.max.x <= f.canvas_rect.min.x), "Clone is on the side bar now");
+    assert!(on_strip(&s, Tool::Clone).is_some_and(|r| r.max.x <= f.canvas_rect.min.x), "Clone is on the strip now");
     shot(&g, &mut r, &mut s, out, "09-side-bar-with-clone");
 }
 
@@ -627,4 +635,85 @@ fn the_text_preview_turns_and_mirrors_with_the_view() {
         assert!((a.0 - b.0).hypot(a.1 - b.1) < 6.0, "mirror {mirror}: the preview's middle {a:?}, the painted text's {b:?}");
         assert!(overlap > 0.6, "mirror {mirror}: only {overlap:.2} of the pixels agree");
     }
+}
+
+#[test]
+fn every_icon_draws_something_of_its_own() {
+    // Each tool and action icon paints, and no two look the same (a copy-paste slip would).
+    // With RECEDO_SCREENSHOTS set, the sheet is saved for a person to look at.
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    // Twenty icons a row, each at three sizes one above the other.
+    let n = Tool::ALL.len() + crate::icons::Action::ALL.len();
+    let place = |i: usize, size: usize| {
+        let (row, col) = (i / 20, i % 20);
+        let side = [20.0, 28.0, 64.0][size];
+        Rect::from_min_size(pos2(10.0 + col as f32 * 72.0, 10.0 + row as f32 * 190.0 + [0.0, 40.0, 90.0][size]), vec2(side, side))
+    };
+    let out = s.egui.run_ui(raw(vec![]), |root| {
+        let p = root.painter();
+        p.rect_filled(root.max_rect(), 0.0, Color32::from_gray(58));
+        for size in 0..3 {
+            for (i, t) in Tool::ALL.into_iter().enumerate() {
+                crate::icons::tool(p, place(i, size), t, Color32::from_gray(225));
+            }
+            for (j, a) in crate::icons::Action::ALL.into_iter().enumerate() {
+                crate::icons::action(p, place(Tool::ALL.len() + j, size), a, Color32::from_gray(225));
+            }
+        }
+    });
+    let img = shot(&g, &mut r, &mut s, out, "18-icons");
+    let mut seen: Vec<Vec<bool>> = Vec::new();
+    for i in 0..n {
+        let rect = place(i, 2);
+        let mut ink = Vec::new();
+        for y in rect.min.y as u32..rect.max.y as u32 {
+            for x in rect.min.x as u32..rect.max.x as u32 {
+                ink.push(img.pixel(x, y)[0] > 120);
+            }
+        }
+        let count = ink.iter().filter(|&&b| b).count();
+        assert!(count > 80, "icon {i} paints only {count} pixels");
+        assert!(!seen.contains(&ink), "icon {i} looks like another one");
+        seen.push(ink);
+    }
+}
+
+#[test]
+fn layer_thumbnails_follow_the_painting() {
+    // The layers panel's small picture of a layer shows what is painted on it, also when
+    // painting stops within the moment thumbnails wait between updates.
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    let before = s.ed.pixels_rev;
+    // A wide stroke across the middle of Layer 1.
+    s.ed.tools.brush.size = 120.0;
+    let (a, b) = (s.ed.view.to_screen(100.0, 360.0), s.ed.view.to_screen(1180.0, 360.0));
+    for i in 0..=30 {
+        let t = i as f64 / 30.0;
+        s.ed.pen(&PenSample::synthetic(i * 4000, a.0 + (b.0 - a.0) * t, a.1, 1.0, true), true, Modifiers::default());
+    }
+    s.ed.pen(&PenSample::synthetic(200_000, b.0, b.1, 0.0, false), true, Modifiers::default());
+    assert_ne!(s.ed.pixels_rev, before, "painting moves the pixel revision on");
+    // The thumbnails were made a moment ago: this frame is too soon, and asks for one later.
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    let later = out.viewport_output.values().next().map(|v| v.repaint_delay);
+    r.skip_frame(&g.device, &g.queue, &mut { out });
+    assert!(later.is_some_and(|d| d <= std::time::Duration::from_millis(400)), "asks to be drawn again: {later:?}");
+    std::thread::sleep(std::time::Duration::from_millis(450));
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    let row = find_text(&out, "Layer 1")[0];
+    let img = shot(&g, &mut r, &mut s, out, "19-layer-thumbnail");
+    // Left of the name, in the picture: the stroke's colour.
+    let blue = (row.min.y as u32 - 14..row.max.y as u32 + 6)
+        .flat_map(|y| (row.min.x as u32 - 46..row.min.x as u32 - 4).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let p = img.pixel(x, y);
+            p[2] > 120 && p[0] < 110
+        })
+        .count();
+    assert!(blue > 20, "the thumbnail shows the stroke: {blue} blue pixels");
 }

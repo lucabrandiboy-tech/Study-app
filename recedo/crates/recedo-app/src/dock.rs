@@ -22,8 +22,8 @@ impl Panel {
 
     pub fn title(self) -> &'static str {
         match self {
-            Panel::Tools => "Tools",
-            Panel::ToolOptions => "Tool options",
+            Panel::Tools => "Sub tool",
+            Panel::ToolOptions => "Tool property",
             Panel::Color => "Colour",
             Panel::Layers => "Layers",
             Panel::History => "History",
@@ -67,9 +67,16 @@ pub struct Floating {
     pub size: [f32; 2],
 }
 
+/// The layout's version: an older saved layout is replaced by the current default once.
+/// 2: the Clip Studio-like layout (colour, sub tool and tool property on the left).
+pub const LAYOUT_VERSION: u32 = 2;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockLayout {
+    /// Missing in layouts saved before versions were kept (0).
+    #[serde(default)]
+    pub version: u32,
     pub left: Vec<Stack>,
     pub right: Vec<Stack>,
     pub floating: Vec<Floating>,
@@ -81,15 +88,12 @@ pub struct DockLayout {
 impl Default for DockLayout {
     fn default() -> DockLayout {
         DockLayout {
-            left: vec![Stack::of(&[Panel::Tools])],
-            right: vec![
-                Stack::weighted(&[Panel::ToolOptions], 1.5),
-                Stack::weighted(&[Panel::Color], 1.25),
-                Stack::weighted(&[Panel::Layers, Panel::History], 1.25),
-            ],
+            version: LAYOUT_VERSION,
+            left: vec![Stack::weighted(&[Panel::Color], 1.5), Stack::weighted(&[Panel::Tools], 1.1), Stack::weighted(&[Panel::ToolOptions], 1.5)],
+            right: vec![Stack::of(&[Panel::Layers, Panel::History])],
             floating: Vec::new(),
-            left_width: 110.0,
-            right_width: 290.0,
+            left_width: 250.0,
+            right_width: 260.0,
         }
     }
 }
@@ -187,7 +191,11 @@ impl DockLayout {
     }
 
     /// Keeps a loaded layout valid: each panel at most once, no empty stacks, sane widths.
+    /// A layout from before the current version becomes the current default.
     pub fn sanitize(&mut self) {
+        if self.version < LAYOUT_VERSION {
+            *self = DockLayout::default();
+        }
         let mut seen = Vec::new();
         for stacks in [&mut self.left, &mut self.right] {
             for s in stacks.iter_mut() {
@@ -212,13 +220,15 @@ impl DockLayout {
         let w = |v: f32, d: f32| {
             if v.is_finite() { v.clamp(60.0, 800.0) } else { d }
         };
-        self.left_width = w(self.left_width, 110.0);
-        self.right_width = w(self.right_width, 290.0);
+        let d = DockLayout::default();
+        self.left_width = w(self.left_width, d.left_width);
+        self.right_width = w(self.right_width, d.right_width);
     }
 
-    /// Shows the docks and floating panels around the canvas. `content` draws a panel's
-    /// contents. Returns the rectangle left for the canvas (in points).
-    pub fn ui(&mut self, root: &mut Ui, content: &mut dyn FnMut(&mut Ui, Panel)) -> egui::Rect {
+    /// Shows the docks and floating panels around the canvas. `title` names a panel's tab
+    /// (it may say what the panel shows now), `content` draws its contents. Returns the
+    /// rectangle left for the canvas (in points).
+    pub fn ui(&mut self, root: &mut Ui, title: &dyn Fn(Panel) -> String, content: &mut dyn FnMut(&mut Ui, Panel)) -> egui::Rect {
         let mut moves: Vec<(Panel, Target)> = Vec::new();
         let mut floats: Vec<(Panel, [f32; 2])> = Vec::new();
         let mut closes: Vec<Panel> = Vec::new();
@@ -236,7 +246,7 @@ impl DockLayout {
                     Side::Left => &mut self.left,
                     Side::Right => &mut self.right,
                 };
-                stacks_ui(ui, side, stacks, content, &mut ops);
+                stacks_ui(ui, side, stacks, title, content, &mut ops);
             });
             let w = resp.response.rect.width();
             match side {
@@ -249,7 +259,7 @@ impl DockLayout {
         let mut docks = Vec::new();
         for f in &mut self.floating {
             let mut open = true;
-            let r = egui::Window::new(f.panel.title())
+            let r = egui::Window::new(title(f.panel))
                 .id(Id::unique(("recedo floating", f.panel)))
                 .default_pos(f.pos)
                 .default_size(f.size)
@@ -287,13 +297,16 @@ impl DockLayout {
     }
 }
 
+/// The panels' title strips.
+pub const HEADER_FILL: egui::Color32 = egui::Color32::from_gray(42);
+
 struct DockOps<'a> {
     moves: &'a mut Vec<(Panel, Target)>,
     floats: &'a mut Vec<(Panel, [f32; 2])>,
     closes: &'a mut Vec<Panel>,
 }
 
-fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], content: &mut dyn FnMut(&mut Ui, Panel), ops: &mut DockOps<'_>) {
+fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], title: &dyn Fn(Panel) -> String, content: &mut dyn FnMut(&mut Ui, Panel), ops: &mut DockOps<'_>) {
     let n = stacks.len();
     let dragging_tab = ui.ctx().dragged_id().is_some_and(|id| Panel::ALL.iter().any(|&p| id == Id::unique(("recedo tab", p))));
     // While a tab is dragged, a strip at the bottom takes drops that make a new stack.
@@ -307,11 +320,14 @@ fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], content: &mut dyn Fn
         ui.push_id(("stack", side, i), |ui| {
             ui.set_height(heights[i]);
             ui.vertical(|ui| {
-                let (_, dropped) = ui.dnd_drop_zone::<Panel, ()>(egui::Frame::NONE, |ui| {
+                // The tabs on a darker header strip, as in Clip Studio.
+                let header = egui::Frame::NONE.fill(HEADER_FILL).inner_margin(egui::Margin::symmetric(4, 3));
+                let (_, dropped) = ui.dnd_drop_zone::<Panel, ()>(header, |ui| {
+                    ui.set_min_width(ui.available_width());
                     ui.horizontal_wrapped(|ui| {
                         for (t, &tab) in stack.tabs.iter().enumerate() {
                             let id = Id::unique(("recedo tab", tab));
-                            let r = ui.dnd_drag_source(id, tab, |ui| ui.selectable_label(t == stack.active, tab.title()));
+                            let r = ui.dnd_drag_source(id, tab, |ui| ui.selectable_label(t == stack.active, title(tab)));
                             if r.inner.clicked() {
                                 stack.active = t;
                             }
@@ -344,7 +360,7 @@ fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], content: &mut dyn Fn
                 if let Some(p) = dropped {
                     ops.moves.push((*p, Target::Stack(side, i)));
                 }
-                ui.separator();
+                ui.add_space(4.0);
                 if let Some(&active) = stack.tabs.get(stack.active) {
                     egui::ScrollArea::vertical().id_salt(("panel", active)).auto_shrink([false, false]).show(ui, |ui| content(ui, active));
                 }
@@ -398,12 +414,12 @@ mod tests {
         assert!(Panel::ALL.iter().all(|&p| d.is_open(p)));
         d.remove(Panel::History);
         assert!(!d.is_open(Panel::History));
-        assert_eq!(d.right[2].tabs, vec![Panel::Layers]);
+        assert_eq!(d.right[0].tabs, vec![Panel::Layers]);
         d.toggle(Panel::History);
         assert!(d.is_open(Panel::History));
         assert_eq!(d.right.last().unwrap().tabs.last(), Some(&Panel::History));
         d.remove(Panel::Tools);
-        assert!(d.left.is_empty(), "empty stacks disappear");
+        assert_eq!(d.left.len(), 2, "empty stacks disappear");
         d.show(Panel::Tools);
         assert!(all_once(&d));
     }
@@ -412,41 +428,42 @@ mod tests {
     fn moving_and_floating() {
         let mut d = DockLayout::default();
         // History onto the Colour stack.
-        d.move_to(Panel::History, Target::Stack(Side::Right, 1));
-        assert_eq!(d.right[1].tabs, vec![Panel::Color, Panel::History]);
-        assert_eq!(d.right[1].active, 1);
-        // Layers was alone in stack 2 now; moving it into stack 0 removes stack 2.
-        d.move_to(Panel::Layers, Target::Stack(Side::Right, 0));
-        assert_eq!(d.right.len(), 2);
-        assert_eq!(d.right[0].tabs, vec![Panel::ToolOptions, Panel::Layers]);
+        d.move_to(Panel::History, Target::Stack(Side::Left, 0));
+        assert_eq!(d.left[0].tabs, vec![Panel::Color, Panel::History]);
+        assert_eq!(d.left[0].active, 1);
+        // Layers was alone on the right now; moving it into a left stack empties the right.
+        d.move_to(Panel::Layers, Target::Stack(Side::Left, 2));
+        assert!(d.right.is_empty());
+        assert_eq!(d.left[2].tabs, vec![Panel::ToolOptions, Panel::Layers]);
         // Moving the only tab of a stack onto a later stack whose index shifts.
         let mut e = DockLayout::default();
-        e.move_to(Panel::ToolOptions, Target::Stack(Side::Right, 2));
-        assert_eq!(e.right.len(), 2);
-        assert_eq!(e.right[1].tabs, vec![Panel::Layers, Panel::History, Panel::ToolOptions]);
+        e.move_to(Panel::Color, Target::Stack(Side::Left, 2));
+        assert_eq!(e.left.len(), 2);
+        assert_eq!(e.left[1].tabs, vec![Panel::ToolOptions, Panel::Color]);
         // Float and dock back.
         d.float(Panel::Color, [10.0, 20.0]);
         assert!(d.floating.iter().any(|f| f.panel == Panel::Color));
         assert!(!d.right.iter().any(|s| s.tabs.contains(&Panel::Color)));
-        d.move_to(Panel::Color, Target::NewStack(Side::Left));
+        d.move_to(Panel::Color, Target::NewStack(Side::Right));
         assert!(d.floating.is_empty());
-        assert_eq!(d.left.last().unwrap().tabs, vec![Panel::Color]);
+        assert_eq!(d.right.last().unwrap().tabs, vec![Panel::Color]);
         assert!(all_once(&d) && all_once(&e));
     }
 
     #[test]
     fn active_tab_stays_valid() {
         let mut d = DockLayout::default();
-        d.right[2].active = 1; // History
+        d.right[0].active = 1; // History
         d.remove(Panel::Layers);
-        assert_eq!(d.right[2].tabs[d.right[2].active], Panel::History);
+        assert_eq!(d.right[0].tabs[d.right[0].active], Panel::History);
         d.remove(Panel::History);
-        assert_eq!(d.right.len(), 2);
+        assert!(d.right.is_empty());
     }
 
     #[test]
     fn sanitize_repairs_saved_layouts() {
         let mut d = DockLayout {
+            version: LAYOUT_VERSION,
             left: vec![Stack { tabs: vec![Panel::Tools, Panel::Tools], active: 7, weight: f32::NAN }, Stack { tabs: vec![], active: 0, weight: 1.0 }],
             right: vec![Stack { tabs: vec![Panel::Tools, Panel::Layers], active: 0, weight: 99.0 }],
             floating: vec![
@@ -460,7 +477,22 @@ mod tests {
         assert_eq!(d.left, vec![Stack { tabs: vec![Panel::Tools], active: 0, weight: 1.0 }]);
         assert_eq!(d.right, vec![Stack { tabs: vec![Panel::Layers], active: 0, weight: 10.0 }]);
         assert!(d.floating.is_empty());
-        assert_eq!((d.left_width, d.right_width), (110.0, 800.0));
+        assert_eq!((d.left_width, d.right_width), (250.0, 800.0));
         assert!(all_once(&d));
+    }
+
+    #[test]
+    fn an_older_layout_becomes_the_new_default_once() {
+        // Saved before versions were kept: no "version" field.
+        let old: DockLayout = serde_json::from_str(r#"{"left":[{"tabs":["Tools"],"active":0}],"right":[{"tabs":["Layers"],"active":0}],"left_width":110,"right_width":290}"#).unwrap();
+        assert_eq!(old.version, 0);
+        let mut d = old;
+        d.sanitize();
+        assert_eq!(d, DockLayout::default());
+        // A current layout the user changed is kept.
+        d.remove(Panel::History);
+        let kept = d.clone();
+        d.sanitize();
+        assert_eq!(d, kept);
     }
 }

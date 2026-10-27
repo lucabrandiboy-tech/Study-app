@@ -12,7 +12,7 @@ use crate::settings::Settings;
 use crate::ui::{AppUi, FrameOutput};
 
 /// Grey around the canvas (sRGB 0..1).
-pub const BACKGROUND: [f64; 3] = [0.20, 0.20, 0.22];
+pub const BACKGROUND: [f64; 3] = [0.14, 0.14, 0.15];
 
 pub struct Session {
     pub ed: Editor,
@@ -30,10 +30,11 @@ impl Session {
         let mut ed = Editor::new(doc, recovery_dir);
         ed.tools = settings.tools.clone();
         ed.color = settings.color;
+        ed.color2 = settings.color2;
         ed.recent_colors = settings.recent_colors.clone();
         ed.autosaver.interval = std::time::Duration::from_secs(settings.autosave_minutes as u64 * 60);
         let egui = egui::Context::default();
-        egui.set_theme(egui::Theme::Dark);
+        crate::ui::apply_theme(&egui);
         // Scroll bars that are always there when a panel has more than fits (egui's default
         // ones only appear on hover, so nothing would show that a panel goes on).
         egui.all_styles_mut(|s| s.spacing.scroll = egui::style::ScrollStyle::solid());
@@ -45,6 +46,7 @@ impl Session {
         let mut s = self.ui.settings.clone();
         s.tools = self.ed.tools.clone();
         s.color = self.ed.color;
+        s.color2 = self.ed.color2;
         s.recent_colors = self.ed.recent_colors.clone();
         s
     }

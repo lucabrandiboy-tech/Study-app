@@ -209,7 +209,18 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Keys typed in the panel never reach the painting's shortcuts; a press on the canvas takes the keyboard back | Otherwise B, E, S... in a search would change tools, and after watching a video the shortcuts would stay dead. | Browser test |
 | No word filter on results (only Openverse's own `mature=false`) | The first version used the Study app's filter and also dropped Commons files whose category list had not arrived (Commons spreads those lists over several answers), which hid most results. Removed at the user's request. | Unit checks |
 
-## 10. Licences
+## 10. The Clip Studio-like interface (asked for after 1.0)
+
+| Decision | Why | Verified by |
+|---|---|---|
+| Icons drawn with shapes on a 24 × 24 grid, in code | egui's fonts have no tool symbols, and shipping an icon font or images means licences and files to keep in step. Drawn icons follow the theme's text colour and stay sharp at any size. | UI test (each paints, none alike); sheet looked at |
+| The tool strip is part of the window, not a dock panel; the old Tools panel became Sub tool | Clip Studio keeps its tool strip fixed at the edge. Keeping the panel's saved name means older settings still load. | UI tests |
+| Layouts carry a version; an older one becomes the new default once | Otherwise everyone who used Recedo before would keep the old layout and never see this one. A layout changed by the user after that is kept. | Dock test |
+| Stroke samples are painted by the real brush engine and kept as textures until the brush or colour changes | A drawn picture of a stroke would not show what the brush does (taper, softness, build-up). | Engine tests of the samples |
+| Layer thumbnails average every painted pixel (every second one past 2 megapixels), only from the tiles that exist, at most every 0.4 s while painting, and ask for a redraw when they wait | Sampling a few points missed thin lines; redoing every frame while painting is too slow at 4K; without the redraw request the last update could be skipped until the mouse moved. | Engine test; UI test (fails without the request) |
+| A second colour, swapped with X | Clip Studio shows two colours; X is Krita's key for the same. | UI and browser tests |
+
+## 11. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

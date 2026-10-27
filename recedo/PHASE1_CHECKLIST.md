@@ -41,7 +41,7 @@ Each step says what you should see. If something is different, note the step num
    *Expected:* thin to thick, smooth, no gaps, no delay you notice.
 3. Draw fast scribbles. *Expected:* smooth lines, no dots or corners.
 4. Press **[** and **]**. *Expected:* the circle shrinks/grows. **I** / **O** lower/raise the
-   opacity (Tool options shows the numbers).
+   opacity (Tool property shows the numbers).
 5. Press **E**, paint over a line. *Expected:* it erases. **E** again: back to the brush.
    If your pen has an eraser end, flip it: it erases even while the brush is chosen.
 6. Hold **Ctrl** and tap a colour on the canvas. *Expected:* the colour is picked
@@ -51,7 +51,7 @@ Each step says what you should see. If something is different, note the step num
    * Mouse wheel: zoom where the mouse is. Middle mouse button + drag: pan.
    * **4** / **6**: rotate 15°, **5**: straight again, **M**: mirror, **1**: 100 %, **2**: fit.
    *Expected:* the brush still paints exactly under the pen when rotated/mirrored/zoomed.
-8. **Stabilizer:** in Tool options open **Stabilizer (off)**, tick **Smooth the line**.
+8. **Stabilizer:** in Tool property open **Stabilizer (off)**, tick **Smooth the line**.
    Draw a slow, shaky line. *Expected:* a smooth line that trails behind the pen and
    catches up when you lift it. Untick it again when done.
 9. **Layers** (right side): click **New**, paint, then click the **eye** of a layer to hide it,
@@ -94,13 +94,13 @@ Each step says what you should see. If something is different, note the step num
 
 ## 5. The other tools (10 minutes)
 
-1. Click **All tools…** at the top of the tools on the left. *Expected:* a window lists 31
+1. Click the **grid button** at the top of the tool icons on the far left. *Expected:* a window lists 31
    tools in groups. Tick **On bar** next to **Spray** and close the window: Spray is now at
-   the bottom of the side bar. (**Up** / **Down** / **Remove** order the bar; **Back to the
+   the bottom of the tool strip. (**Up** / **Down** / **Remove** order the bar; **Back to the
    standard tools** resets it.)
 2. **Smudge** (**S**): paint two colours side by side, then smudge across them, pressing
    lightly, then harder. *Expected:* the paint is dragged along; pressing harder drags more.
-3. **Blur** (on the side bar): go over the edge of a stroke a few times. *Expected:* the edge
+3. **Blur** (on the tool strip: the drop icon): go over the edge of a stroke a few times. *Expected:* the edge
    gets soft.
 4. **Rectangle select** (**R**): drag a box over part of a stroke, then paint across it with
    the brush. *Expected:* paint only inside the box (the moving dashed line shows the
@@ -112,7 +112,7 @@ Each step says what you should see. If something is different, note the step num
    tool), and Ctrl+Enter paints it in the colour.
 7. **Crop** (**C**): drag over the part to keep, press **Enter**. **Ctrl+Z** brings the whole
    painting back.
-8. **Move** (on the side bar): drag the painting around; the arrow keys move it 1 px,
+8. **Move** (on the tool strip: the four arrows): drag the painting around; the arrow keys move it 1 px,
    **Shift** + arrow 10 px. **Ctrl+Z** undoes.
 
 9. **Reference** (browser version, in the toolbar): search "hand drawing" with Pictures,

@@ -31,6 +31,7 @@ impl TabletApi {
 pub struct Settings {
     pub tools: ToolSettings,
     pub color: [u8; 3],
+    pub color2: [u8; 3],
     pub recent_colors: Vec<[u8; 3]>,
     pub dock: DockLayout,
     pub tablet: TabletApi,
@@ -57,6 +58,7 @@ impl Default for Settings {
         Settings {
             tools: ToolSettings::default(),
             color: [0, 0, 0],
+            color2: [255, 255, 255],
             recent_colors: Vec::new(),
             dock: DockLayout::default(),
             tablet: TabletApi::Ink,

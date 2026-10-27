@@ -10,6 +10,8 @@
 mod bench;
 mod dock;
 mod editor;
+mod icons;
+mod previews;
 mod session;
 mod settings;
 mod ui;

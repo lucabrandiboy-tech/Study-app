@@ -192,18 +192,6 @@ impl Tool {
         }
     }
 
-    /// The name on the narrow side bar (one line there).
-    pub fn short_name(self) -> &'static str {
-        match self {
-            Tool::SelectRect => "Box select",
-            Tool::SelectEllipse => "Oval select",
-            Tool::SelectLasso => "Lasso select",
-            Tool::MagicEraser => "Magic eraser",
-            Tool::Rotate => "Rotate",
-            t => t.name(),
-        }
-    }
-
     /// The name kept in the settings (never changes, unlike the shown name).
     pub fn id(self) -> &'static str {
         match self {
@@ -518,6 +506,8 @@ pub struct Editor {
     pub tools: ToolSettings,
     /// Painting colour, sRGB.
     pub color: [u8; 3],
+    /// The sub colour (Clip Studio's second swatch); X swaps it with the colour.
+    pub color2: [u8; 3],
     /// Colours painted with, newest first (shown as swatches in the Colour panel).
     pub recent_colors: Vec<[u8; 3]>,
     /// Keys held at the last pen sample (Shift straightens shapes).
@@ -558,6 +548,8 @@ pub struct Editor {
     dirty: HashSet<TileKey>,
     refresh_all: bool,
     fit_pending: bool,
+    /// Goes up whenever pixels change (the layer thumbnails follow it).
+    pub pixels_rev: u64,
     /// The view just after the painting was fitted to the window, while it is still that
     /// (no pan, zoom or turn since): a new canvas area size fits it again.
     fitted: Option<View>,
@@ -584,6 +576,7 @@ impl Editor {
             tool: Tool::Brush,
             tools: ToolSettings::default(),
             color: [0, 0, 0],
+            color2: [255, 255, 255],
             recent_colors: Vec::new(),
             mods: Modifiers::default(),
             press_mods: Modifiers::default(),
@@ -606,6 +599,7 @@ impl Editor {
             dirty: HashSet::new(),
             refresh_all: true,
             fit_pending: true,
+            pixels_rev: 0,
             fitted: None,
             jobs: Vec::new(),
             recovered_from: None,
@@ -660,6 +654,11 @@ impl Editor {
         if self.tool == Tool::Eraser { &mut self.tools.eraser } else { &mut self.tools.brush }
     }
 
+    /// X: the sub colour becomes the colour and the other way round.
+    pub fn swap_colors(&mut self) {
+        std::mem::swap(&mut self.color, &mut self.color2);
+    }
+
     fn notice(&mut self, kind: NoticeKind, text: impl Into<String>) {
         self.notices.push(Notice { kind, text: text.into() });
     }
@@ -710,13 +709,19 @@ impl Editor {
 
     fn mark_tiles(&mut self, tiles: impl IntoIterator<Item = TileKey>) {
         self.dirty.extend(tiles);
+        self.pixels_rev += 1;
+    }
+
+    fn refresh_everything(&mut self) {
+        self.refresh_all = true;
+        self.pixels_rev += 1;
     }
 
     /// After the document changed from `before`: refresh only what differs.
     fn refresh_from(&mut self, before: &Document) {
         match changed_tiles(before, &self.doc) {
             Some(tiles) => self.mark_tiles(tiles),
-            None => self.refresh_all = true,
+            None => self.refresh_everything(),
         }
     }
 
@@ -724,7 +729,7 @@ impl Editor {
     fn refresh_layer(&mut self, index: usize) {
         let Some(l) = self.doc.layers.get(index) else { return };
         if l.pixels.default[3] != 0 {
-            self.refresh_all = true;
+            self.refresh_everything();
         } else {
             let keys: Vec<TileKey> = l.pixels.tile_keys().collect();
             self.mark_tiles(keys);
@@ -911,7 +916,7 @@ impl Editor {
                 if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
                     select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
                 }
-                self.dirty.extend(d);
+                self.mark_tiles(d);
             }
             Interaction::Retouch { stroke, before, layer, .. } => {
                 // Its own layer, even if another one is selected meanwhile (Page Up / Down).
@@ -921,7 +926,7 @@ impl Editor {
                 if let Some(sel) = &self.doc.selection {
                     select::clip_to(&mut self.doc.layers[a].pixels, &before.layers[a].pixels, sel, d.iter().copied());
                 }
-                self.dirty.extend(d);
+                self.mark_tiles(d);
             }
             Interaction::Lasso { points, .. } => {
                 // A point at least a screen pixel from the last one.
@@ -1429,7 +1434,7 @@ impl Editor {
             if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
                 select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
             }
-            self.dirty.extend(d);
+            self.mark_tiles(d);
         }
         self.poll_jobs();
         let busy = self.stroke_active() || !self.jobs.is_empty();
@@ -1768,7 +1773,7 @@ impl Editor {
         self.stroke_before = None;
         self.autosaver = Autosaver::new(self.autosaver.interval);
         self.doc_id = new_uuid();
-        self.refresh_all = true;
+        self.refresh_everything();
         self.fit_pending = true;
         self.view = View::default();
         self.last_edit = None;

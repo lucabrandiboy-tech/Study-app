@@ -17,9 +17,41 @@ use web_time::Instant;
 
 use crate::dock::Panel;
 use crate::editor::{Editor, ExportFormat, MAX_BRUSH, MIN_BRUSH, NoticeKind, Tool, ToolGroup};
+use crate::icons::{self, Action};
+use crate::previews::{self, Previews};
 use crate::settings::{Settings, TabletApi};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The toolbar's and tool strip's background (darker than the panels, as in Clip Studio).
+const TOOLBAR_FILL: Color32 = Color32::from_gray(38);
+const STRIP_WIDTH: f32 = 44.0;
+
+/// Clip Studio-like greys: mid-grey panels, darker bars, a blue-grey selection.
+pub fn apply_theme(ctx: &egui::Context) {
+    let g = Color32::from_gray;
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = g(58);
+    v.window_fill = g(58);
+    v.faint_bg_color = g(64);
+    v.extreme_bg_color = g(40);
+    v.window_stroke = Stroke::new(1.0, g(28));
+    v.selection.bg_fill = Color32::from_rgb(92, 108, 142);
+    v.selection.stroke = Stroke::new(1.0, g(245));
+    let w = &mut v.widgets;
+    w.noninteractive.bg_fill = g(58);
+    w.noninteractive.weak_bg_fill = g(58);
+    w.noninteractive.bg_stroke = Stroke::new(1.0, g(44));
+    w.noninteractive.fg_stroke = Stroke::new(1.0, g(210));
+    for (state, fill, text) in [(&mut w.inactive, 76, 220), (&mut w.hovered, 92, 245), (&mut w.active, 104, 255), (&mut w.open, 84, 235)] {
+        state.bg_fill = g(fill);
+        state.weak_bg_fill = g(fill);
+        state.fg_stroke = Stroke::new(1.0, g(text));
+    }
+    w.hovered.bg_stroke = Stroke::new(1.0, g(120));
+    ctx.set_visuals_of(egui::Theme::Dark, v);
+    ctx.set_theme(egui::ThemePreference::Dark);
+}
 
 /// Something only the platform can do (file dialogs, quitting, devices).
 #[derive(Clone, Debug, PartialEq)]
@@ -117,12 +149,22 @@ pub struct AppUi {
     /// The tool in the last frame, and whether text was being written then.
     last_tool: Tool,
     writing: bool,
+    /// The brush and eraser presets last picked in the Sub tool panel.
+    brush_preset: Option<usize>,
+    eraser_preset: Option<usize>,
+    /// Stroke samples and layer thumbnails.
+    previews: Previews,
+    /// Where the tool strip's buttons were last drawn (`None`: All tools), for the tests.
+    pub strip: Vec<(Option<Tool>, egui::Rect)>,
 }
 
 const TOAST_TIME: Duration = Duration::from_secs(5);
 
 impl AppUi {
     pub fn new(settings: Settings) -> AppUi {
+        // The presets the saved brush and eraser are (if they were not changed since).
+        let brush_preset = presets().iter().position(|p| p.2 == settings.tools.brush);
+        let eraser_preset = eraser_presets().iter().position(|p| p.2 == settings.tools.eraser);
         AppUi {
             settings,
             dialog: None,
@@ -140,6 +182,10 @@ impl AppUi {
             canvas_only: false,
             last_tool: Tool::Brush,
             writing: false,
+            brush_preset,
+            eraser_preset,
+            previews: Previews::default(),
+            strip: Vec::new(),
         }
     }
 
@@ -294,15 +340,18 @@ impl AppUi {
             egui::Panel::top("menu").show(root, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| self.menus(ui, ed, &mut requests));
             });
-            let reference = self.web.then_some(self.reference_open);
-            egui::Panel::top("toolbar").show(root, |ui| {
-                if toolbar(ui, ed, &mut self.tool_library, reference) {
-                    requests.push(Request::ToggleReference);
-                }
-            });
+            egui::Panel::top("toolbar").frame(egui::Frame::NONE.fill(TOOLBAR_FILL).inner_margin(egui::Margin::symmetric(6, 3))).show(root, |ui| self.toolbar(ui, ed, &mut requests));
             egui::Panel::bottom("status").show(root, |ui| self.status_bar(ui, ed));
+            // Clip Studio's tool strip: the side bar's tools as icons, at the far left.
+            egui::Panel::left("tool strip")
+                .resizable(false)
+                .exact_size(STRIP_WIDTH)
+                .frame(egui::Frame::NONE.fill(TOOLBAR_FILL).inner_margin(egui::Margin::symmetric(0, 4)))
+                .show(root, |ui| self.tool_strip(ui, ed));
+            let titles: Vec<String> = Panel::ALL.iter().map(|&p| self.panel_title(p, ed)).collect();
+            let title = |p: Panel| titles[Panel::ALL.iter().position(|&q| q == p).unwrap_or(0)].clone();
             let mut dock = std::mem::take(&mut self.settings.dock);
-            let rect = dock.ui(root, &mut |ui, panel| self.panel(ui, panel, ed));
+            let rect = dock.ui(root, &title, &mut |ui, panel| self.panel(ui, panel, ed));
             self.settings.dock = dock;
             rect
         };
@@ -383,6 +432,9 @@ impl AppUi {
         }
         if hit(none, Key::Enter) {
             ed.apply_crop();
+        }
+        if hit(none, Key::X) {
+            ed.swap_colors();
         }
         if hit(none, Key::Escape) {
             ed.cancel_crop();
@@ -706,42 +758,200 @@ impl AppUi {
 
     fn panel(&mut self, ui: &mut Ui, panel: Panel, ed: &mut Editor) {
         match panel {
-            Panel::Tools => self.tools_panel(ui, ed),
-            Panel::ToolOptions => tool_options_panel(ui, ed, self.dialog.is_none()),
+            Panel::Tools => self.sub_tool_panel(ui, ed),
+            Panel::ToolOptions => {
+                let name = self.sub_tool_name(ed);
+                tool_options_panel(ui, ed, self.dialog.is_none(), &mut self.previews, &name);
+            }
             Panel::Color => self.color_panel(ui, ed),
             Panel::Layers => self.layers_panel(ui, ed),
             Panel::History => history_panel(ui, ed),
         }
     }
 
-    /// The side bar: the tools the user chose, the button for all the others, the colour.
-    fn tools_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
-        ui.vertical_centered_justified(|ui| {
-            let label = if self.tool_library { "Close all tools" } else { "All tools…" };
-            if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(vec2(0.0, 28.0))).on_hover_text("Every tool, and which ones are on this bar").clicked() {
+    /// A panel's tab title; Sub tool and Tool property say what they show, as in Clip Studio.
+    fn panel_title(&self, p: Panel, ed: &Editor) -> String {
+        match p {
+            Panel::Tools => match ed.tool {
+                Tool::Brush | Tool::Eraser => format!("Sub tool [{}]", ed.tool.name()),
+                t => format!("Sub tool [{}]", t.group().name()),
+            },
+            Panel::ToolOptions => format!("Tool property [{}]", self.sub_tool_name(ed)),
+            other => other.title().to_string(),
+        }
+    }
+
+    /// The brush or eraser preset picked last, or the tool's name.
+    fn sub_tool_name(&self, ed: &Editor) -> String {
+        let pick = |list: Vec<(&'static str, &'static str, Brush)>, i: Option<usize>| i.and_then(|i| list.get(i).map(|p| p.0.to_string()));
+        match ed.tool {
+            Tool::Brush => pick(presets(), self.brush_preset),
+            Tool::Eraser => pick(eraser_presets(), self.eraser_preset),
+            _ => None,
+        }
+        .unwrap_or_else(|| ed.tool.name().to_string())
+    }
+
+    /// The tool strip: the side bar's tools as icons (point at one for its name and key), the
+    /// button for all the others at the top, and the colours at the bottom.
+    fn tool_strip(&mut self, ui: &mut Ui, ed: &mut Editor) {
+        self.strip.clear();
+        let size = 34.0;
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            let r = icons::button(ui, size, self.tool_library, true, |p, r, c| icons::action(p, r, Action::AllTools, c))
+                .on_hover_text(if self.tool_library { "Close the list of all tools" } else { "All tools: every tool, and which ones are on this bar" });
+            self.strip.push((None, r.rect));
+            if r.clicked() {
                 self.tool_library = !self.tool_library;
             }
-            ui.add_space(4.0);
-            let bar = self.settings.hotbar_tools();
-            for t in &bar {
-                let tip = match t.key() {
-                    Some(k) => format!("{} ({k})", t.hint()),
-                    None => t.hint().to_string(),
-                };
-                if ui.add(egui::Button::selectable(ed.tool == *t, t.short_name()).min_size(vec2(0.0, 28.0))).on_hover_text(tip).clicked() {
-                    ed.tool = *t;
-                }
-            }
+            ui.separator();
+            let mut bar = self.settings.hotbar_tools();
             // A tool picked from the full list that is not on the bar still shows here.
             if !bar.contains(&ed.tool) {
-                ui.add(egui::Button::selectable(true, ed.tool.short_name()).min_size(vec2(0.0, 28.0))).on_hover_text(ed.tool.hint());
+                bar.push(ed.tool);
             }
-            ui.add_space(8.0);
-            let [r, g, b] = ed.color;
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 4.0, Color32::from_rgb(r, g, b));
-            // A light outline, so a dark colour still reads as a swatch on the dark panel.
-            ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, ui.visuals().widgets.inactive.fg_stroke.color), egui::StrokeKind::Inside);
+            // Smaller icons when they would not all fit above the colours (a long bar on a
+            // short screen); past the smallest size the strip scrolls.
+            let swatch = size + 10.0;
+            let room = ui.available_height() - swatch;
+            let icon = (room / bar.len().max(1) as f32 - 3.0).clamp(24.0, size);
+            egui::ScrollArea::vertical().id_salt("tool strip").max_height(room.max(icon)).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                for t in bar {
+                    let tip = match t.key() {
+                        Some(k) => format!("{} ({k})\n{}", t.name(), t.hint()),
+                        None => format!("{}\n{}", t.name(), t.hint()),
+                    };
+                    let r = icons::button(ui, icon, ed.tool == t, true, |p, r, c| icons::tool(p, r, t, c)).on_hover_text(tip);
+                    self.strip.push((Some(t), r.rect));
+                    if r.clicked() {
+                        ed.tool = t;
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            if crate::widgets::swatches(ui, size, ed.color, ed.color2).on_hover_text("The colour and the sub colour: click (or X) to swap them").clicked() {
+                ed.swap_colors();
+            }
+        });
+    }
+
+    /// Clip Studio's Sub tool panel: for the brush and the eraser their presets, each with a
+    /// stroke painted by it; for the other tools, the tools of the same kind.
+    fn sub_tool_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
+        let ppp = ui.ctx().pixels_per_point();
+        match ed.tool {
+            Tool::Brush | Tool::Eraser => {
+                let eraser = ed.tool == Tool::Eraser;
+                let list = if eraser { eraser_presets() } else { presets() };
+                let chosen = if eraser { self.eraser_preset } else { self.brush_preset };
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (i, (name, tip, brush)) in list.into_iter().enumerate() {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), egui::Sense::click());
+                    let resp = resp.on_hover_text(tip);
+                    let v = ui.visuals();
+                    let selected = chosen == Some(i);
+                    let fill = if selected { v.selection.bg_fill } else if resp.hovered() { v.widgets.hovered.weak_bg_fill } else { Color32::TRANSPARENT };
+                    let text = if selected { v.selection.stroke.color } else { v.widgets.inactive.fg_stroke.color };
+                    ui.painter().rect_filled(rect, 0.0, fill);
+                    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, Color32::from_gray(46)));
+                    // The stroke on the left, the name on the right.
+                    let pic = egui::Rect::from_min_max(rect.min + vec2(4.0, 2.0), egui::pos2(rect.left() + rect.width() * 0.58, rect.bottom() - 2.0));
+                    let (w, h) = (((pic.width() * ppp) as u32).max(8), ((pic.height() * ppp) as u32).max(8));
+                    let target = (brush.size.sqrt() * 2.2 * ppp).clamp(2.5 * ppp, h as f32 * 0.55);
+                    let tex = self.previews.stroke(ui.ctx(), &previews::sized(&brush, target), [236, 236, 236], w, h);
+                    ui.painter().image(tex.id(), pic, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().text(egui::pos2(rect.right() - 8.0, rect.center().y), egui::Align2::RIGHT_CENTER, name, egui::FontId::proportional(13.5), text);
+                    if resp.clicked() {
+                        if eraser {
+                            ed.tools.eraser = brush;
+                            self.eraser_preset = Some(i);
+                        } else {
+                            ed.tools.brush = brush;
+                            self.brush_preset = Some(i);
+                        }
+                    }
+                }
+            }
+            current => {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for t in Tool::ALL.into_iter().filter(|t| t.group() == current.group()) {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), egui::Sense::click());
+                    let resp = resp.on_hover_text(t.hint());
+                    let v = ui.visuals();
+                    let selected = t == ed.tool;
+                    let fill = if selected { v.selection.bg_fill } else if resp.hovered() { v.widgets.hovered.weak_bg_fill } else { Color32::TRANSPARENT };
+                    let col = if selected { v.selection.stroke.color } else { v.widgets.inactive.fg_stroke.color };
+                    let weak = v.weak_text_color();
+                    ui.painter().rect_filled(rect, 0.0, fill);
+                    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, Color32::from_gray(46)));
+                    icons::tool(ui.painter(), egui::Rect::from_center_size(egui::pos2(rect.left() + 18.0, rect.center().y), vec2(20.0, 20.0)), t, col);
+                    ui.painter().text(egui::pos2(rect.left() + 36.0, rect.center().y), egui::Align2::LEFT_CENTER, t.name(), egui::FontId::proportional(13.5), col);
+                    if let Some(k) = t.key() {
+                        ui.painter().text(egui::pos2(rect.right() - 8.0, rect.center().y), egui::Align2::RIGHT_CENTER, k, egui::FontId::proportional(12.0), weak);
+                    }
+                    if resp.clicked() {
+                        ed.tool = t;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The icon toolbar under the menus.
+    fn toolbar(&mut self, ui: &mut Ui, ed: &mut Editor, requests: &mut Vec<Request>) {
+        ui.horizontal(|ui| {
+            let size = 30.0;
+            let act = |ui: &mut Ui, a: Action, enabled: bool, selected: bool, tip: &str| icons::button(ui, size, selected, enabled, |p, r, c| icons::action(p, r, a, c)).on_hover_text(tip).clicked();
+            if act(ui, Action::New, true, false, "New painting (Ctrl+N)") {
+                self.guarded(ed, Then::NewCanvas, requests);
+            }
+            if act(ui, Action::Open, true, false, "Open… (Ctrl+O)") {
+                self.guarded(ed, Then::OpenDialog, requests);
+            }
+            if act(ui, Action::Save, true, false, "Save (Ctrl+S)") && !ed.save() {
+                requests.push(Request::SaveAsDialog);
+            }
+            ui.separator();
+            let (_, applied) = ed.history.entries();
+            let redo = ed.history.can_redo();
+            if act(ui, Action::Undo, applied > 0, false, "Undo (Ctrl+Z)") {
+                ed.undo();
+            }
+            if act(ui, Action::Redo, redo, false, "Redo (Ctrl+Shift+Z)") {
+                ed.redo();
+            }
+            ui.separator();
+            if act(ui, Action::Smaller, true, false, "Smaller brush ([)") {
+                ed.resize_brush(false);
+            }
+            ui.add_sized(vec2(46.0, size), egui::Label::new(format!("{:.0} px", ed.shown_brush_size()))).on_hover_text("Brush size");
+            if act(ui, Action::Bigger, true, false, "Bigger brush (])") {
+                ed.resize_brush(true);
+            }
+            ui.separator();
+            if act(ui, Action::ZoomOut, true, false, "Zoom out (-)") {
+                ed.zoom_out();
+            }
+            if act(ui, Action::ZoomIn, true, false, "Zoom in (+)") {
+                ed.zoom_in();
+            }
+            if act(ui, Action::Fit, true, false, "Fit the painting to the window (2)") {
+                ed.fit_to_window();
+                ed.reset_rotation();
+            }
+            if self.web {
+                ui.separator();
+                if act(ui, Action::Reference, true, self.reference_open, "Reference: search pictures, videos and articles, or watch a YouTube link, beside the canvas") {
+                    requests.push(Request::ToggleReference);
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(6.0);
+                ui.label(RichText::new(ed.tool.name()).strong()).on_hover_text(ed.tool.hint());
+                let (rect, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                icons::tool(ui.painter(), rect, ed.tool, ui.visuals().widgets.inactive.fg_stroke.color);
+            });
         });
     }
 
@@ -838,8 +1048,16 @@ impl AppUi {
     }
 
     fn color_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
-        crate::widgets::color_selector(ui, &mut ed.color, &mut self.hsv);
-        ui.add_space(2.0);
+        ui.vertical_centered(|ui| crate::widgets::color_wheel(ui, &mut ed.color, &mut self.hsv));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if crate::widgets::swatches(ui, 30.0, ed.color, ed.color2).on_hover_text("The colour and the sub colour: click (or X) to swap them").clicked() {
+                ed.swap_colors();
+            }
+            let [r, g, b] = ed.color;
+            ui.label(RichText::new(format!("R {r}   G {g}   B {b}")).monospace());
+        });
+        ui.add_space(4.0);
         if !ed.recent_colors.is_empty() {
             // Colours painted with, newest first: tap one to paint with it again.
             ui.horizontal_wrapped(|ui| {
@@ -875,68 +1093,100 @@ impl AppUi {
     }
 
     fn layers_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("New").on_hover_text("New layer above this one (Insert)").clicked() {
-                ed.add_layer();
-            }
-            if ui.button("Duplicate").on_hover_text("Ctrl+J").clicked() {
-                ed.duplicate_layer();
-            }
-            if ui.button("Delete").on_hover_text("Shift+Delete").clicked() {
-                ed.delete_layer();
-            }
-            if ui.button("Up").on_hover_text("Ctrl+Page Up").clicked() {
-                ed.move_layer(true);
-            }
-            if ui.button("Down").on_hover_text("Ctrl+Page Down").clicked() {
-                ed.move_layer(false);
-            }
-            if ui.button("Merge down").on_hover_text("Ctrl+E").clicked() {
-                ed.merge_down();
-            }
-        });
-        ui.separator();
-        // The selected layer's settings.
+        // The selected layer's blend mode and opacity (how see-through it is), on top as in
+        // Clip Studio.
         let i = ed.active;
         if let Some(l) = ed.doc.layers.get(i) {
             let mut opacity = (l.opacity as f32 / 255.0 * 100.0).round();
             let blend = l.blend;
-            let r = ui.add(egui::Slider::new(&mut opacity, 0.0..=100.0).text("Opacity").suffix(" %").integer());
-            if r.changed() {
-                ed.set_layer_opacity(i, (opacity / 100.0 * 255.0).round() as u8);
-            }
-            if r.drag_stopped() || r.lost_focus() {
-                ed.end_edit();
-            }
             let mut mode = blend;
-            egui::ComboBox::from_id_salt("blend mode").selected_text(mode.name()).show_ui(ui, |ui| {
-                for m in BlendMode::ALL {
-                    ui.selectable_value(&mut mode, m, m.name());
-                }
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("blend mode").width(ui.available_width() - 4.0).selected_text(mode.name()).show_ui(ui, |ui| {
+                    for m in BlendMode::ALL {
+                        ui.selectable_value(&mut mode, m, m.name());
+                    }
+                });
             });
             if mode != blend {
                 ed.set_layer_blend(i, mode);
             }
-        }
-        ui.separator();
-        // Top layer first, like Krita.
-        let n = ed.doc.layers.len();
-        for i in (0..n).rev() {
-            let (name, visible, locked, opacity) = {
-                let l = &ed.doc.layers[i];
-                (l.name.clone(), l.visible, l.locked, l.opacity)
-            };
             ui.horizontal(|ui| {
-                use crate::widgets::{Icon, icon_toggle};
-                if icon_toggle(ui, visible, Icon::Eye).on_hover_text(if visible { "Visible (click to hide)" } else { "Hidden (click to show)" }).clicked() {
-                    ed.set_layer_visible(i, !visible);
+                let tip = "How see-through the selected layer is: 100 % solid, 0 % invisible";
+                ui.label("Opacity").on_hover_text(tip);
+                ui.spacing_mut().slider_width = (ui.available_width() - 70.0).max(50.0);
+                let r = ui.add(egui::Slider::new(&mut opacity, 0.0..=100.0).suffix(" %").integer()).on_hover_text(tip);
+                if r.changed() {
+                    ed.set_layer_opacity(i, (opacity / 100.0 * 255.0).round() as u8);
                 }
-                if icon_toggle(ui, locked, Icon::Lock)
-                    .on_hover_text(if locked { "Locked: cannot be painted on (click to unlock)" } else { "Unlocked (click to lock)" })
-                    .clicked()
-                {
-                    ed.set_layer_locked(i, !locked);
+                if r.drag_stopped() || r.lost_focus() {
+                    ed.end_edit();
                 }
+            });
+        }
+        ui.horizontal(|ui| {
+            let act = |ui: &mut Ui, a: Action, enabled: bool, tip: &str| icons::button(ui, 26.0, false, enabled, |p, r, c| icons::action(p, r, a, c)).on_hover_text(tip).clicked();
+            let n = ed.doc.layers.len();
+            if act(ui, Action::LayerNew, true, "New layer above this one (Insert)") {
+                ed.add_layer();
+            }
+            if act(ui, Action::LayerDuplicate, true, "Duplicate the layer (Ctrl+J)") {
+                ed.duplicate_layer();
+            }
+            if act(ui, Action::LayerDelete, n > 1, "Delete the layer (Shift+Delete)") {
+                ed.delete_layer();
+            }
+            if act(ui, Action::LayerUp, i + 1 < n, "Move the layer up (Ctrl+Page Up)") {
+                ed.move_layer(true);
+            }
+            if act(ui, Action::LayerDown, i > 0, "Move the layer down (Ctrl+Page Down)") {
+                ed.move_layer(false);
+            }
+            if act(ui, Action::LayerMerge, i > 0, "Merge into the layer below (Ctrl+E)") {
+                ed.merge_down();
+            }
+        });
+        ui.separator();
+        // Top layer first, like Krita and Clip Studio: eye, lock, a small picture, the name,
+        // and its opacity and blend mode.
+        let ppp = ui.ctx().pixels_per_point();
+        let (tw, th) = previews::thumbnail_size(&ed.doc, 44);
+        let thumb = vec2(tw as f32, th as f32) * (36.0 / tw.max(th) as f32);
+        let n = ed.doc.layers.len();
+        ui.spacing_mut().item_spacing.y = 2.0;
+        for i in (0..n).rev() {
+            let (name, visible, locked, opacity, blend) = {
+                let l = &ed.doc.layers[i];
+                (l.name.clone(), l.visible, l.locked, l.opacity, l.blend)
+            };
+            // The row takes clicks first; the eye, lock and name field on it come after, so
+            // they are on top and keep theirs.
+            let (rect, row) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), egui::Sense::click());
+            let v = ui.visuals();
+            let selected = ed.active == i;
+            let fill = if selected { v.selection.bg_fill } else if row.hovered() { v.widgets.hovered.weak_bg_fill } else { Color32::from_gray(66) };
+            let text_col = if selected { v.selection.stroke.color } else { v.widgets.inactive.fg_stroke.color };
+            ui.painter().rect_filled(rect, 2.0, fill);
+            let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(4.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            use crate::widgets::{Icon, icon_toggle};
+            if icon_toggle(&mut row_ui, visible, Icon::Eye).on_hover_text(if visible { "Visible (click to hide)" } else { "Hidden (click to show)" }).clicked() {
+                ed.set_layer_visible(i, !visible);
+            }
+            if icon_toggle(&mut row_ui, locked, Icon::Lock).on_hover_text(if locked { "Locked: cannot be painted on (click to unlock)" } else { "Unlocked (click to lock)" }).clicked() {
+                ed.set_layer_locked(i, !locked);
+            }
+            // The picture, on a checkerboard where the layer is empty.
+            let (pic, _) = row_ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::hover());
+            let pic = egui::Rect::from_center_size(pic.center(), thumb);
+            checkerboard(row_ui.painter(), pic, 5.0);
+            if let Some(tex) = self.previews.thumbnail(row_ui.ctx(), &ed.doc, i, ed.pixels_rev, (44.0 * ppp) as u32) {
+                row_ui.painter().image(tex.id(), pic, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            row_ui.painter().rect_stroke(pic, 0.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Outside);
+            row_ui.add_space(4.0);
+            row_ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                let pct = (opacity as f32 / 2.55).round();
+                ui.label(RichText::new(format!("{pct} %  {}", blend.name())).size(11.5).color(text_col.gamma_multiply(0.75)));
                 if let Some((ri, text)) = &mut self.rename
                     && *ri == i
                 {
@@ -952,19 +1202,17 @@ impl AppUi {
                         r.request_focus();
                     }
                 } else {
-                    let label = if opacity < 255 { format!("{name}  ({}%)", (opacity as f32 / 2.55).round()) } else { name.clone() };
-                    let text = if visible { RichText::new(label) } else { RichText::new(label).weak() };
-                    let r = ui
-                        .add(egui::Button::selectable(ed.active == i, text).min_size(vec2(ui.available_width(), 0.0)))
-                        .on_hover_text("Click to select, double-click to rename");
-                    if r.clicked() {
-                        ed.select_layer(i);
-                    }
-                    if r.double_clicked() {
-                        self.rename = Some((i, name));
-                    }
+                    let label = if visible { RichText::new(&name).color(text_col) } else { RichText::new(&name).color(text_col.gamma_multiply(0.5)) };
+                    ui.add(egui::Label::new(label).truncate().selectable(false));
                 }
             });
+            let row = row.on_hover_text("Click to select, double-click to rename");
+            if row.clicked() {
+                ed.select_layer(i);
+            }
+            if row.double_clicked() {
+                self.rename = Some((i, name));
+            }
         }
     }
 
@@ -1330,9 +1578,9 @@ impl AppUi {
                             ui.label(text);
                         };
                         tip(ui, "Draw", "Paint with the pen or mouse. [ and ] change the brush size, E switches to the eraser, Ctrl+Z undoes. Pressing harder paints thicker.");
-                        tip(ui, "Tools", "The bar on the left holds your tools. \"All tools…\" at its top lists all 31: click one to use it, tick \"On bar\" to keep it there.");
+                        tip(ui, "Tools", "The icons on the far left are your tools (point at one for its name and key). The grid button at the top lists all 31: click one to use it, tick \"On bar\" to keep it there. Sub tool shows the brushes (or the tools of the same kind), Tool property their settings.");
                         tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it. G hides everything but the painting (G or Escape brings it back).");
-                        tip(ui, "Layers and colour", "The panels on the right: pick a colour, add layers, change their opacity and blend mode. Ctrl+click on the painting picks a colour.");
+                        tip(ui, "Layers and colour", "The colour wheel is on the left: the ring picks the colour, the square how light and strong it is; X swaps it with the second colour. Layers are on the right: the Opacity slider there makes the selected layer see-through. Ctrl+click on the painting picks a colour.");
                         tip(ui, "Selections", "Box select (R), the magic wand (W) and the others keep painting inside the selection. The Select menu has the rest.");
                         if self.web {
                             tip(ui, "Reference", "\"Reference\" in the toolbar opens a box on the right to search pictures, videos and articles, or play a YouTube link, while you draw.");
@@ -1492,51 +1740,15 @@ impl AppUi {
 /// eraser, brush size, fit, zoom.
 /// `reference`: in the browser version, whether the reference panel is open. Returns true
 /// when its button was clicked.
-fn toolbar(ui: &mut Ui, ed: &mut Editor, library: &mut bool, reference: Option<bool>) -> bool {
-    let mut toggle_reference = false;
-    ui.horizontal_wrapped(|ui| {
-        let big = |text: &str| egui::Button::new(RichText::new(text).size(15.0)).min_size(vec2(44.0, 30.0));
-        let (_, applied) = ed.history.entries();
-        let redo = ed.history.can_redo();
-        if ui.add_enabled(applied > 0, big("Undo")).on_hover_text("Ctrl+Z").clicked() {
-            ed.undo();
-        }
-        if ui.add_enabled(redo, big("Redo")).on_hover_text("Ctrl+Shift+Z").clicked() {
-            ed.redo();
-        }
-        ui.separator();
-        if ui.add(egui::Button::selectable(*library, RichText::new("All tools").size(15.0)).min_size(vec2(44.0, 30.0))).on_hover_text("Every tool, and which are on the side bar").clicked() {
-            *library = !*library;
-        }
-        ui.label(RichText::new(ed.tool.name()).size(15.0).strong()).on_hover_text(ed.tool.hint());
-        ui.separator();
-        if ui.add(big("Smaller")).on_hover_text("[").clicked() {
-            ed.resize_brush(false);
-        }
-        ui.label(format!("{:.0} px", ed.shown_brush_size()));
-        if ui.add(big("Bigger")).on_hover_text("]").clicked() {
-            ed.resize_brush(true);
-        }
-        ui.separator();
-        if ui.add(big("Zoom out")).on_hover_text("-").clicked() {
-            ed.zoom_out();
-        }
-        if ui.add(big("Zoom in")).on_hover_text("+").clicked() {
-            ed.zoom_in();
-        }
-        if ui.add(big("Fit")).on_hover_text("2").clicked() {
-            ed.fit_to_window();
-            ed.reset_rotation();
-        }
-        if let Some(open) = reference {
-            ui.separator();
-            let button = egui::Button::selectable(open, RichText::new("Reference").size(15.0)).min_size(vec2(44.0, 30.0));
-            if ui.add(button).on_hover_text("Search pictures, videos and articles, or watch a YouTube link, beside the canvas").clicked() {
-                toggle_reference = true;
-            }
-        }
-    });
-    toggle_reference
+/// Ready-made erasers for the Sub tool panel.
+fn eraser_presets() -> Vec<(&'static str, &'static str, Brush)> {
+    let base = Brush::default();
+    vec![
+        ("Hard eraser", "Hard edge; pressing harder erases wider", Brush { size: 20.0, hardness: 1.0, ..base.clone() }),
+        ("Soft eraser", "Soft edge, for fading paint out", Brush { size: 40.0, hardness: 0.2, ..base.clone() }),
+        ("Fine eraser", "Thin and even, for details", Brush { size: 4.0, hardness: 1.0, size_curve: None, ..base.clone() }),
+        ("Big soft eraser", "Wide and very soft; takes paint away a little at a time", Brush { size: 150.0, hardness: 0.0, flow: 0.15, mode: PaintMode::BuildUp, size_curve: None, flow_curve: Some(Curve::linear()), ..base }),
+    ]
 }
 
 /// Ready-made brushes (Krita has a library of these; these are the basics).
@@ -1556,20 +1768,46 @@ fn presets() -> Vec<(&'static str, &'static str, Brush)> {
     ]
 }
 
-/// `may_focus`: no dialog is open, so the text tool's box may take the keyboard.
-fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool) {
+/// Small grey and white squares, under pictures with see-through parts.
+fn checkerboard(p: &egui::Painter, rect: egui::Rect, cell: f32) {
+    p.rect_filled(rect, 0.0, Color32::from_gray(235));
+    let (nx, ny) = ((rect.width() / cell).ceil() as i32, (rect.height() / cell).ceil() as i32);
+    for y in 0..ny {
+        for x in 0..nx {
+            if (x + y) % 2 == 1 {
+                let r = egui::Rect::from_min_size(rect.min + vec2(x as f32, y as f32) * cell, vec2(cell, cell)).intersect(rect);
+                p.rect_filled(r, 0.0, Color32::from_gray(200));
+            }
+        }
+    }
+}
+
+/// The current brush's stroke on a light box, in the colour, at its real size when it fits
+/// (Clip Studio shows one at the top of Tool property).
+fn brush_preview(ui: &mut Ui, ed: &Editor, previews: &mut Previews, name: &str) {
+    let ppp = ui.ctx().pixels_per_point();
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 3.0, Color32::from_gray(226));
+    let eraser = ed.tool == Tool::Eraser;
+    let brush = if eraser { &ed.tools.eraser } else { &ed.tools.brush };
+    // The stroke under the name.
+    let area = egui::Rect::from_min_max(rect.min + vec2(4.0, 15.0), rect.max - vec2(4.0, 1.0));
+    let (w, h) = ((area.width() * ppp) as u32, (area.height() * ppp) as u32);
+    let size = (brush.size * ppp).min(h as f32 * 0.7).max(1.0);
+    let color = if eraser { [90, 90, 90] } else { ed.color };
+    let tex = previews.stroke(ui.ctx(), &previews::sized(brush, size), color, w.max(8), h.max(8));
+    let pic = egui::Rect::from_min_size(area.min, vec2(w as f32, h as f32) / ppp);
+    ui.painter().image(tex.id(), pic, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+    ui.painter().text(rect.min + vec2(5.0, 3.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(11.5), Color32::from_gray(70));
+    ui.add_space(4.0);
+}
+
+/// `may_focus`: no dialog is open, so the text tool's box may take the keyboard. `name`: the
+/// preset picked in Sub tool (or the tool's name).
+fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &mut Previews, name: &str) {
     match ed.tool {
         Tool::Brush | Tool::Eraser => {
-            ui.strong(if ed.tool == Tool::Eraser { "Eraser" } else { "Brush" });
-            if ed.tool == Tool::Brush {
-                ui.horizontal_wrapped(|ui| {
-                    for (name, tip, brush) in presets() {
-                        if ui.button(name).on_hover_text(tip).clicked() {
-                            ed.tools.brush = brush;
-                        }
-                    }
-                });
-            }
+            brush_preview(ui, ed, previews, name);
             let b = ed.current_brush_mut();
             ui.add(egui::Slider::new(&mut b.size, MIN_BRUSH..=MAX_BRUSH).logarithmic(true).text("Size").suffix(" px").max_decimals(0))
                 .on_hover_text("[ and ] change the size");
@@ -1949,6 +2187,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F", "Fill"),
     ("G", "Only the canvas (G or Escape: everything back)"),
     ("Shift + G", "Gradient"),
+    ("X", "Swap the colour and the sub colour"),
     ("V", "Line"),
     ("S", "Smudge"),
     ("R  L  W", "Rectangle select, lasso select, magic wand"),

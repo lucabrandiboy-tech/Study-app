@@ -12,6 +12,10 @@
 mod dock;
 #[path = "../../recedo-app/src/editor.rs"]
 mod editor;
+#[path = "../../recedo-app/src/icons.rs"]
+mod icons;
+#[path = "../../recedo-app/src/previews.rs"]
+mod previews;
 #[path = "../../recedo-app/src/session.rs"]
 mod session;
 #[path = "../../recedo-app/src/settings.rs"]
