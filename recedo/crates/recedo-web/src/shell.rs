@@ -56,6 +56,35 @@ struct App {
     /// The last frames' times in ms: interface, picture (recombining and uploading),
     /// drawing, the whole frame. `window.recedoStats()` reports them (for measuring).
     timings: Vec<[f64; 4]>,
+    /// The browser took the graphics (WebGL) away: nothing is drawn until it gives them back
+    /// and they are set up again. The painting itself is kept in memory.
+    gpu_lost: bool,
+}
+
+/// What draws to the page: the WebGL2 surface on the canvas and its device.
+struct Gpu {
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+}
+
+async fn open_gpu(canvas: &HtmlCanvasElement) -> Result<Gpu, String> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::GL, ..wgpu::InstanceDescriptor::new_without_display_handle() });
+    let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| format!("this browser cannot draw with WebGL2 ({e})"))?;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })
+        .await
+        .map_err(|e| format!("no graphics adapter ({e})"))?;
+    let desc = wgpu::DeviceDescriptor { required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()), ..Default::default() };
+    let (device, queue) = adapter.request_device(&desc).await.map_err(|e| format!("the graphics device did not open ({e})"))?;
+    let caps = surface.get_capabilities(&adapter);
+    let format = egui_wgpu::preferred_framebuffer_format(&caps.formats).map_err(|e| format!("{e:?}"))?;
+    let (w, h) = canvas_size(canvas);
+    let mut config = surface.get_default_config(&adapter, w, h).ok_or("the graphics device cannot draw to this page")?;
+    config.format = format;
+    surface.configure(&device, &config);
+    Ok(Gpu { surface, device, queue, config })
 }
 
 /// How many frames' times are kept.
@@ -97,27 +126,14 @@ fn load_settings() -> Settings {
 async fn run() -> Result<(), String> {
     let document = window().document().ok_or("no document")?;
     let canvas: HtmlCanvasElement = document.get_element_by_id("recedo").ok_or("no canvas")?.dyn_into().map_err(|_| "not a canvas")?;
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::GL, ..wgpu::InstanceDescriptor::new_without_display_handle() });
-    let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone())).map_err(|e| format!("this browser cannot draw with WebGL2 ({e})"))?;
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions { compatible_surface: Some(&surface), ..Default::default() })
-        .await
-        .map_err(|e| format!("no graphics adapter ({e})"))?;
-    let desc = wgpu::DeviceDescriptor { required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()), ..Default::default() };
-    let (device, queue) = adapter.request_device(&desc).await.map_err(|e| format!("the graphics device did not open ({e})"))?;
-    let caps = surface.get_capabilities(&adapter);
-    let format = egui_wgpu::preferred_framebuffer_format(&caps.formats).map_err(|e| format!("{e:?}"))?;
-    let (w, h) = canvas_size(&canvas);
-    let mut config = surface.get_default_config(&adapter, w, h).ok_or("the graphics device cannot draw to this page")?;
-    config.format = format;
-    surface.configure(&device, &config);
+    let Gpu { surface, device, queue, config } = open_gpu(&canvas).await?;
 
     let settings = load_settings();
     let saved_settings = serde_json::to_string(&settings).unwrap_or_default();
     let mut session = Session::new(settings, None);
     session.ui.web = true;
     session.ui.tablet_status = "Pen: the browser's (pressure and tilt)".into();
-    let renderer = Renderer::new(&device, format, &session.ed);
+    let renderer = Renderer::new(&device, config.format, &session.ed);
     let ppp = window().device_pixel_ratio() as f32 * session.ui.settings.ui_scale;
     let app = Rc::new(RefCell::new(App {
         canvas: canvas.clone(),
@@ -146,6 +162,7 @@ async fn run() -> Result<(), String> {
         pinching: false,
         last_autosave: Instant::now(),
         timings: Vec::new(),
+        gpu_lost: false,
     }));
     expose_stats(&app);
     restore_autosave(&app);
@@ -221,8 +238,8 @@ impl App {
             self.frame_wanted = true;
         }
         // Also while nothing is drawn: a painting left alone is the one to keep.
-        self.autosave();
-        if !self.wants_frame() {
+        self.autosave(false);
+        if self.gpu_lost || !self.wants_frame() {
             return Vec::new();
         }
         self.frame_wanted = false;
@@ -324,10 +341,11 @@ impl App {
 
     /// Keeps a copy of a painting with unsaved changes in the browser's storage, every
     /// autosave interval (Settings), between strokes.
-    fn autosave(&mut self) {
+    /// `now`: without waiting for the interval (the page is being left, or lost its graphics).
+    fn autosave(&mut self, now: bool) {
         let ed = &mut self.session.ed;
         let every = Duration::from_secs(self.session.ui.settings.autosave_minutes.max(1) as u64 * 60);
-        if !ed.has_unsaved_changes() || !ed.autosaver.copy_is_behind() || ed.stroke_active() || self.last_autosave.elapsed() < every {
+        if !ed.has_unsaved_changes() || !ed.autosaver.copy_is_behind() || ed.stroke_active() || (!now && self.last_autosave.elapsed() < every) {
             return;
         }
         self.last_autosave = Instant::now();
@@ -354,6 +372,40 @@ impl App {
             self.pen_count = 0;
             self.pen_window = now_ms;
         }
+    }
+
+    /// The page lost the keyboard and pointer (another window or tab came to the front): a
+    /// stroke in progress ends there, and no key or button stays held down, so nothing
+    /// paints or pans by itself on coming back.
+    fn let_go(&mut self) {
+        let now = now_us();
+        self.session.ed.pen_gone(Source::Ink, now);
+        self.session.ed.pen_gone(Source::Mouse, now);
+        self.down.clear();
+        self.touches.clear();
+        self.pinching = false;
+        self.space_held = false;
+        self.set_mods(egui::Modifiers::NONE);
+        for button in [egui::PointerButton::Primary, egui::PointerButton::Middle, egui::PointerButton::Secondary] {
+            self.events.push(egui::Event::PointerButton { pos: egui::Pos2::ZERO, button, pressed: false, modifiers: egui::Modifiers::NONE });
+        }
+        self.events.push(egui::Event::PointerGone);
+        self.frame_wanted = true;
+    }
+
+    /// The browser gave the graphics back: everything on the GPU is made again (the whole
+    /// painting, the interface's letters and images).
+    fn gpu_back(&mut self, gpu: Gpu) {
+        self.renderer = Renderer::new(&gpu.device, gpu.config.format, &self.session.ed);
+        self.renderer.apply(&gpu.device, &gpu.queue, &self.session.ed, crate::editor::Refresh::All);
+        let Gpu { surface, device, queue, config } = gpu;
+        (self.surface, self.device, self.queue, self.config) = (surface, device, queue, config);
+        // A new letter atlas (egui only sends changes to the old one otherwise); the app
+        // adds no font providers, so this only makes egui load its fonts again.
+        self.session.egui.set_font_providers(Vec::new());
+        self.session.ui.previews.forget();
+        self.gpu_lost = false;
+        self.frame_wanted = true;
     }
 
     fn pos(&self, x: f64, y: f64) -> egui::Pos2 {
@@ -602,10 +654,42 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
     }
     {
         let a = app.clone();
-        add(&w, "blur", true, move |_e: web_sys::Event| {
+        add(&w, "blur", true, move |_e: web_sys::Event| a.borrow_mut().let_go())?;
+    }
+    // Leaving the tab: a copy of unsaved work right away (a hidden tab can be closed by the
+    // browser to free memory, and the graphics can be taken away).
+    {
+        let a = app.clone();
+        let d: web_sys::EventTarget = window().document().ok_or("no document")?.into();
+        add(&d, "visibilitychange", true, move |_e: web_sys::Event| {
+            if window().document().is_some_and(|d| d.hidden()) {
+                let mut app = a.borrow_mut();
+                app.let_go();
+                app.autosave(true);
+            }
+        })?;
+    }
+    // The browser can take the graphics away (a hidden tab, the computer sleeping, the
+    // graphics driver restarting). Saying "prevent default" asks for them back; then the
+    // drawing side is set up again and the painting shown as it was.
+    {
+        let a = app.clone();
+        add(c, "webglcontextlost", false, move |e: web_sys::Event| {
+            e.prevent_default();
             let mut app = a.borrow_mut();
-            app.space_held = false;
-            app.set_mods(egui::Modifiers::NONE);
+            app.gpu_lost = true;
+            app.let_go();
+            app.autosave(true);
+        })?;
+        let (a, cv) = (app.clone(), canvas.clone());
+        add(c, "webglcontextrestored", true, move |_e: web_sys::Event| {
+            let (a, cv) = (a.clone(), cv.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                match open_gpu(&cv).await {
+                    Ok(gpu) => a.borrow_mut().gpu_back(gpu),
+                    Err(e) => show_error(&format!("The graphics stopped and could not be started again ({e}). Reload the page: your painting was autosaved.")),
+                }
+            });
         })?;
     }
     // Leaving with unsaved changes: the browser asks first.

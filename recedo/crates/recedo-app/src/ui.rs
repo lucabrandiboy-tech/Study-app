@@ -190,7 +190,7 @@ pub struct AppUi {
     brush_preset: Option<usize>,
     eraser_preset: Option<usize>,
     /// Stroke samples and layer thumbnails.
-    previews: Previews,
+    pub previews: Previews,
     /// Where the tool strip's buttons were last drawn (`None`: All tools), for the tests.
     pub strip: Vec<(Option<Tool>, egui::Rect)>,
 }

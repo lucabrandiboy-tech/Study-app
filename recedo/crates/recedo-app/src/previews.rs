@@ -146,6 +146,14 @@ impl Default for Previews {
 }
 
 impl Previews {
+    /// Forgets every image, so each is made and sent to the GPU again (after the browser
+    /// took the graphics away and gave them back, the old ones are gone).
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn forget(&mut self) {
+        self.strokes.clear();
+        self.thumbs.clear();
+    }
+
     /// A stroke sample, `w` × `h` pixels.
     pub fn stroke(&mut self, ctx: &Context, brush: &Brush, color: [u8; 3], w: u32, h: u32) -> TextureHandle {
         let key = format!("{brush:?} {color:?} {w}x{h}");
