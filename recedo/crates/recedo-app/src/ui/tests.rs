@@ -688,6 +688,9 @@ fn layer_thumbnails_follow_the_painting() {
     let Some(g) = gpu() else { return };
     let mut s = session();
     let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    // A long wait between thumbnail updates, so the frames below are "too soon" whatever
+    // the speed of the computer running the test.
+    s.ui.previews.every = std::time::Duration::from_secs(30);
     quiet(&g, &mut r, &mut s, vec![]);
     let before = s.ed.pixels_rev;
     // A wide stroke across the middle of Layer 1.
@@ -703,8 +706,9 @@ fn layer_thumbnails_follow_the_painting() {
     let (out, _) = frames(&g, &mut r, &mut s, vec![]);
     let later = out.viewport_output.values().next().map(|v| v.repaint_delay);
     r.skip_frame(&g.device, &g.queue, &mut { out });
-    assert!(later.is_some_and(|d| d <= std::time::Duration::from_millis(400)), "asks to be drawn again: {later:?}");
-    std::thread::sleep(std::time::Duration::from_millis(450));
+    assert!(later.is_some_and(|d| d <= std::time::Duration::from_secs(30)), "asks to be drawn again: {later:?}");
+    // When that time comes (here: now), the next frame redoes it.
+    s.ui.previews.every = std::time::Duration::ZERO;
     let (out, _) = frames(&g, &mut r, &mut s, vec![]);
     let row = find_text(&out, "Layer 1")[0];
     let img = shot(&g, &mut r, &mut s, out, "19-layer-thumbnail");

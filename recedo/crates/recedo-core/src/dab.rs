@@ -31,8 +31,9 @@ const MIN_RADIUS: f32 = 0.5;
 /// Largest half-axis accepted (a 20000-pixel brush).
 pub const MAX_RADIUS: f32 = 10_000.0;
 
-/// Coverage (0..=1) of a pixel centre at offset (dx, dy) from the dab centre.
-#[inline]
+/// Coverage (0..=1) of a pixel centre at offset (dx, dy) from the dab centre: the plain
+/// form of what `Job::coverage_row` computes (a test holds them equal).
+#[cfg(test)]
 fn coverage(dx: f32, dy: f32, d: &DabShape, cos: f32, sin: f32, aa: f32) -> f32 {
     let u = (dx * cos + dy * sin) / d.rx;
     let v = (-dx * sin + dy * cos) / d.ry;
@@ -53,27 +54,8 @@ fn coverage(dx: f32, dy: f32, d: &DabShape, cos: f32, sin: f32, aa: f32) -> f32 
 /// Paints a dab of `color` at `alpha` (0..=1), or erases with it, and adds every tile it
 /// changed to `dirty`. Erasing never creates tiles.
 pub fn paint_dab(layer: &mut TiledLayer, shape: &DabShape, color: [u8; 3], alpha: f32, erase: bool, dirty: &mut HashSet<TileKey>) {
-    let radius_ok = |r: f32| r > 0.0 && r <= MAX_RADIUS;
-    if alpha.is_nan() || alpha <= 0.0 || !shape.cx.is_finite() || !shape.cy.is_finite() || !radius_ok(shape.rx) || !radius_ok(shape.ry) || !shape.angle.is_finite() {
-        return;
-    }
-    let mut d = *shape;
-    let mut alpha = alpha.min(1.0);
-    if d.rx < MIN_RADIUS || d.ry < MIN_RADIUS {
-        alpha *= (d.rx.min(MIN_RADIUS) * d.ry.min(MIN_RADIUS)) / (MIN_RADIUS * MIN_RADIUS);
-        d.rx = d.rx.max(MIN_RADIUS);
-        d.ry = d.ry.max(MIN_RADIUS);
-    }
-    let (sin, cos) = d.angle.sin_cos();
-    // The distance field changes by 1/radius per pixel: about one pixel of smoothing.
-    let aa = (1.0 / d.rx.min(d.ry)).max(1e-4);
-    let hw = ((d.rx * cos).powi(2) + (d.ry * sin).powi(2)).sqrt() + 1.0;
-    let hh = ((d.rx * sin).powi(2) + (d.ry * cos).powi(2)).sqrt() + 1.0;
-    let x0 = (d.cx - hw).floor() as i32;
-    let x1 = (d.cx + hw).ceil() as i32;
-    let y0 = (d.cy - hh).floor() as i32;
-    let y1 = (d.cy + hh).ceil() as i32;
-    let job = Job { d, cos, sin, aa, a8_max: alpha * 255.0, x0, x1, y0, y1, color, erase, default: layer.default };
+    let Some(job) = Job::new(shape, alpha, color, erase, layer.default) else { return };
+    let (x0, x1, y0, y1) = (job.x0, job.x1, job.y0, job.y1);
     // The tiles under the dab, taken out of the layer so each can be painted on its own
     // thread; put back afterwards (tiles that stayed untouched are not created).
     let mut jobs: Vec<(TileKey, Option<Arc<Tile>>, bool)> = Vec::new();
@@ -107,6 +89,30 @@ pub fn paint_dab(layer: &mut TiledLayer, shape: &DabShape, color: [u8; 3], alpha
     }
 }
 
+/// The dab's coverage (what a white dab of `alpha` leaves as alpha on an empty layer), per
+/// tile it touches: one byte per pixel of the tile, tiles it covers nowhere left out. The
+/// brush's wash mode needs only this; painting it into a scratch layer cost a layer, its
+/// tiles and four bytes per pixel for every dab.
+pub fn coverage_tiles(shape: &DabShape, alpha: f32) -> Vec<(TileKey, Box<[u8; TILE_PIXELS]>)> {
+    let Some(job) = Job::new(shape, alpha, [255, 255, 255], false, [0; 4]) else { return Vec::new() };
+    let mut keys = Vec::new();
+    for row in job.y0.div_euclid(TILE)..=(job.y1 - 1).div_euclid(TILE) {
+        for col in job.x0.div_euclid(TILE)..=(job.x1 - 1).div_euclid(TILE) {
+            keys.push((col, row));
+        }
+    }
+    let one = |key: TileKey| {
+        let mut out = Box::new([0u8; TILE_PIXELS]);
+        job.coverage_tile(key, &mut out).then_some((key, out))
+    };
+    if keys.len() >= PARALLEL_FROM_TILES {
+        use rayon::prelude::*;
+        keys.into_par_iter().filter_map(one).collect()
+    } else {
+        keys.into_iter().filter_map(one).collect()
+    }
+}
+
 /// Dabs covering at least this many tiles are painted on several threads.
 const PARALLEL_FROM_TILES: usize = 9;
 
@@ -127,19 +133,90 @@ struct Job {
 }
 
 impl Job {
+    /// The dab ready to paint, or `None` if it paints nothing (no alpha, bad numbers).
+    fn new(shape: &DabShape, alpha: f32, color: [u8; 3], erase: bool, default: [u8; 4]) -> Option<Job> {
+        let radius_ok = |r: f32| r > 0.0 && r <= MAX_RADIUS;
+        if alpha.is_nan() || alpha <= 0.0 || !shape.cx.is_finite() || !shape.cy.is_finite() || !radius_ok(shape.rx) || !radius_ok(shape.ry) || !shape.angle.is_finite() {
+            return None;
+        }
+        let mut d = *shape;
+        let mut alpha = alpha.min(1.0);
+        if d.rx < MIN_RADIUS || d.ry < MIN_RADIUS {
+            alpha *= (d.rx.min(MIN_RADIUS) * d.ry.min(MIN_RADIUS)) / (MIN_RADIUS * MIN_RADIUS);
+            d.rx = d.rx.max(MIN_RADIUS);
+            d.ry = d.ry.max(MIN_RADIUS);
+        }
+        let (sin, cos) = d.angle.sin_cos();
+        // The distance field changes by 1/radius per pixel: about one pixel of smoothing.
+        let aa = (1.0 / d.rx.min(d.ry)).max(1e-4);
+        let hw = ((d.rx * cos).powi(2) + (d.ry * sin).powi(2)).sqrt() + 1.0;
+        let hh = ((d.rx * sin).powi(2) + (d.ry * cos).powi(2)).sqrt() + 1.0;
+        let x0 = (d.cx - hw).floor() as i32;
+        let x1 = (d.cx + hw).ceil() as i32;
+        let y0 = (d.cy - hh).floor() as i32;
+        let y1 = (d.cy + hh).ceil() as i32;
+        Some(Job { d, cos, sin, aa, a8_max: alpha * 255.0, x0, x1, y0, y1, color, erase, default })
+    }
+
+    /// The dab's coverage in one tile, into `out` (one byte per pixel of the tile, the same
+    /// values `paint_tile` paints with). Returns whether it covers any of it.
+    fn coverage_tile(&self, key: TileKey, out: &mut [u8; TILE_PIXELS]) -> bool {
+        let (tx0, ty0) = (key.0 * TILE, key.1 * TILE);
+        let xs = self.x0.max(tx0)..self.x1.min(tx0 + TILE);
+        let ys = self.y0.max(ty0)..self.y1.min(ty0 + TILE);
+        let mut any = false;
+        if xs.start >= xs.end {
+            return false;
+        }
+        for y in ys {
+            let row = &mut out[((y - ty0) * TILE) as usize..][..TILE as usize];
+            let part = &mut row[(xs.start - tx0) as usize..(xs.end - tx0) as usize];
+            self.coverage_row(y, xs.start, part);
+            any |= part.iter().any(|&a| a != 0);
+        }
+        any
+    }
+
+    /// Coverage bytes of pixels `x0..` of row `y` into `out`: [`coverage`] times the dab's
+    /// alpha, rounded, with the same arithmetic in the same order, but without branches so
+    /// the compiler can work on several pixels at once (SIMD).
+    fn coverage_row(&self, y: i32, x0: i32, out: &mut [u8]) {
+        let d = &self.d;
+        let dy = y as f32 + 0.5 - d.cy;
+        let (cos, sin, aa, max) = (self.cos, self.sin, self.aa, self.a8_max);
+        let (dys, dyc) = (dy * sin, dy * cos);
+        let soft = d.hardness < 0.999;
+        let h = d.hardness.max(0.0);
+        for (i, o) in out.iter_mut().enumerate() {
+            let dx = (x0 + i as i32) as f32 + 0.5 - d.cx;
+            let u = (dx * cos + dys) / d.rx;
+            let v = (-dx * sin + dyc) / d.ry;
+            let r = (u * u + v * v).sqrt();
+            let edge = ((1.0 - r) / aa + 0.5).clamp(0.0, 1.0);
+            let c = if soft {
+                let t = ((r - h) / (1.0 - h)).clamp(0.0, 1.0);
+                edge * (1.0 - t * t * (3.0 - 2.0 * t))
+            } else {
+                edge
+            };
+            *o = (c * max + 0.5) as u8;
+        }
+    }
+
     /// Paints the dab's part in one tile; creates the tile (from the default pixel) only if
     /// the dab covers some of it. Returns whether anything changed.
     fn paint_tile(&self, key: TileKey, tile: &mut Option<Arc<Tile>>, mask: &mut Vec<u8>) -> bool {
-        let d = &self.d;
         let (tx0, ty0) = (key.0 * TILE, key.1 * TILE);
         let xs = self.x0.max(tx0)..self.x1.min(tx0 + TILE);
         let ys = self.y0.max(ty0)..self.y1.min(ty0 + TILE);
         // Coverage first, so tiles the dab only grazes with zero coverage are not created.
         let w = (xs.end - xs.start).max(0) as usize;
         mask.clear();
-        for y in ys.clone() {
-            let dy = y as f32 + 0.5 - d.cy;
-            mask.extend(xs.clone().map(|x| (coverage(x as f32 + 0.5 - d.cx, dy, d, self.cos, self.sin, self.aa) * self.a8_max + 0.5) as u8));
+        mask.resize(w * ys.clone().count(), 0);
+        if w > 0 {
+            for (y, row) in ys.clone().zip(mask.chunks_exact_mut(w)) {
+                self.coverage_row(y, xs.start, row);
+            }
         }
         if mask.iter().all(|&a| a == 0) {
             return false;
@@ -306,5 +383,41 @@ mod tests {
         }
         assert!(none.is_empty());
         assert_eq!(l, before);
+    }
+
+    #[test]
+    fn coverage_tiles_are_what_a_white_dab_leaves() {
+        for shape in [round(32.0, 32.0, 10.0, 1.0), round(100.3, 70.6, 90.0, 0.3), DabShape { cx: 5.0, cy: -3.0, rx: 40.0, ry: 8.0, angle: 0.7, hardness: 0.8 }, round(10.0, 10.0, 0.2, 1.0)] {
+            for alpha in [1.0, 0.37] {
+                let mut l = TiledLayer::new();
+                let mut dirty = HashSet::new();
+                paint_dab(&mut l, &shape, [255, 255, 255], alpha, false, &mut dirty);
+                let tiles = coverage_tiles(&shape, alpha);
+                let keys: HashSet<TileKey> = tiles.iter().map(|(k, _)| *k).collect();
+                assert_eq!(keys, dirty, "{shape:?}");
+                for (key, cov) in &tiles {
+                    let t = l.tile(*key).unwrap();
+                    for (i, &c) in cov.iter().enumerate() {
+                        assert_eq!(t.0[i * 4 + 3], c, "{shape:?} {key:?} pixel {i}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_rows_equal_the_plain_formula() {
+        for shape in [round(32.3, 20.7, 10.0, 1.0), round(-5.5, 70.25, 90.0, 0.3), DabShape { cx: 5.0, cy: -3.0, rx: 40.0, ry: 8.0, angle: 0.7, hardness: 0.8 }, round(10.0, 10.0, 0.7, 0.0)] {
+            let job = Job::new(&shape, 0.83, [0; 3], false, [0; 4]).unwrap();
+            for y in job.y0..job.y1 {
+                let mut row = vec![0u8; (job.x1 - job.x0) as usize];
+                job.coverage_row(y, job.x0, &mut row);
+                for (i, &got) in row.iter().enumerate() {
+                    let x = job.x0 + i as i32;
+                    let want = (coverage(x as f32 + 0.5 - job.d.cx, y as f32 + 0.5 - job.d.cy, &job.d, job.cos, job.sin, job.aa) * job.a8_max + 0.5) as u8;
+                    assert_eq!(got, want, "{shape:?} at ({x}, {y})");
+                }
+            }
+        }
     }
 }

@@ -53,7 +53,13 @@ struct App {
     /// Two fingers were down: the rest of this touch does nothing until all fingers lift.
     pinching: bool,
     last_autosave: Instant,
+    /// The last frames' times in ms: interface, picture (recombining and uploading),
+    /// drawing, the whole frame. `window.recedoStats()` reports them (for measuring).
+    timings: Vec<[f64; 4]>,
 }
+
+/// How many frames' times are kept.
+const TIMED_FRAMES: usize = 240;
 
 fn window() -> web_sys::Window {
     web_sys::window().expect("a browser window")
@@ -139,7 +145,9 @@ async fn run() -> Result<(), String> {
         pen_window: 0.0,
         pinching: false,
         last_autosave: Instant::now(),
+        timings: Vec::new(),
     }));
+    expose_stats(&app);
     restore_autosave(&app);
     listen(&app, &canvas)?;
     if let Some(el) = document.get_element_by_id("status") {
@@ -147,6 +155,29 @@ async fn run() -> Result<(), String> {
     }
     animation_loop(app);
     Ok(())
+}
+
+/// `window.recedoStats()`: the last frames' times (ms) as `{frames, ui, picture, draw, total}`,
+/// each `[median, worst]`, and `clear()` to start counting again. For measuring speed.
+fn expose_stats(app: &Rc<RefCell<App>>) {
+    let a = app.clone();
+    let stats = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |clear: JsValue| {
+        let Ok(mut app) = a.try_borrow_mut() else { return JsValue::NULL };
+        if clear.is_truthy() {
+            app.timings.clear();
+            return JsValue::NULL;
+        }
+        let pick = |i: usize| {
+            let mut v: Vec<f64> = app.timings.iter().map(|t| t[i]).collect();
+            v.sort_by(f64::total_cmp);
+            let median = v.get(v.len() / 2).copied().unwrap_or(0.0);
+            format!("[{median:.2},{:.2}]", v.last().copied().unwrap_or(0.0))
+        };
+        let json = format!(r#"{{"frames":{},"ui":{},"picture":{},"draw":{},"total":{}}}"#, app.timings.len(), pick(0), pick(1), pick(2), pick(3));
+        js_sys::JSON::parse(&json).unwrap_or(JsValue::NULL)
+    });
+    let _ = js_sys::Reflect::set(&window(), &JsValue::from_str("recedoStats"), stats.as_ref());
+    stats.forget();
 }
 
 /// The canvas's size in device pixels (it fills the window).
@@ -218,7 +249,9 @@ impl App {
         raw.viewports.entry(raw.viewport_id).or_default().native_pixels_per_point = Some(native);
         // The panel can also be closed from its own × button.
         self.session.ui.reference_open = reference_fn("isOpen").and_then(|f| f.call0(&JsValue::NULL).ok()).is_some_and(|v| v.is_truthy());
+        let t_ui = Instant::now();
         let (out, ui_out) = self.session.ui_frame(raw);
+        let ui_ms = t_ui.elapsed().as_secs_f64() * 1000.0;
         self.ppp = out.pixels_per_point;
         self.cursor = out.platform_output.cursor_icon;
         if let Some(v) = out.viewport_output.get(&egui::ViewportId::ROOT) {
@@ -228,10 +261,18 @@ impl App {
                 self.repaint_at = Some(now + v.repaint_delay);
             }
         }
+        let t_pic = Instant::now();
         self.renderer.sync(&self.device, &self.queue, &mut self.session.ed);
+        let pic_ms = t_pic.elapsed().as_secs_f64() * 1000.0;
+        let t_draw = Instant::now();
         let view = frame.texture.create_view(&Default::default());
         self.renderer.render(&self.device, &self.queue, Target { view: &view, size: [w, h] }, &self.session.ed, &self.session.egui, out);
         self.queue.present(frame);
+        let draw_ms = t_draw.elapsed().as_secs_f64() * 1000.0;
+        if self.timings.len() == TIMED_FRAMES {
+            self.timings.remove(0);
+        }
+        self.timings.push([ui_ms, pic_ms, draw_ms, now.elapsed().as_secs_f64() * 1000.0]);
         self.frames += 1;
         self.after_frame();
         ui_out.requests

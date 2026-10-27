@@ -25,7 +25,10 @@ windows-sys = { version = "0.61" }
 opt-level = 3
 debug = false
 strip = true
-codegen-units = 4
+# The whole program optimised as one (inlining across crates): faster painting and
+# compositing, a smaller browser app, slower release builds.
+lto = "fat"
+codegen-units = 1
 
 [profile.dev.package."*"]
 opt-level = 2

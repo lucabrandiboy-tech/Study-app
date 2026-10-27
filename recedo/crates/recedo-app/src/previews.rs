@@ -116,15 +116,33 @@ const THUMBNAIL_EVERY: Duration = Duration::from_millis(400);
 struct Thumb {
     uuid: String,
     rev: u64,
+    /// Which tiles the layer had when the picture was made (see [`tiles_signature`]).
+    signature: (usize, usize),
+    at: Instant,
     texture: TextureHandle,
 }
 
+/// A cheap fingerprint of which tiles a layer holds: their number and their addresses.
+/// Undo, redo, fills and moves give a layer other tiles, which changes it; painting with a
+/// brush changes the selected layer's tiles in place, which it does not (that layer is
+/// redone whenever pixels changed).
+fn tiles_signature(layer: &TiledLayer) -> (usize, usize) {
+    let addresses = layer.tile_keys().filter_map(|k| layer.tile(k)).fold(0usize, |acc, t| acc.wrapping_add(std::sync::Arc::as_ptr(t) as usize).rotate_left(5));
+    (layer.tile_count(), addresses ^ layer.default.iter().fold(0usize, |a, &c| a << 8 | c as usize))
+}
+
 /// The textures, made when first needed and kept until what they show changes.
-#[derive(Default)]
 pub struct Previews {
     strokes: HashMap<String, TextureHandle>,
     thumbs: Vec<Option<Thumb>>,
-    thumbs_at: Option<Instant>,
+    /// How long thumbnails wait between updates ([`THUMBNAIL_EVERY`]; the tests change it).
+    pub every: Duration,
+}
+
+impl Default for Previews {
+    fn default() -> Previews {
+        Previews { strokes: HashMap::new(), thumbs: Vec::new(), every: THUMBNAIL_EVERY }
+    }
 }
 
 impl Previews {
@@ -143,30 +161,36 @@ impl Previews {
     }
 
     /// The thumbnail of layer `index`, redone when its pixels changed (`rev` is the editor's
-    /// pixel revision), at most every [`THUMBNAIL_EVERY`] while they keep changing.
-    pub fn thumbnail(&mut self, ctx: &Context, doc: &Document, index: usize, rev: u64, side: u32) -> Option<TextureHandle> {
-        let uuid = &doc.layers.get(index)?.uuid;
+    /// pixel revision; `selected`: the layer being painted on): at most every
+    /// [`Previews::every`] while they keep changing, and only for layers that did change.
+    pub fn thumbnail(&mut self, ctx: &Context, doc: &Document, index: usize, rev: u64, selected: bool, side: u32) -> Option<TextureHandle> {
+        let layer = doc.layers.get(index)?;
         if self.thumbs.len() != doc.layers.len() {
             self.thumbs.resize_with(doc.layers.len(), || None);
         }
-        let stale = match &self.thumbs[index] {
+        let redo = match &mut self.thumbs[index] {
             None => true,
-            Some(t) if t.uuid != *uuid => true,
+            Some(t) if t.uuid != layer.uuid => true,
             Some(t) if t.rev == rev => false,
-            Some(_) => match self.thumbs_at.map(|at| at.elapsed()) {
-                Some(since) if since < THUMBNAIL_EVERY => {
+            Some(t) => {
+                let since = t.at.elapsed();
+                if since < self.every {
                     // Too soon: come back when it is time, even if nothing else happens.
-                    ctx.request_repaint_after(THUMBNAIL_EVERY - since);
+                    ctx.request_repaint_after(self.every - since);
+                    false
+                } else if selected || tiles_signature(&layer.pixels) != t.signature {
+                    true
+                } else {
+                    // Pixels changed elsewhere: this layer's picture still holds.
+                    t.rev = rev;
                     false
                 }
-                _ => true,
-            },
+            }
         };
-        if stale {
+        if redo {
             let (w, h) = thumbnail_size(doc, side);
             let texture = ctx.load_texture(format!("layer {index}"), thumbnail(doc, index, w, h), TextureOptions::LINEAR);
-            self.thumbs[index] = Some(Thumb { uuid: uuid.clone(), rev, texture });
-            self.thumbs_at = Some(Instant::now());
+            self.thumbs[index] = Some(Thumb { uuid: layer.uuid.clone(), rev, signature: tiles_signature(&layer.pixels), at: Instant::now(), texture });
         }
         self.thumbs[index].as_ref().map(|t| t.texture.clone())
     }
@@ -228,5 +252,33 @@ mod tests {
         let (w, h) = thumbnail_size(&big, 48);
         let img = thumbnail(&big, 0, w, h);
         assert!((0..48).all(|x| img.pixels[12 * 48 + x].a() > 0), "across the whole width");
+    }
+
+    #[test]
+    fn only_the_layers_that_changed_get_new_thumbnails() {
+        let ctx = Context::default();
+        let mut doc = Document::new(256, 256, None);
+        for n in 0..3 {
+            let mut l = recedo_core::doc::Layer::new(&format!("L{n}"));
+            l.pixels.set_pixel(10 + n, 10, [255, 0, 0, 255]);
+            doc.layers.push(l);
+        }
+        let mut p = Previews::default();
+        let ids = |p: &mut Previews, doc: &Document, rev: u64, selected: usize| (0..doc.layers.len()).map(|i| p.thumbnail(&ctx, doc, i, rev, i == selected, 32).unwrap().id()).collect::<Vec<_>>();
+        let first = ids(&mut p, &doc, 0, 1);
+        // Painting on layer 1 (in place) changes the pixel revision.
+        doc.layers[1].pixels.set_pixel(100, 100, [0, 0, 255, 255]);
+        std::thread::sleep(THUMBNAIL_EVERY + Duration::from_millis(30));
+        let second = ids(&mut p, &doc, 1, 1);
+        assert_eq!(first[0], second[0]);
+        assert_ne!(first[1], second[1], "the painted layer is redone");
+        assert_eq!(first[2], second[2]);
+        assert_eq!(first[3], second[3], "the others are not");
+        // Undo-like: layer 3 gets other tiles while layer 1 stays selected.
+        doc.layers[3].pixels = TiledLayer::new();
+        std::thread::sleep(THUMBNAIL_EVERY + Duration::from_millis(30));
+        let third = ids(&mut p, &doc, 2, 1);
+        assert_ne!(second[3], third[3], "a layer with other tiles is redone");
+        assert_eq!(second[2], third[2]);
     }
 }

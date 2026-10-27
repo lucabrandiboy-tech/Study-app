@@ -1,3 +1,8 @@
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.wasm32-unknown-unknown]
+# SIMD for the browser app (Chrome and Edge 91+, Firefox 89+, Safari 16.4+): compositing
+# uses it directly, and the compiler for the rest.
+rustflags = ["-C", "target-feature=+simd128"]

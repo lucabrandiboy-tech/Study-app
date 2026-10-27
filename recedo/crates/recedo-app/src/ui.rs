@@ -1222,7 +1222,7 @@ impl AppUi {
             let (pic, _) = row_ui.allocate_exact_size(vec2(28.0, 28.0), egui::Sense::hover());
             let pic = egui::Rect::from_center_size(pic.center(), thumb);
             checkerboard(row_ui.painter(), pic, 4.0);
-            if let Some(tex) = self.previews.thumbnail(row_ui.ctx(), &ed.doc, i, ed.pixels_rev, (28.0 * ppp) as u32) {
+            if let Some(tex) = self.previews.thumbnail(row_ui.ctx(), &ed.doc, i, ed.pixels_rev, i == ed.active, (28.0 * ppp) as u32) {
                 row_ui.painter().image(tex.id(), pic, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
             }
             row_ui.painter().rect_stroke(pic, 0.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Outside);

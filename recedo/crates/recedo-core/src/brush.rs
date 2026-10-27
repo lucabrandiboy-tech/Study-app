@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::curve::Curve;
-use crate::dab::{DabShape, paint_dab};
+use crate::dab::{DabShape, coverage_tiles, paint_dab};
 use crate::doc::{mul8, over};
 use crate::stabilizer::PaintInfo;
 use crate::tiles::{TILE, TILE_PIXELS, Tile, TileKey, TiledLayer};
@@ -231,19 +231,15 @@ impl StrokePainter {
     }
 
     fn paint_wash(&mut self, layer: &mut TiledLayer, d: &BrushDab, dirty: &mut HashSet<TileKey>) {
-        // 1. Coverage of this dab, drawn as a white dab on a scratch layer.
-        let mut cov = TiledLayer::new();
-        let mut touched = HashSet::new();
-        paint_dab(&mut cov, &d.shape, [255, 255, 255], 1.0, false, &mut touched);
+        // 1. Coverage of this dab.
         let target = (d.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         let flow = (d.flow.clamp(0.0, 1.0) * 255.0).round() as u8;
-        for key in touched {
-            let src = cov.tile(key).expect("touched tile exists");
+        for (key, cov) in coverage_tiles(&d.shape, 1.0) {
             // 2. Krita's "alpha darken": coverage rises toward the stroke opacity, never past it.
             let m = self.mask.entry(key).or_insert_with(|| Box::new([0; TILE_PIXELS]));
             let (mut first, mut last) = (usize::MAX, 0);
-            for (i, px) in src.0.as_chunks::<4>().0.iter().enumerate() {
-                let a = mul8(px[3], flow);
+            for (i, &c) in cov.iter().enumerate() {
+                let a = mul8(c, flow);
                 if a == 0 || m[i] >= target {
                     continue;
                 }

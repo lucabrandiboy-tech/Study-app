@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::blend::BlendMode;
-use crate::doc::{Document, Layer, composite_tile};
+use crate::doc::{Document, Layer, composite_tile, composite_tile_onto_opaque};
 use crate::image::Rgba8;
 use crate::tiles::{TILE, Tile, TileKey};
 
@@ -61,15 +61,23 @@ struct Shown<'a> {
     default: Option<Tile>,
 }
 
-/// Composites the shown layers onto `buf` (one tile's pixels, `tw` wide).
+/// Composites the shown layers onto `buf` (one tile's pixels, `tw` wide). Once every pixel
+/// is opaque (usually from the background up), Normal layers take the faster path.
 fn composite_layers(buf: &mut [u8], layers: &[Shown], key: TileKey, tw: u32, th: u32) {
+    let mut opaque = buf.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
     for s in layers {
         let tile = match (s.layer.pixels.tile(key), &s.default) {
             (Some(t), _) => &**t,
             (None, Some(d)) => d,
             (None, None) => continue,
         };
+        if opaque && s.layer.blend == BlendMode::Normal {
+            composite_tile_onto_opaque(buf, tw as usize, tile, tw as usize, th as usize, s.layer.opacity);
+            continue;
+        }
         composite_tile(buf, tw as usize, tile, tw as usize, th as usize, s.layer.opacity, s.layer.blend);
+        // Any blend mode keeps opaque pixels opaque; until then, check.
+        opaque = opaque || buf.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
     }
 }
 
