@@ -574,3 +574,57 @@ fn every_tool_has_options_and_draws_without_trouble() {
         }
     }
 }
+
+#[test]
+fn the_text_preview_turns_and_mirrors_with_the_view() {
+    // The text being written shows where it will be painted, also on a turned or mirrored
+    // view: its dark pixels before placing match those of the painted text after.
+    let Some(g) = gpu() else { return };
+    for mirror in [false, true] {
+        let mut s = session();
+        let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+        quiet(&g, &mut r, &mut s, vec![]);
+        s.ed.color = [0, 0, 0];
+        s.ed.tool = Tool::Text;
+        s.ed.tools.text.size = 220.0;
+        s.ed.rotate_by_degrees(40.0);
+        if mirror {
+            s.ed.toggle_mirror();
+        }
+        let area = quiet(&g, &mut r, &mut s, vec![]).canvas_rect;
+        // Pixels of the white painting (not the grey around it) that the text darkens.
+        let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+        let blank = shot(&g, &mut r, &mut s, out, "16-text-blank");
+        let (w, h) = (s.ed.doc.width as f64, s.ed.doc.height as f64);
+        s.ed.text_edit = Some(crate::editor::TextEdit { at: (w * 0.3, h * 0.35), text: "RFRFRF".into() });
+        let dark = |img: &recedo_core::image::Rgba8| {
+            let mut px = Vec::new();
+            for y in area.min.y as u32..area.max.y as u32 {
+                for x in area.min.x as u32..area.max.x as u32 {
+                    if blank.pixel(x, y)[..3].iter().all(|&v| v > 200) && img.pixel(x, y)[..3].iter().all(|&v| v < 80) {
+                        px.push((x, y));
+                    }
+                }
+            }
+            px
+        };
+        let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+        let before = dark(&shot(&g, &mut r, &mut s, out, if mirror { "16-text-preview-mirrored" } else { "16-text-preview" }));
+        s.ed.place_text();
+        assert!(s.ed.text_edit.is_none());
+        let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+        let after = dark(&shot(&g, &mut r, &mut s, out, if mirror { "17-text-placed-mirrored" } else { "17-text-placed" }));
+        assert!(before.len() > 2000 && after.len() > 2000, "{} / {} dark pixels", before.len(), after.len());
+        let mid = |p: &[(u32, u32)]| {
+            let n = p.len() as f64;
+            (p.iter().map(|q| q.0 as f64).sum::<f64>() / n, p.iter().map(|q| q.1 as f64).sum::<f64>() / n)
+        };
+        let (a, b) = (mid(&before), mid(&after));
+        let set: std::collections::HashSet<_> = after.iter().copied().collect();
+        let both = before.iter().filter(|p| set.contains(p)).count() as f64;
+        let overlap = both / (before.len() + after.len()) as f64 * 2.0;
+        eprintln!("mirror {mirror}: centres {a:?} {b:?}, overlap {overlap:.2}");
+        assert!((a.0 - b.0).hypot(a.1 - b.1) < 6.0, "mirror {mirror}: the preview's middle {a:?}, the painted text's {b:?}");
+        assert!(overlap > 0.6, "mirror {mirror}: only {overlap:.2} of the pixels agree");
+    }
+}

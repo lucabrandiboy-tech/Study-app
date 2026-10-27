@@ -558,6 +558,9 @@ pub struct Editor {
     dirty: HashSet<TileKey>,
     refresh_all: bool,
     fit_pending: bool,
+    /// The view just after the painting was fitted to the window, while it is still that
+    /// (no pan, zoom or turn since): a new canvas area size fits it again.
+    fitted: Option<View>,
     jobs: Vec<Job>,
     /// The crash-recovery copy this painting was opened from; deleted once it is saved or
     /// closed normally.
@@ -603,6 +606,7 @@ impl Editor {
             dirty: HashSet::new(),
             refresh_all: true,
             fit_pending: true,
+            fitted: None,
             jobs: Vec::new(),
             recovered_from: None,
             last_edit: None,
@@ -662,15 +666,24 @@ impl Editor {
 
     // ----- screen -----------------------------------------------------------------------
 
-    /// Where the canvas area is on screen; fits a newly opened painting into it.
+    /// Where the canvas area is on screen; fits a newly opened painting into it. When the
+    /// area changes (the window resized, panels or the reference panel opened or closed, G),
+    /// a painting still fitted to the window is fitted again, and otherwise what was in the
+    /// middle stays in the middle.
     pub fn set_viewport(&mut self, x: f64, y: f64, w: f64, h: f64) {
         if w < 1.0 || h < 1.0 || ![x, y, w, h].iter().all(|v| v.is_finite()) {
             return;
         }
-        self.viewport = (x, y, w, h);
+        let old = std::mem::replace(&mut self.viewport, (x, y, w, h));
         if self.fit_pending {
             self.fit_pending = false;
             self.fit_to_window();
+        } else if old != self.viewport {
+            if self.fitted == Some(self.view) {
+                self.fit_to_window();
+            } else {
+                self.view.pan(x + w / 2.0 - (old.0 + old.2 / 2.0), y + h / 2.0 - (old.1 + old.3 / 2.0));
+            }
         }
     }
 
@@ -1484,6 +1497,7 @@ impl Editor {
         let (x, y, w, h) = self.viewport;
         self.view.fit((self.doc.width, self.doc.height), (w, h), 24.0);
         self.view.pan(x, y);
+        self.fitted = Some(self.view);
     }
 
     pub fn rotate_by_degrees(&mut self, degrees: f64) {

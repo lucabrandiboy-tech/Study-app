@@ -525,6 +525,23 @@ fn view_commands() {
     // Centred in the canvas area, which starts at (100, 40).
     let c = f.view.to_screen(2000.0, 500.0);
     assert!((c.0 - 624.0).abs() < 1e-6 && (c.1 - 340.0).abs() < 1e-6, "{c:?}");
+    // Still fitted: a narrower canvas area (the reference panel opening) fits it again.
+    f.set_viewport(100.0, 40.0, 648.0, 600.0);
+    assert!((f.view.zoom - 600.0 / 4000.0).abs() < 1e-9, "fitted again: {}", f.view.zoom);
+    let c = f.view.to_screen(2000.0, 500.0);
+    assert!((c.0 - 424.0).abs() < 1e-6 && (c.1 - 340.0).abs() < 1e-6, "{c:?}");
+    // Zoomed in by hand: the zoom stays and what was in the middle stays in the middle.
+    f.zoom_in();
+    let zoom = f.view.zoom;
+    let mid = f.view.to_canvas(424.0, 340.0);
+    f.set_viewport(0.0, 0.0, 1248.0, 680.0);
+    let now = f.view.to_canvas(624.0, 340.0);
+    assert_eq!(f.view.zoom, zoom);
+    assert!((now.0 - mid.0).abs() < 1e-6 && (now.1 - mid.1).abs() < 1e-6, "{mid:?} -> {now:?}");
+    // The same area again changes nothing.
+    let v = f.view;
+    f.set_viewport(0.0, 0.0, 1248.0, 680.0);
+    assert_eq!(f.view, v);
 }
 
 

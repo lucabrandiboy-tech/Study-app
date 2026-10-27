@@ -196,6 +196,8 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Both shells tell the interface which of Ctrl, Shift and Alt are held (egui's `ModifiersChanged`) | egui 0.37 learns the held keys only from that event; without it Ctrl+Enter could not place text, in the browser or `recedo.exe`. | Self-test under Wine (Ctrl+Enter places text); UI test |
 | G hides everything but the painting (Krita uses Tab); the gradient moved to Shift+G | The user asked for G. Tab moves the keyboard between fields in a browser page, so it would be a poor key there anyway. | UI test; browser test |
 | Invert the selection is Ctrl+I, Ctrl+Shift+I kept as well; with nothing selected it says so | The user found Ctrl+Shift+I not working. In headless Chromium it did invert, so the likely causes were inverting with nothing selected (it did nothing and said nothing) or the browser opening its developer tools; Ctrl+I avoids the second. | UI test; editor test; browser test |
+| A new canvas area size re-fits a painting that is still fitted to the window (the view unchanged since the fit), and otherwise keeps the middle in the middle | Opening the reference panel used to leave the right part of the painting under it; G left the painting off to one side. A painting the user zoomed or panned keeps its zoom. | Editor test; browser test |
+| The text preview is laid out upright by egui, then its triangles are moved with the view's turn and mirror | egui draws text upright only; moving the finished triangles gives the exact view transform, mirror included, with no second text renderer. | UI test against the painted text |
 
 ## 9. The reference panel (browser version)
 

@@ -1117,17 +1117,32 @@ impl AppUi {
             painter.line_segment([c - vec2(12.0, 0.0), c + vec2(12.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
             painter.line_segment([c - vec2(0.0, 12.0), c + vec2(0.0, 12.0)], Stroke::new(1.0, Color32::WHITE));
         }
-        // The text being written, roughly as it will look (the same fonts; the view's
-        // rotation is not shown).
+        // The text being written, roughly as it will look (the same fonts), turned and
+        // mirrored with the view like the painting under it.
         if let Some(t) = &ed.text_edit {
-            let [r, g, bl] = ed.color;
+            let colour = Color32::from_rgb(ed.color[0], ed.color[1], ed.color[2]);
             let family = if ed.tools.text.font == Font::Mono { egui::FontFamily::Monospace } else { egui::FontFamily::Proportional };
             let size = ((ed.tools.text.size as f64 * ed.view.zoom) as f32 / ppp).max(1.0);
             let at = to(t.at);
+            // Where the canvas's right and down directions point on screen.
+            let (sin, cos) = (ed.view.angle as f32).sin_cos();
+            let m = if ed.view.mirror { -1.0 } else { 1.0 };
+            let (right, down) = (vec2(cos * m, sin * m), vec2(-sin, cos));
             if t.text.is_empty() {
-                painter.line_segment([at, at + vec2(0.0, size)], Stroke::new(2.0, Color32::from_rgb(r, g, bl)));
+                painter.line_segment([at, at + down * size], Stroke::new(2.0, colour));
             } else {
-                painter.text(at, egui::Align2::LEFT_TOP, &t.text, egui::FontId::new(size, family), Color32::from_rgb(r, g, bl));
+                // Laid out upright at `at`, then each corner of its triangles moved.
+                let galley = painter.layout_no_wrap(t.text.clone(), egui::FontId::new(size, family), colour);
+                let shape = egui::epaint::ClippedShape::new(egui::Rect::EVERYTHING, egui::Shape::galley(at, galley, colour));
+                for p in ctx.tessellate(vec![shape], ctx.pixels_per_point()) {
+                    if let egui::epaint::Primitive::Mesh(mut mesh) = p.primitive {
+                        for v in &mut mesh.vertices {
+                            let d = v.pos - at;
+                            v.pos = at + right * d.x + down * d.y;
+                        }
+                        painter.add(egui::Shape::mesh(mesh));
+                    }
+                }
             }
             painter.circle_filled(at, 3.0, Color32::from_rgb(80, 140, 230));
         }

@@ -38,7 +38,7 @@ are for `recedo.exe` unless a row says otherwise.
 |---|---|---|
 | GPU canvas (wgpu, DirectX 12 / Vulkan / OpenGL) | WORKING | Self-test on Windows reads the window's image back: painted spots dark, empty ones white. GPU tests compare drawn pixels with the view math. |
 | Tiled storage (64x64 tiles, copy on write) | WORKING | Engine tests; 15 painted 4K layers use 469 MB. |
-| Pan, zoom, rotate, mirror | WORKING | Space+drag, middle-button drag, wheel zoom about the pointer, "2" fit: self-test on Windows. Shift+Space rotate, Ctrl+Space zoom, 4/6/5, M, 1, +/-: editor and UI tests (same input path as the Space key, which the self-test runs). |
+| Pan, zoom, rotate, mirror | WORKING | Space+drag, middle-button drag, wheel zoom about the pointer, "2" fit: self-test on Windows. Shift+Space rotate, Ctrl+Space zoom, 4/6/5, M, 1, +/-: editor and UI tests (same input path as the Space key, which the self-test runs). When the canvas area changes size (window, panels, the reference panel, G) a painting still fitted to the window is fitted again, and otherwise what was in the middle stays in the middle at the same zoom (editor test; browser test with the reference panel and G). |
 | Round brush with pressure (size, opacity, flow), hardness, spacing, Wash / Build-up | NEEDS HARDWARE CHECK | Injected Windows Ink stroke on Windows: line 3 px wide at light pressure, 19 px at full; mock Wintab: 2 to 21 px; every touched point painted. The real pen: checklist part 2. |
 | Krita stabilizer (distance, delay, finish line, smoothed pressure, zoom-scaled) | NEEDS HARDWARE CHECK | Engine tests (15) and editor tests (keeps catching up while the pen is held still). How it feels needs the pen. |
 | Eraser tool, eraser end of the pen | Tool WORKING; eraser end NEEDS HARDWARE CHECK | Editor tests with synthetic eraser samples. |
@@ -191,7 +191,7 @@ are for `recedo.exe` unless a row says otherwise.
 
 | Feature | Status |
 |---|---|
-| Editable text layers (font, size, colour, alignment, line spacing), convert to paint layer | PARTIAL (done early): the text tool paints text into the layer: two fonts, size, bold, colour, line spacing. Not editable afterwards (no text layers), no alignment, no other fonts |
+| Editable text layers (font, size, colour, alignment, line spacing), convert to paint layer | PARTIAL (done early): the text tool paints text into the layer: two fonts, size, bold, colour, line spacing. The text being written is shown turned and mirrored with the view, where it will be painted (UI test: the preview's pixels match the painted text's on a view turned 40°, also mirrored; the old upright preview fails it). Not editable afterwards (no text layers), no alignment, no other fonts |
 | Comic panel/frame tool with gutters and border thickness | NOT STARTED |
 | Reference board: from file or clipboard, move, scale, rotate, opacity, saved with the document | NOT STARTED |
 
