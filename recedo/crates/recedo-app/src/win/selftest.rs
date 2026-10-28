@@ -533,8 +533,10 @@ fn ink_test(r: &mut Results, hwnd: HWND, c: Area) {
     let layer = active_layer();
     let before = history_applied();
     with_app(|a| a.pen_log = Some(crate::win::app::PenLog::new()));
-    let y = c.top + c.height() * 0.3;
-    let (x0, x1) = (c.left + 60.0, c.right - 60.0);
+    // Whole pixels: the pen goes to whole screen pixels, so the line is measured where it
+    // really went (zoomed far out, half a pixel is several canvas pixels).
+    let y = (c.top + c.height() * 0.3).round();
+    let (x0, x1) = ((c.left + 60.0).round(), (c.right - 60.0).round());
     let hover = POINTER_FLAG_INRANGE | POINTER_FLAG_UPDATE;
     let mut frames = Vec::new();
     for i in 0..10 {
@@ -691,11 +693,18 @@ fn screen_test(r: &mut Results, out: &Path, capture: bool) {
                     let (vx, vy, vw, vh) = ed.viewport;
                     s.0 > vx + 4.0 && s.1 > vy + 4.0 && s.0 < vx + vw - 4.0 && s.1 < vy + vh - 4.0
                 };
-                // Well inside a stroke or well away from all paint (so filtering cannot blur it).
+                // Well inside a stroke, or well away from all paint (by 3 screen pixels) and
+                // inside the painting, so neither filtering nor the painting's edge can blur it.
                 let around = |want_dark: bool| {
-                    (-6i32..=6).step_by(3).all(|d| {
-                        (-6i32..=6).step_by(3).all(|e| {
-                            let q = flat.pixel((x as i32 + d).clamp(0, flat.width as i32 - 1) as u32, (y as i32 + e).clamp(0, flat.height as i32 - 1) as u32);
+                    let reach = if want_dark { 6 } else { (3.0 / ed.view.zoom).ceil().max(6.0) as i32 };
+                    let step = (reach / 3).max(1) as usize;
+                    (-reach..=reach).step_by(step).all(|d| {
+                        (-reach..=reach).step_by(step).all(|e| {
+                            let (qx, qy) = (x as i32 + d, y as i32 + e);
+                            if qx < 0 || qy < 0 || qx >= flat.width as i32 || qy >= flat.height as i32 {
+                                return false;
+                            }
+                            let q = flat.pixel(qx as u32, qy as u32);
                             let l = (q[0] as u32 + q[1] as u32 + q[2] as u32) / 3;
                             if want_dark { l < 60 } else { l > 250 }
                         })
