@@ -32,6 +32,9 @@ const STRIP_WIDTH: f32 = 60.0;
 pub const TEXT_SANS: &str = "text sans";
 
 /// Clip Studio-like greys: mid-grey panels, darker bars, a blue-grey selection.
+/// The highlight colour: selected rows and tabs, slider fill.
+pub const ACCENT: Color32 = Color32::from_rgb(64, 110, 186);
+
 pub fn apply_theme(ctx: &egui::Context) {
     let g = Color32::from_gray;
     let mut v = egui::Visuals::dark();
@@ -40,7 +43,8 @@ pub fn apply_theme(ctx: &egui::Context) {
     v.faint_bg_color = g(64);
     v.extreme_bg_color = g(40);
     v.window_stroke = Stroke::new(1.0, g(28));
-    v.selection.bg_fill = Color32::from_rgb(92, 108, 142);
+    // Clip Studio's blue: selected rows, and the filled part of every slider.
+    v.selection.bg_fill = ACCENT;
     v.selection.stroke = Stroke::new(1.0, g(245));
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = g(58);
@@ -53,6 +57,15 @@ pub fn apply_theme(ctx: &egui::Context) {
         state.fg_stroke = Stroke::new(1.0, g(text));
     }
     w.hovered.bg_stroke = Stroke::new(1.0, g(120));
+    // Check boxes and fields with an edge, so they show against the panel.
+    w.inactive.bg_stroke = Stroke::new(1.0, g(96));
+    for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        state.corner_radius = egui::CornerRadius::same(2);
+        state.expansion = 0.0;
+    }
+    // Sliders as filled bars: the part up to the value in blue, a slim handle.
+    v.slider_trailing_fill = true;
+    v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.35 };
     ctx.set_visuals_of(egui::Theme::Dark, v);
     ctx.set_theme(egui::ThemePreference::Dark);
     // Inter: a typeface drawn for small interface text (sharper than egui's Ubuntu Light).
@@ -80,6 +93,7 @@ pub fn apply_theme(ctx: &egui::Context) {
         sp.button_padding = vec2(4.0, 1.0);
         sp.interact_size = vec2(32.0, 16.0);
         sp.slider_width = 80.0;
+        sp.slider_rail_height = 10.0;
         sp.combo_width = 80.0;
         sp.icon_width = 11.0;
         sp.icon_width_inner = 6.0;
@@ -1099,7 +1113,7 @@ impl AppUi {
                 ed.swap_colors();
             }
             let [r, g, b] = ed.color;
-            ui.label(RichText::new(format!("R {r}   G {g}   B {b}")).monospace());
+            ui.label(RichText::new(format!("#{r:02X}{g:02X}{b:02X}   {r}, {g}, {b}")).color(Color32::from_gray(190)));
         });
         ui.add_space(4.0);
         if !ed.recent_colors.is_empty() {
@@ -1304,6 +1318,19 @@ impl AppUi {
             painter.line_segment([pt(l.brush), pt(l.pen)], s);
         }
         let to = |p: (f64, f64)| pt(ed.view.to_screen(p.0, p.1));
+        // A soft shadow and a dark edge round the painting, outside it only (the painting
+        // itself is drawn by the GPU underneath and must not be covered).
+        if !self.canvas_only {
+            let (w, h) = (ed.doc.width as f64, ed.doc.height as f64);
+            let corners = [to((0.0, 0.0)), to((w, 0.0)), to((w, h)), to((0.0, h))];
+            let mid = corners.iter().fold(egui::Vec2::ZERO, |a, c| a + c.to_vec2()) / 4.0;
+            for (i, alpha) in [70u8, 44, 28, 17, 10, 5].into_iter().enumerate() {
+                let d = 1.5 + i as f32 * 1.6;
+                let ring: Vec<egui::Pos2> = corners.iter().map(|c| *c + (*c - mid.to_pos2()).normalized() * d * std::f32::consts::SQRT_2).collect();
+                painter.add(egui::Shape::closed_line(ring, Stroke::new(1.7, Color32::from_black_alpha(alpha))));
+            }
+            painter.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, Color32::from_gray(20))));
+        }
         // Lines drawn dark under light, so they show on any colour.
         let ants = |shapes: &mut Vec<egui::Shape>, light: &mut Vec<egui::Shape>, a: egui::Pos2, b: egui::Pos2| {
             shapes.push(egui::Shape::line_segment([a, b], Stroke::new(2.5, Color32::from_black_alpha(190))));

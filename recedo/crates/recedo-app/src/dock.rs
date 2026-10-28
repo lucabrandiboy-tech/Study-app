@@ -72,6 +72,9 @@ pub struct Floating {
 /// 3: the same, narrower (the compact interface).
 pub const LAYOUT_VERSION: u32 = 3;
 
+/// The Colour panel's share of the left dock: what the wheel needs, no empty space below.
+const COLOR_WEIGHT: f32 = 1.15;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockLayout {
@@ -90,7 +93,7 @@ impl Default for DockLayout {
     fn default() -> DockLayout {
         DockLayout {
             version: LAYOUT_VERSION,
-            left: vec![Stack::weighted(&[Panel::Color], 1.5), Stack::weighted(&[Panel::Tools], 1.1), Stack::weighted(&[Panel::ToolOptions], 1.5)],
+            left: vec![Stack::weighted(&[Panel::Color], COLOR_WEIGHT), Stack::weighted(&[Panel::Tools], 1.1), Stack::weighted(&[Panel::ToolOptions], 1.5)],
             right: vec![Stack::of(&[Panel::Layers, Panel::History])],
             floating: Vec::new(),
             left_width: 196.0,
@@ -196,6 +199,12 @@ impl DockLayout {
     pub fn sanitize(&mut self) {
         if self.version < LAYOUT_VERSION {
             *self = DockLayout::default();
+        }
+        // The standard left dock as first saved (with empty space under the colour wheel).
+        let weights: Vec<f32> = self.left.iter().map(|s| s.weight).collect();
+        let tabs: Vec<&[Panel]> = self.left.iter().map(|s| s.tabs.as_slice()).collect();
+        if weights == [1.5, 1.1, 1.5] && tabs == [&[Panel::Color][..], &[Panel::Tools], &[Panel::ToolOptions]] {
+            self.left[0].weight = COLOR_WEIGHT;
         }
         let mut seen = Vec::new();
         for stacks in [&mut self.left, &mut self.right] {
@@ -304,6 +313,31 @@ impl DockLayout {
 /// The panels' title strips.
 pub const HEADER_FILL: egui::Color32 = egui::Color32::from_gray(42);
 
+/// A panel's tab on the header strip: plain text, the open one bright with a blue line
+/// under it (as in Clip Studio), the others dimmer.
+fn tab_label(ui: &mut egui::Ui, active: bool, text: &str) -> egui::Response {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, egui::Color32::WHITE);
+    let size = galley.size() + egui::vec2(10.0, 5.0);
+    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let color = if active {
+            egui::Color32::from_gray(240)
+        } else if r.hovered() {
+            egui::Color32::from_gray(210)
+        } else {
+            egui::Color32::from_gray(150)
+        };
+        if active {
+            p.rect_filled(rect, 0.0, egui::Color32::from_gray(54));
+            p.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x, rect.max.y - 2.0), rect.max), 0.0, crate::ui::ACCENT);
+        }
+        p.galley(rect.min + egui::vec2(5.0, 2.0), galley, color);
+    }
+    r
+}
+
 struct DockOps<'a> {
     moves: &'a mut Vec<(Panel, Target)>,
     floats: &'a mut Vec<(Panel, [f32; 2])>,
@@ -331,7 +365,7 @@ fn stacks_ui(ui: &mut Ui, side: Side, stacks: &mut [Stack], title: &dyn Fn(Panel
                     ui.horizontal_wrapped(|ui| {
                         for (t, &tab) in stack.tabs.iter().enumerate() {
                             let id = Id::unique(("recedo tab", tab));
-                            let r = ui.dnd_drag_source(id, tab, |ui| ui.selectable_label(t == stack.active, title(tab)));
+                            let r = ui.dnd_drag_source(id, tab, |ui| tab_label(ui, t == stack.active, &title(tab)));
                             if r.inner.clicked() {
                                 stack.active = t;
                             }
@@ -493,6 +527,11 @@ mod tests {
         let mut d = old;
         d.sanitize();
         assert_eq!(d, DockLayout::default());
+        // The standard layout as first saved gets the smaller Colour panel.
+        let mut first = DockLayout::default();
+        first.left[0].weight = 1.5;
+        first.sanitize();
+        assert_eq!(first, DockLayout::default());
         // A current layout the user changed is kept.
         d.remove(Panel::History);
         let kept = d.clone();
