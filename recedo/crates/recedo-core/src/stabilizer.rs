@@ -104,6 +104,37 @@ impl Default for StabilizerSettings {
     }
 }
 
+/// The window, in ms, of the strongest stability (100): about as heavy as Clip Studio's 100.
+const STRONGEST: f32 = 400.0;
+/// The window of the weakest stability above 0 (1).
+const WEAKEST: f32 = 3.0;
+
+impl StabilizerSettings {
+    /// One number for how smooth lines are, 0 (off) to 100 (strongest), like the
+    /// "Stabilization" slider of other painting apps. Steps are even in feel: each one
+    /// lengthens the averaging window by the same factor, so low settings stay fine-grained.
+    pub fn stability(&self) -> u8 {
+        if !self.enabled {
+            return 0;
+        }
+        let t = (self.distance.max(WEAKEST) / WEAKEST).ln() / (STRONGEST / WEAKEST).ln();
+        (t * 100.0).round().clamp(1.0, 100.0) as u8
+    }
+
+    /// Sets [`StabilizerSettings::stability`]. Above 0 the line always finishes where the pen
+    /// lifts, and the smoothing is the same at every zoom (a window of time, as the pen
+    /// moves on the screen).
+    pub fn set_stability(&mut self, v: u8) {
+        let v = v.min(100);
+        self.enabled = v > 0;
+        if v > 0 {
+            self.distance = WEAKEST * (STRONGEST / WEAKEST).powf(v as f32 / 100.0);
+            self.finish_line = true;
+            self.scalable_distance = false;
+        }
+    }
+}
+
 /// One stroke's stabilizer.
 #[derive(Clone, Debug)]
 pub struct Stabilizer {
@@ -374,6 +405,67 @@ mod tests {
         assert!(mid.len() > 50);
         let worst = mid.iter().map(|p| (p.y - 100.0).abs()).fold(0.0, f64::max);
         assert!(worst < 0.5, "worst {worst}");
+    }
+
+    #[test]
+    fn stability_numbers_read_back_and_only_strengthen() {
+        let mut s = StabilizerSettings::default();
+        s.set_stability(0);
+        assert!(!s.enabled);
+        assert_eq!(s.stability(), 0);
+        let mut last = 0.0;
+        for v in 1..=100u8 {
+            s.set_stability(v);
+            assert!(s.enabled && s.finish_line && !s.scalable_distance);
+            assert_eq!(s.stability(), v, "reads back");
+            assert!(s.distance > last, "{v}: each step is stronger");
+            last = s.distance;
+        }
+        assert!((s.distance - STRONGEST).abs() < 0.01);
+    }
+
+    /// How the slider feels, on a shaky hand: a horizontal line at 600 px/s with random
+    /// ±3 px wobble, the pen at 200 readings/s. Each step up gives a smoother line; the line
+    /// always ends where the pen lifted; low settings barely trail the pen, high ones trail it
+    /// more (as in other apps).
+    #[test]
+    fn the_stability_slider_smooths_more_at_each_step_and_ends_at_the_pen() {
+        let shaky = |t: f64| {
+            // Deterministic noise in -1..1, a new value every reading.
+            let i = (t * 200.0).round() as u64;
+            let h = (i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) as f64 / (1u64 << 31) as f64;
+            PaintInfo::new(t * 600.0, 100.0 + 3.0 * (2.0 * h - 1.0), 1.0)
+        };
+        let mut previous_wobble = 3.0f64;
+        let mut lags = Vec::new();
+        for v in [10u8, 30, 50, 70, 100] {
+            let mut set = StabilizerSettings::default();
+            set.set_stability(v);
+            let mut s = Stabilizer::start(shaky(0.0), 0, set, 1.0);
+            // The drawing part: how far the line trails the pen in the middle of the stroke.
+            let mut out = Vec::new();
+            let mut t = 0u64;
+            while t < 500_000 {
+                t += 5_000;
+                s.add(shaky(t as f64 / 1e6));
+                if t.is_multiple_of(15_000) {
+                    out.extend(s.poll(t));
+                }
+            }
+            lags.push(s.pen_position().x - s.brush_position().x);
+            out.extend(s.finish(t));
+            let mid: Vec<f64> = out.iter().filter(|p| p.x > 100.0 && p.x < 250.0).map(|p| (p.y - 100.0).abs()).collect();
+            assert!(mid.len() > 20, "{v}: points in the middle");
+            let wobble = mid.iter().sum::<f64>() / mid.len() as f64;
+            assert!(wobble < previous_wobble, "stability {v}: wobble {wobble:.3} px, not below {previous_wobble:.3}");
+            println!("stability {v:3}: wobble {wobble:.2} px, trails the pen by {:.1} px", lags.last().unwrap());
+            previous_wobble = wobble;
+            let (last, pen) = (out.last().unwrap(), s.pen_position());
+            assert!((last.x - pen.x).abs() < 1e-6 && (last.y - pen.y).abs() < 1e-6, "stability {v}: ends where the pen lifted");
+        }
+        assert!(lags[0] < 5.0, "stability 10 trails by {:.1} px at 600 px/s", lags[0]);
+        assert!(lags.windows(2).all(|w| w[1] > w[0]), "stronger trails more: {lags:?}");
+        assert!(lags[4] > 50.0, "stability 100 is heavy: {:.1} px", lags[4]);
     }
 
     #[test]

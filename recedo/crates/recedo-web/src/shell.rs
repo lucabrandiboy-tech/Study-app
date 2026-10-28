@@ -204,7 +204,7 @@ fn expose_stats(app: &Rc<RefCell<App>>) {
         let (names, applied) = ed.history.entries();
         let selection = ed.doc.selection.as_ref().map(|m| m.bounds);
         let c = app.session.canvas_rect;
-        let json = serde_json::json!({ "tool": ed.tool.id(), "history": names, "applied": applied, "selection": selection, "canvas": [c.min.x, c.min.y, c.max.x, c.max.y] });
+        let json = serde_json::json!({ "tool": ed.tool.id(), "history": names, "applied": applied, "selection": selection, "canvas": [c.min.x, c.min.y, c.max.x, c.max.y], "stability": ed.tools.stabilizer.stability() });
         js_sys::JSON::parse(&json.to_string()).unwrap_or(JsValue::NULL)
     });
     let _ = js_sys::Reflect::set(&window(), &JsValue::from_str("recedoState"), state.as_ref());

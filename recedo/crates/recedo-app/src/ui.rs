@@ -992,6 +992,8 @@ impl AppUi {
                 ed.resize_brush(true);
             }
             ui.separator();
+            stability_slider(ui, ed, 64.0);
+            ui.separator();
             if act(ui, Action::ZoomOut, true, false, "Zoom out (-)") {
                 ed.zoom_out();
             }
@@ -1912,6 +1914,8 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
             let b = ed.current_brush_mut();
             ui.add(egui::Slider::new(&mut b.size, MIN_BRUSH..=MAX_BRUSH).logarithmic(true).text("Size").suffix(" px").max_decimals(0))
                 .on_hover_text("[ and ] change the size");
+            stability_slider(ui, ed, ui.spacing().slider_width);
+            let b = ed.current_brush_mut();
             let pct = |ui: &mut Ui, v: &mut f32, label: &str, tip: &str| {
                 let mut p = (*v * 100.0).round();
                 if ui.add(egui::Slider::new(&mut p, 0.0..=100.0).text(label).suffix(" %").integer()).on_hover_text(tip).changed() {
@@ -2302,6 +2306,21 @@ fn ago(secs_since_1970: u64) -> String {
         3600..86_400 => format!("{} h ago", d / 3600),
         _ => format!("{} days ago", d / 86_400),
     }
+}
+
+/// How smooth lines are, 0 (off) to 100, like the "Stabilization" slider of other painting
+/// apps (on the toolbar and in Tool property; the details are under "Stabilizer").
+fn stability_slider(ui: &mut Ui, ed: &mut Editor, width: f32) {
+    let mut v = ed.tools.stabilizer.stability();
+    ui.scope(|ui| {
+        ui.spacing_mut().slider_width = width;
+        let r = ui
+            .add(egui::Slider::new(&mut v, 0..=100).text("Stability"))
+            .on_hover_text("How smooth lines are: 0 is off; higher is smoother, and the line trails the pen more while you draw. It always ends where the pen lifts.");
+        if r.changed() {
+            ed.tools.stabilizer.set_stability(v);
+        }
+    });
 }
 
 /// Shown in Help > Keyboard shortcuts.

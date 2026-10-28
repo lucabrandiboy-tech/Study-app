@@ -1189,3 +1189,43 @@ fn the_transform_box_drags_by_its_corners_sides_and_inside() {
     // Shift: proportions kept (40 × 20 → 80 × 40).
     assert_eq!(drag_box(Handle::Corner(2), from, (50.0, 40.0), (90.0, 45.0), true), (10.0, 20.0, 90.0, 60.0));
 }
+
+/// The Stability slider's setting smooths a shaky line painted through the editor, as the
+/// shells feed it: readings every 5 ms (time from when each arrived), a frame every 16 ms.
+#[test]
+fn stability_smooths_a_shaky_line_on_the_layer() {
+    let wobble = |stability: u8| {
+        let mut e = editor();
+        e.tools.brush.size = 3.0;
+        e.tools.stabilizer.set_stability(stability);
+        let shaky = |i: u64| {
+            let h = (i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) as f64 / (1u64 << 31) as f64;
+            (40.0 + i as f64 * 3.0, 150.0 + 6.0 * (2.0 * h - 1.0))
+        };
+        for i in 0..=100u64 {
+            let (x, y) = shaky(i);
+            e.pen(&PenSample::synthetic(i * 5000, x, y, 1.0, true), true, Modifiers::default());
+            if i % 3 == 0 {
+                e.tick(i * 5000, Instant::now());
+            }
+        }
+        let (x, y) = shaky(100);
+        e.pen(&PenSample::synthetic(505_000, x, y, 0.0, false), true, Modifiers::default());
+        // How far the middle of each painted column is from the true line, on average.
+        let flat = e.doc.flatten();
+        let mut sum = 0.0;
+        let mut n = 0;
+        for x in 80..300 {
+            let ys: Vec<u32> = (100..200).filter(|&y| flat.pixel(x, y)[0] < 128).collect();
+            if let (Some(a), Some(b)) = (ys.first(), ys.last()) {
+                sum += ((*a + *b) as f64 / 2.0 - 150.0).abs();
+                n += 1;
+            }
+        }
+        assert!(n > 150, "stability {stability}: a line was painted ({n} columns)");
+        sum / n as f64
+    };
+    let (off, mid, strong) = (wobble(0), wobble(50), wobble(90));
+    println!("wobble on the layer: off {off:.2} px, 50 {mid:.2} px, 90 {strong:.2} px");
+    assert!(mid < off * 0.7 && strong < mid, "off {off:.2}, 50 {mid:.2}, 90 {strong:.2}");
+}

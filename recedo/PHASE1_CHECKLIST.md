@@ -51,9 +51,10 @@ Each step says what you should see. If something is different, note the step num
    * Mouse wheel: zoom where the mouse is. Middle mouse button + drag: pan.
    * **4** / **6**: rotate 15°, **5**: straight again, **M**: mirror, **1**: 100 %, **2**: fit.
    *Expected:* the brush still paints exactly under the pen when rotated/mirrored/zoomed.
-8. **Stabilizer:** in Tool property open **Stabilizer (off)**, tick **Smooth the line**.
-   Draw a slow, shaky line. *Expected:* a smooth line that trails behind the pen and
-   catches up when you lift it. Untick it again when done.
+8. **Stability:** drag **Stability** on the toolbar (next to the brush size) to about 50.
+   Draw a shaky line. *Expected:* a smooth line that trails a little behind the pen and
+   ends exactly where you lift it; higher is smoother and trails more, 0 is off. Tell me
+   which number feels right for you.
 9. **Layers** (right side): click **New**, paint, then click the **eye** of a layer to hide it,
    the **lock** to lock it (painting on a locked layer shows a message instead), drag the
    **Opacity** slider, try a blend mode like **Multiply**. Double-click a layer's name to
