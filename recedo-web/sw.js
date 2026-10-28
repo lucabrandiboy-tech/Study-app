@@ -1,6 +1,6 @@
 // Recedo's offline worker: keeps the app's files so the installed app opens without a
 // connection. VERSION changes with every build, so an update replaces the old files.
-const VERSION = "recedo-3b32359f4d-1793223872";
+const VERSION = "recedo-661c07d4fa-1793227749";
 const FILES = ["./", "index.html", "recedo_web.js", "recedo_web_bg.wasm", "reference.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
