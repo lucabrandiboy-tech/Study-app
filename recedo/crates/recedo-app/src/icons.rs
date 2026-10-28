@@ -489,6 +489,26 @@ pub fn button(ui: &mut Ui, size: f32, selected: bool, enabled: bool, draw: impl 
     resp
 }
 
+/// A tool's button in a list: its icon, then its name, in a light outline.
+pub fn list_button(ui: &mut Ui, width: f32, height: f32, selected: bool, label: &str, draw: impl FnOnce(&Painter, Rect, Color32)) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let (fill, col) = if selected {
+            (v.selection.bg_fill, v.selection.stroke.color)
+        } else if resp.hovered() {
+            (v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color)
+        } else {
+            (v.widgets.inactive.weak_bg_fill, v.widgets.inactive.fg_stroke.color)
+        };
+        ui.painter().rect(rect, 3.0, fill, egui::Stroke::new(1.0, Color32::from_gray(if selected { 150 } else { 110 })), egui::StrokeKind::Inside);
+        let icon = height - 6.0;
+        draw(ui.painter(), Rect::from_center_size(egui::pos2(rect.left() + 4.0 + icon / 2.0, rect.center().y), vec2(icon, icon)), col);
+        ui.painter().text(egui::pos2(rect.left() + icon + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::TextStyle::Button.resolve(ui.style()), col);
+    }
+    resp
+}
+
 /// A tool's button on the strip: its icon with its name under it, `width` wide.
 pub fn tool_button(ui: &mut Ui, width: f32, height: f32, selected: bool, label: &str, draw: impl FnOnce(&Painter, Rect, Color32)) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());

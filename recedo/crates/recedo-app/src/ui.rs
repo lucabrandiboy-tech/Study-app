@@ -90,7 +90,7 @@ pub fn apply_theme(ctx: &egui::Context) {
         .into();
         let sp = &mut s.spacing;
         sp.item_spacing = vec2(5.0, 3.0);
-        sp.button_padding = vec2(4.0, 1.0);
+        sp.button_padding = vec2(6.0, 2.0);
         sp.interact_size = vec2(32.0, 16.0);
         sp.slider_width = 80.0;
         sp.slider_rail_height = 10.0;
@@ -100,7 +100,7 @@ pub fn apply_theme(ctx: &egui::Context) {
         sp.icon_spacing = 3.0;
         sp.indent = 12.0;
         sp.menu_margin = egui::Margin::same(4);
-        sp.window_margin = egui::Margin::same(6);
+        sp.window_margin = egui::Margin::same(10);
     });
 }
 
@@ -492,7 +492,8 @@ impl AppUi {
         if hit(none, Key::X) {
             ed.swap_colors();
         }
-        if hit(none, Key::Escape) {
+        // An open menu or list closes on Escape by itself: the key is left to it.
+        if !egui::Popup::is_any_open(ctx) && hit(none, Key::Escape) {
             ed.cancel_crop();
             ed.cancel_text();
             ed.cancel_transform();
@@ -1024,7 +1025,7 @@ impl AppUi {
         let before = bar.clone();
         // Nothing inside takes its width from the window (content as wide as the space it is
         // given makes a resizable window grow a little every frame); the lists fill its height.
-        egui::Window::new("All tools").id(Id::unique("recedo tool library")).open(&mut open).collapsible(false).default_size(vec2(820.0, 520.0)).show(ctx, |ui| {
+        egui::Window::new("All tools").id(Id::unique("recedo tool library")).open(&mut open).collapsible(false).default_size(vec2(920.0, 590.0)).show(ctx, |ui| {
             ui.label("Click a tool to use it. Tick \"On bar\" to keep it on your side bar (point at a tool to see what it does).");
             ui.add_space(4.0);
             ui.horizontal_top(|ui| {
@@ -1042,9 +1043,8 @@ impl AppUi {
                                             Some(k) => format!("{}  ({k})", t.name()),
                                             None => t.name().to_string(),
                                         };
-                                        // A light outline, so each tool stands out as a box.
-                                        let button = egui::Button::new(name).selected(ed.tool == t).stroke(Stroke::new(1.0, Color32::from_gray(220))).min_size(vec2(118.0, 20.0));
-                                        if ui.add(button).on_hover_text(t.hint()).clicked() {
+                                        // Its icon and name in a light outline, so each tool stands out as a box.
+                                        if icons::list_button(ui, 138.0, 22.0, ed.tool == t, &name, |p, r, c| icons::tool(p, r, t, c)).on_hover_text(t.hint()).clicked() {
                                             ed.tool = t;
                                         }
                                         let mut on = bar.contains(&t);
@@ -1574,8 +1574,11 @@ impl AppUi {
     fn dialogs(&mut self, ctx: &egui::Context, ed: &mut Editor, requests: &mut Vec<Request>) {
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
-        let modal = egui::Modal::new(Id::unique("recedo dialog")).show(ctx, |ui| {
+        // Room round the dialog's contents and between its rows (egui's popup frame is tight).
+        let frame = egui::Frame::popup(&ctx.global_style()).inner_margin(egui::Margin::same(14)).corner_radius(6);
+        let modal = egui::Modal::new(Id::unique("recedo dialog")).frame(frame).show(ctx, |ui| {
             ui.set_max_width(460.0);
+            ui.spacing_mut().item_spacing.y = 6.0;
             match &mut dialog {
                 Dialog::NewCanvas(form) => keep = self.new_canvas_ui(ui, ed, form),
                 Dialog::Unsaved(then) => {
@@ -1773,7 +1776,7 @@ impl AppUi {
             }
             Ok(()) => {
                 ui.horizontal(|ui| {
-                    if ui.button("Create").clicked() {
+                    if ui.add(egui::Button::new(RichText::new("Create").color(Color32::WHITE)).fill(ACCENT)).clicked() {
                         match ed.new_document(&preset) {
                             Ok(()) => {
                                 self.settings.last_preset = form.preset;

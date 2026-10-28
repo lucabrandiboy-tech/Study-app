@@ -196,7 +196,9 @@ fn menus_dialogs_and_shortcuts() {
     let (out, _) = frames(&g, &mut r, &mut s, click(pos2(18.0, 10.0)));
     shot(&g, &mut r, &mut s, out, "02-file-menu");
     // Ctrl+N opens the New dialog (nothing unsaved yet).
+    assert!(egui::Popup::is_any_open(&s.egui), "the File menu is open");
     quiet(&g, &mut r, &mut s, vec![Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+    assert!(!egui::Popup::is_any_open(&s.egui), "Escape closes the menu");
     let ctrl_n = Event::Key { key: Key::N, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
     let (out, _) = frames(&g, &mut r, &mut s, vec![ctrl_n.clone()]);
     assert!(s.ui.dialog_open(), "new canvas dialog");
