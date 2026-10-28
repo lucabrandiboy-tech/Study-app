@@ -35,10 +35,10 @@
 <script type="module">
   // Both files named with this build's version, so a reload never mixes an old copy kept
   // by the browser with a new one.
-  import init from "./recedo_web.js?v=623500381e-1793229572";
-  init({ module_or_path: "recedo_web_bg.wasm?v=623500381e-1793229572" }).catch(e => { const s = document.getElementById("status"); s.textContent = "Recedo could not start: " + e; s.className = "error"; });
+  import init from "./recedo_web.js?v=37c2785d24-1793231214";
+  init({ module_or_path: "recedo_web_bg.wasm?v=37c2785d24-1793231214" }).catch(e => { const s = document.getElementById("status"); s.textContent = "Recedo could not start: " + e; s.className = "error"; });
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
-<script type="module" src="reference.js?v=623500381e-1793229572"></script>
+<script type="module" src="reference.js?v=37c2785d24-1793231214"></script>
 </body>
 </html>
