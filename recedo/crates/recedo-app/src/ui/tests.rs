@@ -871,6 +871,44 @@ fn a_press_at_the_dock_edge_resizes_the_dock_and_nothing_else() {
     assert!((after.min.x - c.min.x - 30.0).abs() < 3.0, "the dock got 30 points wider: {} -> {}", c.min.x, after.min.x);
 }
 
+/// F undoes (as Ctrl+Z does), Shift+F picks the fill tool, and an F typed into a text is a
+/// letter, not an undo.
+#[test]
+fn f_undoes_and_shift_f_fills() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    let key = |k: Key, m: egui::Modifiers| vec![Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m }];
+    let stroke = |s: &mut Session, y: f64, t: u64| {
+        for i in 0..=20 {
+            let p = s.ed.view.to_screen(200.0 + i as f64 * 30.0, y);
+            s.ed.pen(&PenSample::synthetic(t + i * 4000, p.0, p.1, 1.0, true), true, Modifiers::default());
+        }
+        let p = s.ed.view.to_screen(800.0, y);
+        s.ed.pen(&PenSample::synthetic(t + 100_000, p.0, p.1, 0.0, false), true, Modifiers::default());
+    };
+    stroke(&mut s, 300.0, 1_000_000);
+    stroke(&mut s, 400.0, 2_000_000);
+    assert_eq!(s.ed.history.entries().1, 2, "two strokes");
+    quiet(&g, &mut r, &mut s, key(Key::F, egui::Modifiers::NONE));
+    assert_eq!(s.ed.history.entries().1, 1, "F undid one");
+    quiet(&g, &mut r, &mut s, key(Key::F, egui::Modifiers::SHIFT));
+    assert_eq!((s.ed.tool, s.ed.history.entries().1), (Tool::Fill, 1), "Shift+F: the fill tool, nothing undone");
+    // Writing text: F is a letter.
+    s.ed.tool = Tool::Text;
+    quiet(&g, &mut r, &mut s, vec![]);
+    let p = s.ed.view.to_screen(500.0, 600.0);
+    s.ed.pen(&PenSample::synthetic(3_000_000, p.0, p.1, 0.5, true), true, Modifiers::default());
+    s.ed.pen(&PenSample::synthetic(3_008_000, p.0, p.1, 0.0, false), true, Modifiers::default());
+    quiet(&g, &mut r, &mut s, click(pos2(p.0 as f32, p.1 as f32)));
+    let mut ev = key(Key::F, egui::Modifiers::NONE);
+    ev.push(Event::Text("f".into()));
+    quiet(&g, &mut r, &mut s, ev);
+    assert_eq!(s.ed.text_edit.as_ref().map(|t| t.text.as_str()), Some("f"), "typed into the text");
+    assert_eq!(s.ed.history.entries().1, 1, "nothing undone while writing");
+}
+
 #[test]
 fn a_small_window_keeps_room_for_the_painting() {
     // The Windows self-test's window: 1008 × 681. The panels give way so the canvas area

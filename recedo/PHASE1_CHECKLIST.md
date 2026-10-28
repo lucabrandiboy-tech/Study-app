@@ -58,7 +58,7 @@ Each step says what you should see. If something is different, note the step num
    the **lock** to lock it (painting on a locked layer shows a message instead), drag the
    **Opacity** slider, try a blend mode like **Multiply**. Double-click a layer's name to
    rename it.
-10. **Undo:** **Ctrl+Z** undoes, **Ctrl+Shift+Z** redoes (50 steps). The **History** tab lists
+10. **Undo:** **F** or **Ctrl+Z** undoes, **Ctrl+Shift+Z** redoes (50 steps). The fill tool is **Shift+F**. The **History** tab lists
     every step: click one to jump back to it.
 11. **Panels:** drag a panel's tab (e.g. "Colour") to another group or onto
     "Drop here for a new group". Right-click a tab to **Float** it as its own window. Close

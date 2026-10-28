@@ -542,8 +542,11 @@ impl AppUi {
         if hit(none, Key::P) {
             ed.tool = Tool::Eyedropper;
         }
-        if hit(none, Key::F) {
+        // F: undo (one hand stays on the keys next to the pen); Shift+F: the fill tool.
+        if hit(shift, Key::F) {
             ed.tool = Tool::Fill;
+        } else if hit(none, Key::F) {
+            ed.undo();
         }
         // G: only the canvas (again, or Escape: everything back); Shift+G: gradient.
         if hit(shift, Key::G) {
@@ -974,7 +977,7 @@ impl AppUi {
             ui.separator();
             let (_, applied) = ed.history.entries();
             let redo = ed.history.can_redo();
-            if act(ui, Action::Undo, applied > 0, false, "Undo (Ctrl+Z)") {
+            if act(ui, Action::Undo, applied > 0, false, "Undo (F or Ctrl+Z)") {
                 ed.undo();
             }
             if act(ui, Action::Redo, redo, false, "Redo (Ctrl+Shift+Z)") {
@@ -1674,7 +1677,7 @@ impl AppUi {
                             ui.strong(head);
                             ui.label(text);
                         };
-                        tip(ui, "Draw", "Paint with the pen or mouse. [ and ] change the brush size, E switches to the eraser, Ctrl+Z undoes. Pressing harder paints thicker.");
+                        tip(ui, "Draw", "Paint with the pen or mouse. [ and ] change the brush size, E switches to the eraser, F (or Ctrl+Z) undoes. Pressing harder paints thicker.");
                         tip(ui, "Tools", "The icons on the far left are your tools (point at one for its name and key). The grid button at the top lists all 32: click one to use it, tick \"On bar\" to keep it there. Sub tool shows the brushes (or the tools of the same kind), Tool property their settings.");
                         tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it. G hides everything but the painting (G or Escape brings it back).");
                         tip(ui, "Layers and colour", "The colour wheel is on the left: the ring picks the colour, the square how light and strong it is; X swaps it with the second colour. Layers are on the right: the Opacity slider there makes the selected layer see-through. Ctrl+click on the painting picks a colour.");
@@ -2309,7 +2312,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("B", "Brush"),
     ("E", "Eraser on/off"),
     ("P", "Eyedropper"),
-    ("F", "Fill"),
+    ("F", "Undo (like Ctrl + Z)"),
+    ("Shift + F", "Fill"),
     ("G", "Only the canvas (G or Escape: everything back)"),
     ("Shift + G", "Gradient"),
     ("X", "Swap the colour and the sub colour"),

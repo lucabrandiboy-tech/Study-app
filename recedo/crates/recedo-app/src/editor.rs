@@ -312,7 +312,7 @@ impl Tool {
             Tool::Brush => "B",
             Tool::Eraser => "E",
             Tool::Eyedropper => "P",
-            Tool::Fill => "F",
+            Tool::Fill => "Shift+F",
             Tool::Gradient => "Shift+G",
             Tool::Line => "V",
             Tool::Smudge => "S",
