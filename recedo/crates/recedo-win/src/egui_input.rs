@@ -82,6 +82,11 @@ impl Default for EguiInput {
 }
 
 impl EguiInput {
+    /// Are key presses or typed letters waiting for the interface's next frame?
+    pub fn keys_pending(&self) -> bool {
+        self.raw.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_)))
+    }
+
     pub fn new() -> EguiInput {
         EguiInput { raw: RawInput::default(), start: std::time::Instant::now(), tracking_leave: false, buttons_down: 0, high_surrogate: None, mods: Modifiers::NONE }
     }

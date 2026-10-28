@@ -195,6 +195,20 @@ fn expose_stats(app: &Rc<RefCell<App>>) {
     });
     let _ = js_sys::Reflect::set(&window(), &JsValue::from_str("recedoStats"), stats.as_ref());
     stats.forget();
+    // `window.recedoState()`: the tool, the undo steps (names, how many applied) and the
+    // selection's bounds, for browser tests.
+    let a = app.clone();
+    let state = Closure::<dyn FnMut() -> JsValue>::new(move || {
+        let Ok(app) = a.try_borrow() else { return JsValue::NULL };
+        let ed = &app.session.ed;
+        let (names, applied) = ed.history.entries();
+        let selection = ed.doc.selection.as_ref().map(|m| m.bounds);
+        let c = app.session.canvas_rect;
+        let json = serde_json::json!({ "tool": ed.tool.id(), "history": names, "applied": applied, "selection": selection, "canvas": [c.min.x, c.min.y, c.max.x, c.max.y] });
+        js_sys::JSON::parse(&json.to_string()).unwrap_or(JsValue::NULL)
+    });
+    let _ = js_sys::Reflect::set(&window(), &JsValue::from_str("recedoState"), state.as_ref());
+    state.forget();
 }
 
 /// The canvas's size in device pixels (it fills the window).
@@ -503,8 +517,17 @@ fn listen(app: &Rc<RefCell<App>>, canvas: &HtmlCanvasElement) -> Result<(), Stri
             e.prevent_default();
             let dpr = window().device_pixel_ratio();
             let now = perf.now();
-            let mut app = a.borrow_mut();
             let kind = e.type_();
+            // A key pressed just before (B, then straight away a stroke) takes effect first:
+            // the interface handles keys in its frame, the pen goes to the editor at once.
+            let keys_waiting = a.try_borrow().is_ok_and(|app| app.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_))));
+            if kind == "pointerdown" && keys_waiting {
+                let requests = a.borrow_mut().tick();
+                for r in requests {
+                    handle_request(&a, r);
+                }
+            }
+            let mut app = a.borrow_mut();
             if kind == "pointerdown" {
                 let _ = cv.set_pointer_capture(e.pointer_id());
             }

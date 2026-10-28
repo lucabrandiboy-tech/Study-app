@@ -823,6 +823,54 @@ fn a_big_painting_shows_in_a_small_window() {
     assert!(dark < 90 && light > 200, "painted spot {dark}, empty spot {light}");
 }
 
+/// The docks keep their width whatever the panels show: going through every tool, with and
+/// without a selection, the canvas area does not move (it once grew by 155 px, and a lasso
+/// being drawn then landed somewhere else in the painting).
+#[test]
+fn the_docks_keep_their_width_whatever_the_tool() {
+    let Some(g) = gpu() else { return };
+    for (w, h) in [(1600, 900), (1366, 768), (1008, 681)] {
+        SCREEN.with(|sc| sc.set(Screen { w, h, scale: 1.0 }));
+        let mut s = Session::new(Settings::default(), None);
+        let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+        let first = quiet(&g, &mut r, &mut s, vec![]).canvas_rect;
+        for selected in [false, true] {
+            if selected {
+                s.ed.select_all();
+            }
+            for t in Tool::ALL {
+                s.ed.tool = t;
+                let c = quiet(&g, &mut r, &mut s, vec![]).canvas_rect;
+                assert!((c.min.x - first.min.x).abs() < 0.5 && (c.max.x - first.max.x).abs() < 0.5, "{w}x{h}, {t:?}, selection {selected}: canvas {c:?}, was {first:?}");
+            }
+        }
+    }
+    SCREEN.with(|sc| sc.set(Screen { w: 1600, h: 900, scale: 1.0 }));
+}
+
+/// A press next to a dock is for the dock's resize handle only: it starts no lasso (or
+/// stroke) that the dock then moves under the pen. Dragging the dock's edge still resizes it.
+#[test]
+fn a_press_at_the_dock_edge_resizes_the_dock_and_nothing_else() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    let c = quiet(&g, &mut r, &mut s, vec![]).canvas_rect;
+    let y = c.center().y;
+    assert!(!s.over_canvas(c.min.x as f64 + 2.0, y as f64), "next to the left dock");
+    assert!(!s.over_canvas(c.max.x as f64 - 2.0, y as f64), "next to the right dock");
+    assert!(s.over_canvas(c.min.x as f64 + 12.0, y as f64), "a little further in is the canvas");
+    // The edge still drags.
+    let edge = pos2(c.min.x - 1.0, y);
+    let press = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    quiet(&g, &mut r, &mut s, vec![Event::PointerMoved(edge), press(edge, true)]);
+    for dx in [10.0, 20.0, 30.0] {
+        quiet(&g, &mut r, &mut s, vec![Event::PointerMoved(edge + vec2(dx, 0.0))]);
+    }
+    let after = quiet(&g, &mut r, &mut s, vec![press(edge + vec2(30.0, 0.0), false)]).canvas_rect;
+    assert!((after.min.x - c.min.x - 30.0).abs() < 3.0, "the dock got 30 points wider: {} -> {}", c.min.x, after.min.x);
+}
+
 #[test]
 fn a_small_window_keeps_room_for_the_painting() {
     // The Windows self-test's window: 1008 × 681. The panels give way so the canvas area

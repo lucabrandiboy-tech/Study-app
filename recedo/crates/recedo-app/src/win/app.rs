@@ -312,6 +312,11 @@ impl App {
     /// Hands samples to the editor.
     pub fn feed(&mut self, samples: &[PenSample], mods: Modifiers) {
         for s in samples {
+            // A key pressed just before (B, then straight away a stroke) takes effect first:
+            // the interface handles keys in its frame, the pen goes to the editor at once.
+            if s.contact() && !self.session.ed.pen_held() && self.egui_in.keys_pending() {
+                self.frame();
+            }
             let over = self.session.over_canvas(s.x, s.y);
             let was = self.session.ed.stroke_active();
             self.session.ed.pen(s, over, mods);

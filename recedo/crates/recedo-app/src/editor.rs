@@ -698,6 +698,11 @@ impl Editor {
         self.jobs.iter().any(|j| matches!(j.kind, JobKind::Save(_) | JobKind::Export(_)))
     }
 
+    /// Is a pen or mouse button held down (a press under way, on the canvas or not)?
+    pub fn pen_held(&self) -> bool {
+        self.owner.is_some()
+    }
+
     pub fn stroke_active(&self) -> bool {
         matches!(self.interaction, Interaction::Stroke(_))
     }

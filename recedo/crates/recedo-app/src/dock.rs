@@ -75,6 +75,10 @@ pub const LAYOUT_VERSION: u32 = 3;
 /// The Colour panel's share of the left dock: what the wheel needs, no empty space below.
 const COLOR_WEIGHT: f32 = 1.15;
 
+/// The left dock's standard width: Tool property's longest rows fit (its contents no longer
+/// stretch it; at 196 "Roundness" was cut off).
+const LEFT_WIDTH: f32 = 232.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockLayout {
@@ -96,7 +100,7 @@ impl Default for DockLayout {
             left: vec![Stack::weighted(&[Panel::Color], COLOR_WEIGHT), Stack::weighted(&[Panel::Tools], 1.1), Stack::weighted(&[Panel::ToolOptions], 1.5)],
             right: vec![Stack::of(&[Panel::Layers, Panel::History])],
             floating: Vec::new(),
-            left_width: 196.0,
+            left_width: LEFT_WIDTH,
             right_width: 200.0,
         }
     }
@@ -206,6 +210,10 @@ impl DockLayout {
         if weights == [1.5, 1.1, 1.5] && tabs == [&[Panel::Color][..], &[Panel::Tools], &[Panel::ToolOptions]] {
             self.left[0].weight = COLOR_WEIGHT;
         }
+        // Saved at the old standard width, which is now too narrow for Tool property.
+        if self.left_width == 196.0 {
+            self.left_width = LEFT_WIDTH;
+        }
         let mut seen = Vec::new();
         for stacks in [&mut self.left, &mut self.right] {
             for s in stacks.iter_mut() {
@@ -259,7 +267,14 @@ impl DockLayout {
                     Side::Left => &mut self.left,
                     Side::Right => &mut self.right,
                 };
-                stacks_ui(ui, side, stacks, title, content, &mut ops);
+                // The panels inside cannot make the dock wider (something too wide for it is
+                // cut off instead): only dragging its edge changes its width. A dock that grew
+                // with what it showed moved the canvas, and a lasso being drawn with it.
+                let rect = ui.available_rect_before_wrap();
+                let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                inner.set_clip_rect(rect.intersect(ui.clip_rect()));
+                stacks_ui(&mut inner, side, stacks, title, content, &mut ops);
+                ui.advance_cursor_after_rect(rect);
             });
             let w = resp.response.rect.width();
             match side {
@@ -515,7 +530,7 @@ mod tests {
         assert_eq!(d.left, vec![Stack { tabs: vec![Panel::Tools], active: 0, weight: 1.0 }]);
         assert_eq!(d.right, vec![Stack { tabs: vec![Panel::Layers], active: 0, weight: 10.0 }]);
         assert!(d.floating.is_empty());
-        assert_eq!((d.left_width, d.right_width), (196.0, 800.0));
+        assert_eq!((d.left_width, d.right_width), (LEFT_WIDTH, 800.0));
         assert!(all_once(&d));
     }
 

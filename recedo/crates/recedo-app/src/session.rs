@@ -73,6 +73,12 @@ impl Session {
         if !self.canvas_rect.contains(p) || self.ui.dialog_open() {
             return false;
         }
+        // Next to a dock, a press is for the dock's resize handle, never for the tool too
+        // (a lasso started there also dragged the dock wider, moving the painting under it).
+        let grab = self.egui.global_style().interaction.resize_grab_radius_side + 2.0;
+        if p.x < self.canvas_rect.min.x + grab || p.x > self.canvas_rect.max.x - grab {
+            return false;
+        }
         // Menus, popups and floating panels are areas on layers above the background (the
         // canvas overlay is only painted, never an area, so it does not count).
         self.egui.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
