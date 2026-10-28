@@ -331,3 +331,102 @@ fn every_mip_level_is_the_picture_halved() {
     d.upload(&g.queue, &proj, &up);
     check(&d, &proj, "after scattered updates");
 }
+
+/// The mip blocks equal the plain definition: every pixel premultiplied, then each output
+/// pixel the rounded average of its 2x2 pixels above, the last row and column repeated past
+/// odd edges. Pictures with opaque stretches (the fast path) and see-through pixels, odd
+/// sizes, and blocks anywhere, including at the edges.
+#[test]
+fn mip_blocks_equal_the_plain_formula() {
+    let mut seed = 7u32;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    for (w, h) in [(129u32, 67u32), (64, 64), (200, 131), (3, 5)] {
+        let mut img = Rgba8::new(w, h);
+        for (i, p) in img.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let r = rnd();
+            // Rows alternate between all opaque, mixed and see-through.
+            let a = match (i as u32 / w) % 3 {
+                0 => 255,
+                1 => [0, 255, (r >> 24) as u8][(r % 3) as usize],
+                _ => (r >> 24) as u8,
+            };
+            *p = [r as u8, (r >> 8) as u8, (r >> 16) as u8, a];
+        }
+        let above = Above::Picture { img: &img, x: 0, y: 0, w, h };
+        let at = |x: u32, y: u32| premultiply(img.pixel(x.min(w - 1), y.min(h - 1)));
+        let (lw, lh) = ((w >> 1).max(1), (h >> 1).max(1));
+        for (x0, y0, x1, y1) in [(0, 0, lw, lh), (lw / 3, lh / 2, lw, lh), (0, lh - 1, lw.min(5), lh)] {
+            let got = downsample(above, (x0, y0, x1, y1));
+            let mut want = Vec::new();
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let q = [at(2 * x, 2 * y), at(2 * x + 1, 2 * y), at(2 * x, 2 * y + 1), at(2 * x + 1, 2 * y + 1)];
+                    want.extend((0..4).map(|c| ((q.iter().map(|p| p[c] as u32).sum::<u32>() + 2) / 4) as u8));
+                }
+            }
+            assert!(got == want, "{w}x{h} block {:?}", (x0, y0, x1, y1));
+            // And a level made from that level.
+            let level = Level { w: lw, h: lh, data: downsample(above, (0, 0, lw, lh)) };
+            let (mw, mh) = ((lw >> 1).max(1), (lh >> 1).max(1));
+            let next = downsample(Above::Level(&level), (0, 0, mw, mh));
+            let lat = |x: u32, y: u32| {
+                let i = ((y.min(lh - 1) * lw + x.min(lw - 1)) * 4) as usize;
+                [level.data[i], level.data[i + 1], level.data[i + 2], level.data[i + 3]]
+            };
+            let mut want = Vec::new();
+            for y in 0..mh {
+                for x in 0..mw {
+                    let q = [lat(2 * x, 2 * y), lat(2 * x + 1, 2 * y), lat(2 * x, 2 * y + 1), lat(2 * x + 1, 2 * y + 1)];
+                    want.extend((0..4).map(|c| ((q.iter().map(|p| p[c] as u32).sum::<u32>() + 2) / 4) as u8));
+                }
+            }
+            assert!(next == want, "{w}x{h} next level");
+        }
+        // Level 0 rectangles: the picture premultiplied.
+        let got = premultiplied(&img, 1, 1, w - 1, h - 1);
+        let img = &img;
+        let want: Vec<u8> = (1..h).flat_map(|y| (1..w).flat_map(move |x| premultiply(img.pixel(x, y)))).collect();
+        assert!(got == want, "{w}x{h} level 0");
+    }
+}
+
+/// Times making every mip level of a 4K picture (an opaque painting, as over a white
+/// background, and a see-through one). `cargo test --release -p recedo-render mip_speed
+/// -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn mip_speed() {
+    for see_through in [false, true] {
+        let (w, h) = (3840u32, 2160u32);
+        let mut img = Rgba8::new(w, h);
+        for (i, p) in img.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *p = [i as u8, (i >> 8) as u8, (i >> 3) as u8, if see_through { (i >> 5) as u8 } else { 255 }];
+        }
+        let reps = 5;
+        let mut times = [0.0f64; 3];
+        for _ in 0..reps {
+            let t = std::time::Instant::now();
+            std::hint::black_box(premultiplied(&img, 0, 0, w, h));
+            times[0] += t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let first = downsample(Above::Picture { img: &img, x: 0, y: 0, w, h }, (0, 0, w / 2, h / 2));
+            times[1] += t.elapsed().as_secs_f64();
+            let t = std::time::Instant::now();
+            let mut above = Level { w: w / 2, h: h / 2, data: first };
+            while above.w > 1 || above.h > 1 {
+                let (nw, nh) = ((above.w >> 1).max(1), (above.h >> 1).max(1));
+                let d = downsample(Above::Level(&above), (0, 0, nw, nh));
+                above = Level { w: nw, h: nh, data: d };
+            }
+            std::hint::black_box(&above.data);
+            times[2] += t.elapsed().as_secs_f64();
+        }
+        let ms = times.map(|t| t * 1000.0 / reps as f64);
+        println!("see-through {see_through}: {:.1} ms per 4K picture: level 0 {:.1}, level 1 {:.1}, the rest {:.1}", ms.iter().sum::<f64>(), ms[0], ms[1], ms[2]);
+    }
+}

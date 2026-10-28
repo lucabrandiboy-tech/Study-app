@@ -304,26 +304,41 @@ impl Above<'_> {
         }
     }
 
-    /// `n` pixels of row `sy` from column `sx0`, premultiplied, into `out`. Rows and columns
-    /// past the edge repeat the last one (levels of odd sizes).
-    fn row(&self, sy: u32, sx0: u32, n: u32, out: &mut Vec<[u8; 4]>) {
-        out.clear();
+    /// `n` pixels of row `sy` from column `sx0`, premultiplied RGBA. Rows and columns past
+    /// the edge repeat the last one (levels of odd sizes). Where nothing needs changing (a
+    /// level, or an opaque stretch of the picture, whose premultiplied pixels are its own)
+    /// this is the row itself; otherwise it is made in `buf`.
+    fn row<'a>(&'a self, sy: u32, sx0: u32, n: u32, buf: &'a mut Vec<u8>) -> &'a [u8] {
         let (w, h) = self.size();
         let sy = sy.min(h - 1);
         let sx0 = sx0.min(w - 1);
         let len = ((sx0 + n).min(w) - sx0) as usize * 4;
-        match *self {
+        let src = match *self {
             Above::Picture { img, x, y, .. } => {
                 let start = ((y + sy) as usize * img.width as usize + (x + sx0) as usize) * 4;
-                out.extend(img.data[start..start + len].as_chunks::<4>().0.iter().map(|&p| premultiply(p)));
+                &img.data[start..start + len]
             }
             Above::Level(l) => {
                 let start = (sy as usize * l.w as usize + sx0 as usize) * 4;
-                out.extend_from_slice(l.data[start..start + len].as_chunks::<4>().0);
+                &l.data[start..start + len]
             }
+        };
+        let straight = matches!(self, Above::Picture { .. }) && !opaque(src);
+        if !straight && len == n as usize * 4 {
+            return src;
         }
-        let last = *out.last().expect("at least one column");
-        out.resize(n as usize, last);
+        buf.clear();
+        if straight {
+            buf.resize(len, 0);
+            premultiply_row(src, buf);
+        } else {
+            buf.extend_from_slice(src);
+        }
+        let last: [u8; 4] = buf[len - 4..].try_into().expect("a pixel");
+        while buf.len() < n as usize * 4 {
+            buf.extend_from_slice(&last);
+        }
+        buf
     }
 }
 
@@ -331,19 +346,31 @@ impl Above<'_> {
 /// pixels in the level above. Returns its rows, premultiplied RGBA.
 fn downsample(above: Above, (x0, y0, x1, y1): (u32, u32, u32, u32)) -> Vec<u8> {
     let n = 2 * (x1 - x0);
-    let (mut top, mut bottom) = (Vec::with_capacity(n as usize), Vec::with_capacity(n as usize));
+    let (mut top, mut bottom) = (Vec::new(), Vec::new());
     let row = (x1 - x0) as usize * 4;
     let mut out = vec![0u8; row * (y1 - y0) as usize];
     for (py, dst) in (y0..y1).zip(out.chunks_exact_mut(row)) {
-        above.row(2 * py, 2 * x0, n, &mut top);
-        above.row(2 * py + 1, 2 * x0, n, &mut bottom);
-        for ((d, t), b) in dst.as_chunks_mut::<4>().0.iter_mut().zip(top.as_chunks::<2>().0).zip(bottom.as_chunks::<2>().0) {
+        let t = above.row(2 * py, 2 * x0, n, &mut top);
+        let b = above.row(2 * py + 1, 2 * x0, n, &mut bottom);
+        for ((d, t), b) in dst.as_chunks_mut::<4>().0.iter_mut().zip(t.as_chunks::<8>().0).zip(b.as_chunks::<8>().0) {
             for c in 0..4 {
-                d[c] = ((t[0][c] as u32 + t[1][c] as u32 + b[0][c] as u32 + b[1][c] as u32 + 2) / 4) as u8;
+                d[c] = ((t[c] as u16 + t[c + 4] as u16 + b[c] as u16 + b[c + 4] as u16 + 2) >> 2) as u8;
             }
         }
     }
     out
+}
+
+/// Are all these RGBA pixels opaque?
+fn opaque(px: &[u8]) -> bool {
+    px.as_chunks::<4>().0.iter().all(|p| p[3] == 255)
+}
+
+/// Straight RGBA pixels to premultiplied ones (`dst` as long as `src`).
+fn premultiply_row(src: &[u8], dst: &mut [u8]) {
+    for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
+        *d = premultiply(*s);
+    }
 }
 
 /// Runs of consecutive numbers in `v` (sorted and deduplicated here), as (first, last).
@@ -366,8 +393,11 @@ fn premultiplied(img: &Rgba8, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
     let mut out = vec![0u8; row * h as usize];
     for (r, dst) in out.chunks_exact_mut(row).enumerate() {
         let start = ((y as usize + r) * img.width as usize + x as usize) * 4;
-        for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(img.data[start..start + row].as_chunks::<4>().0) {
-            *d = premultiply(*s);
+        let src = &img.data[start..start + row];
+        if opaque(src) {
+            dst.copy_from_slice(src);
+        } else {
+            premultiply_row(src, dst);
         }
     }
     out
