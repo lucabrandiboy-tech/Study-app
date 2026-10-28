@@ -1317,10 +1317,19 @@ impl AppUi {
     fn overlay(&self, painter: &egui::Painter, ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {
         let ppp = ctx.pixels_per_point();
         let pt = |(x, y): (f64, f64)| egui::pos2(x as f32 / ppp, y as f32 / ppp);
+        // The stabilizer's string, from the pen to where the line is being drawn (as in Lazy
+        // Nezumi or Procreate): shows how far the line trails and where it is going.
         if let Some(l) = ed.leash() {
-            let s = Stroke::new(1.0, Color32::from_rgb(80, 140, 230));
-            painter.circle_stroke(pt(l.pen), l.radius as f32 / ppp, s);
-            painter.line_segment([pt(l.brush), pt(l.pen)], s);
+            let (b, p) = (pt(l.brush), pt(l.pen));
+            let blue = Color32::from_rgb(80, 150, 240);
+            if l.radius > 0.0 {
+                painter.circle_stroke(p, l.radius as f32 / ppp, Stroke::new(1.0, blue));
+            }
+            if b.distance(p) > 2.0 {
+                painter.line_segment([b, p], Stroke::new(2.5, Color32::from_black_alpha(110)));
+                painter.line_segment([b, p], Stroke::new(1.2, blue));
+                painter.circle_filled(b, 2.5, blue);
+            }
         }
         let to = |p: (f64, f64)| pt(ed.view.to_screen(p.0, p.1));
         // A soft shadow and a dark edge round the painting, outside it only (the painting
@@ -1915,6 +1924,8 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
             ui.add(egui::Slider::new(&mut b.size, MIN_BRUSH..=MAX_BRUSH).logarithmic(true).text("Size").suffix(" px").max_decimals(0))
                 .on_hover_text("[ and ] change the size");
             stability_slider(ui, ed, ui.spacing().slider_width);
+            ui.checkbox(&mut ed.tools.hold_to_straighten, "Hold still at the end to straighten")
+                .on_hover_text("Keep the pen still for half a second at the end of a nearly straight stroke: it becomes a straight line, and moving the pen before lifting moves its end. Curves stay as drawn.");
             let b = ed.current_brush_mut();
             let pct = |ui: &mut Ui, v: &mut f32, label: &str, tip: &str| {
                 let mut p = (*v * 100.0).round();
@@ -1968,18 +1979,29 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
                 ui.checkbox(&mut b.tilt_shape, "Tilt leans the brush");
             });
             let s = &mut ed.tools.stabilizer;
-            let title = if s.enabled { "Stabilizer (on)" } else { "Stabilizer (off)" };
-            egui::CollapsingHeader::new(title).id_salt("stabilizer options").default_open(false).show(ui, |ui| {
-                ui.checkbox(&mut s.enabled, "Smooth the line (Krita's stabilizer)");
+            egui::CollapsingHeader::new("Stabilizer details").id_salt("stabilizer options").default_open(false).show(ui, |ui| {
+                use recedo_core::stabilizer::SmoothMode;
+                let v = s.stability();
+                let before = s.mode;
+                ui.radio_value(&mut s.mode, SmoothMode::Adaptive, "Adaptive (follows your speed)")
+                    .on_hover_text("Smooths hard while you draw slowly, where a shaky hand shows, and lightly when you draw fast, so quick strokes do not trail behind the pen");
+                ui.radio_value(&mut s.mode, SmoothMode::Average, "Krita's average")
+                    .on_hover_text("Krita's stabilizer: the plain average of the last moments of the pen, the same at every speed");
+                if s.mode != before && v > 0 {
+                    // The same Stability number with the other engine.
+                    s.set_stability(v);
+                }
                 ui.add_enabled_ui(s.enabled, |ui| {
-                    ui.add(egui::Slider::new(&mut s.distance, 3.0..=500.0).logarithmic(true).text("Distance").max_decimals(0));
+                    if s.mode == SmoothMode::Average {
+                        ui.add(egui::Slider::new(&mut s.distance, 3.0..=500.0).logarithmic(true).text("Distance (ms)").max_decimals(0));
+                        ui.checkbox(&mut s.stabilize_sensors, "Smooth pressure and tilt too");
+                        ui.checkbox(&mut s.scalable_distance, "Distance follows the zoom");
+                    }
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut s.delay, "Delay");
-                        ui.add_enabled(s.delay, egui::Slider::new(&mut s.delay_distance, 1.0..=500.0).logarithmic(true).suffix(" px").max_decimals(0));
+                        ui.checkbox(&mut s.delay, "Dead zone").on_hover_text("The line waits until the pen is this far away, like a string: wobbles smaller than this never reach the line");
+                        ui.add_enabled(s.delay, egui::Slider::new(&mut s.delay_distance, 1.0..=200.0).logarithmic(true).suffix(" px").max_decimals(0));
                     });
                     ui.checkbox(&mut s.finish_line, "Finish line (catch up when the pen lifts)");
-                    ui.checkbox(&mut s.stabilize_sensors, "Smooth pressure and tilt too");
-                    ui.checkbox(&mut s.scalable_distance, "Distance follows the zoom");
                 });
             });
         }

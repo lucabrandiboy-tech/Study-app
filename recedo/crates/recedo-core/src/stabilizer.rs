@@ -88,6 +88,29 @@ pub struct StabilizerSettings {
     pub stabilize_sensors: bool,
     /// Divide distances by the zoom (Krita's "Scalable distance").
     pub scalable_distance: bool,
+    /// How the line is smoothed (the Stability slider picks [`SmoothMode::Adaptive`]).
+    pub mode: SmoothMode,
+    /// Adaptive mode's strength, 0..=1 (the Stability slider / 100). Negative when read from
+    /// settings saved before it existed (see [`StabilizerSettings::migrate`]).
+    #[serde(default = "missing_strength")]
+    pub strength: f32,
+}
+
+fn missing_strength() -> f32 {
+    -1.0
+}
+
+/// The ways of smoothing a line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SmoothMode {
+    /// Krita's stabilizer: the plain average of the last `distance` milliseconds.
+    Average,
+    /// Smoothing that follows the pen's speed (a "One Euro" filter on the screen-space
+    /// path): strong while the pen moves slowly, where a shaky hand shows, lighter as it
+    /// speeds up, where shake does not show but trailing would. The line trails a quick
+    /// stroke far less than an average that smooths a slow one as much.
+    #[default]
+    Adaptive,
 }
 
 impl Default for StabilizerSettings {
@@ -100,6 +123,8 @@ impl Default for StabilizerSettings {
             finish_line: true,
             stabilize_sensors: true,
             scalable_distance: true,
+            mode: SmoothMode::Adaptive,
+            strength: 0.5,
         }
     }
 }
@@ -113,9 +138,22 @@ impl StabilizerSettings {
     /// One number for how smooth lines are, 0 (off) to 100 (strongest), like the
     /// "Stabilization" slider of other painting apps. Steps are even in feel: each one
     /// lengthens the averaging window by the same factor, so low settings stay fine-grained.
+    /// Settings saved before the adaptive mode: the stabilizer becomes the adaptive one, as
+    /// strong as the Stability slider showed it.
+    pub fn migrate(&mut self) {
+        if !(self.strength >= 0.0 && self.strength <= 1.0) {
+            let t = (self.distance.max(WEAKEST) / WEAKEST).ln() / (STRONGEST / WEAKEST).ln();
+            self.strength = t.clamp(0.01, 1.0);
+            self.mode = SmoothMode::Adaptive;
+        }
+    }
+
     pub fn stability(&self) -> u8 {
         if !self.enabled {
             return 0;
+        }
+        if self.mode == SmoothMode::Adaptive {
+            return (self.strength * 100.0).round().clamp(1.0, 100.0) as u8;
         }
         let t = (self.distance.max(WEAKEST) / WEAKEST).ln() / (STRONGEST / WEAKEST).ln();
         (t * 100.0).round().clamp(1.0, 100.0) as u8
@@ -128,7 +166,11 @@ impl StabilizerSettings {
         let v = v.min(100);
         self.enabled = v > 0;
         if v > 0 {
-            self.distance = WEAKEST * (STRONGEST / WEAKEST).powf(v as f32 / 100.0);
+            // The engine picked under "Stabilizer details" stays (Krita's average: its window).
+            match self.mode {
+                SmoothMode::Adaptive => self.strength = v as f32 / 100.0,
+                SmoothMode::Average => self.distance = WEAKEST * (STRONGEST / WEAKEST).powf(v as f32 / 100.0),
+            }
             self.finish_line = true;
             self.scalable_distance = false;
         }
@@ -150,6 +192,83 @@ pub struct Stabilizer {
     sampled_until_us: u64,
     /// The last point painted (Krita's `previousPaintInformation`).
     last_painted: PaintInfo,
+    /// The adaptive mode's filter.
+    euro: Option<Euro>,
+    /// The pen position of the last sample (adaptive mode joins events with straight lines).
+    last_raw: PaintInfo,
+}
+
+/// How strongly the adaptive mode smooths, from its strength (0..=1): the cutoff frequency
+/// while the pen is still (Hz; lower is smoother) and how much it rises per screen pixel
+/// per second of speed.
+fn euro_params(strength: f32) -> (f64, f64) {
+    let s = strength.clamp(0.0, 1.0) as f64;
+    let min_cutoff = EURO_WEAK * (EURO_STRONG / EURO_WEAK).powf(s);
+    (min_cutoff, EURO_BETA * (EURO_BETA_STRONG / EURO_BETA).powf(s))
+}
+
+/// Cutoff (Hz) at the weakest adaptive setting, and at the strongest.
+const EURO_WEAK: f64 = 60.0;
+const EURO_STRONG: f64 = 1.0;
+/// Cutoff rise per screen px/s of speed, at the weakest and at the strongest setting.
+const EURO_BETA: f64 = 0.08;
+const EURO_BETA_STRONG: f64 = 0.003;
+/// Low-pass stages (two remove shake better for the same trailing; one keeps corners).
+const EURO_STAGES: usize = 2;
+/// Cutoff of the speed estimate itself (Hz).
+const EURO_SPEED_CUTOFF: f64 = 4.0;
+/// Pressure, tilt and rotation are smoothed at least this lightly (Hz), so the line's width
+/// does not lag the hand.
+const EURO_SENSOR_CUTOFF: f64 = 6.0;
+
+/// A "One Euro" filter (Casiez, Roussel and Vogel, CHI 2012) on the pen's path, sampled
+/// every millisecond, with two low-pass stages for a cleaner line.
+#[derive(Clone, Debug)]
+struct Euro {
+    min_cutoff: f64,
+    beta: f64,
+    /// Filtered position after each stage, image pixels.
+    stage: [(f64, f64); 2],
+    /// Filtered velocity, image pixels per second.
+    velocity: (f64, f64),
+    sensors: PaintInfo,
+}
+
+fn smoothing(cutoff: f64, dt: f64) -> f64 {
+    let tau = 1.0 / (2.0 * std::f64::consts::PI * cutoff);
+    1.0 / (1.0 + tau / dt)
+}
+
+impl Euro {
+    fn new(first: &PaintInfo, strength: f32) -> Euro {
+        let (min_cutoff, beta) = euro_params(strength);
+        Euro { min_cutoff, beta, stage: [(first.x, first.y); 2], velocity: (0.0, 0.0), sensors: *first }
+    }
+
+    /// One millisecond: `raw` is where the pen is now, `before` where it was a millisecond
+    /// ago. Returns the smoothed point.
+    fn step(&mut self, raw: &PaintInfo, before: &PaintInfo, zoom: f64) -> PaintInfo {
+        let dt = 0.001;
+        let a = smoothing(EURO_SPEED_CUTOFF, dt);
+        let v = ((raw.x - before.x) / dt, (raw.y - before.y) / dt);
+        self.velocity = (self.velocity.0 + a * (v.0 - self.velocity.0), self.velocity.1 + a * (v.1 - self.velocity.1));
+        let speed = self.velocity.0.hypot(self.velocity.1) * zoom;
+        let cutoff = self.min_cutoff + self.beta * speed;
+        let a = smoothing(cutoff, dt);
+        let mut input = (raw.x, raw.y);
+        for s in self.stage.iter_mut().take(EURO_STAGES) {
+            s.0 += a * (input.0 - s.0);
+            s.1 += a * (input.1 - s.1);
+            input = *s;
+        }
+        let k = 1.0 - smoothing(cutoff.max(EURO_SENSOR_CUTOFF), dt);
+        // `k` of the old sensor values, the rest from the pen.
+        self.sensors.mix_all(k, raw);
+        let mut out = self.sensors;
+        out.x = input.0;
+        out.y = input.1;
+        out
+    }
 }
 
 impl Stabilizer {
@@ -164,6 +283,8 @@ impl Stabilizer {
             last_event: first,
             sampled_until_us: now_us,
             last_painted: first,
+            euro: (settings.mode == SmoothMode::Adaptive).then(|| Euro::new(&first, settings.strength)),
+            last_raw: first,
         };
         let n = s.sample_count();
         s.queue.extend(std::iter::repeat_n(first, n));
@@ -227,6 +348,12 @@ impl Stabilizer {
             let n = self.events.len();
             out.extend(self.run(n));
         }
+        if self.euro.is_some() {
+            if self.settings.finish_line {
+                out.extend(self.finish_adaptive());
+            }
+            return out;
+        }
         if self.settings.finish_line {
             let n = self.queue.len();
             self.events.clear();
@@ -238,6 +365,9 @@ impl Stabilizer {
 
     /// Produces `samples` samples from the pending events and paints them.
     fn run(&mut self, samples: usize) -> Vec<PaintInfo> {
+        if self.euro.is_some() {
+            return self.run_adaptive(samples);
+        }
         let mut out = Vec::new();
         let n = self.events.len();
         for i in 0..samples {
@@ -268,6 +398,60 @@ impl Stabilizer {
         out
     }
 
+    /// Adaptive mode: the events since the last sample, joined by straight lines and spread
+    /// evenly over `samples` milliseconds, through the filter.
+    fn run_adaptive(&mut self, samples: usize) -> Vec<PaintInfo> {
+        let mut out = Vec::new();
+        let mut path = Vec::with_capacity(self.events.len() + 1);
+        path.push(self.last_raw);
+        path.append(&mut self.events);
+        if path.len() == 1 {
+            path.push(self.last_event);
+        }
+        let n = (path.len() - 1) as f64;
+        let zoom = self.zoom;
+        let dead_zone = self.delay_radius();
+        let euro = self.euro.as_mut().expect("adaptive");
+        let mut before = self.last_raw;
+        for i in 1..=samples {
+            let u = i as f64 / samples as f64 * n;
+            let k = (u.floor() as usize).min(path.len() - 2);
+            let f = u - k as f64;
+            let mut raw = path[k];
+            raw.mix_all(1.0 - f, &path[k + 1]);
+            let p = euro.step(&raw, &before, zoom);
+            before = raw;
+            let moved = (p.x - self.last_painted.x).hypot(p.y - self.last_painted.y);
+            if dead_zone.is_some_and(|r| moved <= r) || (moved * zoom < 0.05 && (p.pressure - self.last_painted.pressure).abs() < 0.002) {
+                continue;
+            }
+            out.push(p);
+            self.last_painted = p;
+        }
+        self.last_raw = before;
+        out
+    }
+
+    /// Adaptive mode, pen up: keeps feeding the last pen position until the line has caught
+    /// up with it (within a twentieth of a screen pixel), then ends exactly there.
+    fn finish_adaptive(&mut self) -> Vec<PaintInfo> {
+        let mut out = Vec::new();
+        let pen = self.last_event;
+        for _ in 0..40 {
+            let gap = (self.last_painted.x - pen.x).hypot(self.last_painted.y - pen.y) * self.zoom;
+            if gap < 0.05 {
+                break;
+            }
+            self.events.push(pen);
+            out.extend(self.run_adaptive(50));
+        }
+        if !self.last_painted.same_pos(&pen) {
+            out.push(pen);
+            self.last_painted = pen;
+        }
+        out
+    }
+
     /// Average of `newest` and the queue without its oldest entry (Krita's
     /// `getStabilizedPaintInfo`).
     fn stabilized(&self, newest: &PaintInfo) -> PaintInfo {
@@ -290,7 +474,7 @@ mod tests {
     use super::*;
 
     fn settings(distance: f32) -> StabilizerSettings {
-        StabilizerSettings { enabled: true, distance, ..Default::default() }
+        StabilizerSettings { enabled: true, distance, mode: SmoothMode::Average, ..Default::default() }
     }
 
     /// Feeds events at `rate_hz` along `path(t)` for `duration_ms`, polling every
@@ -413,15 +597,18 @@ mod tests {
         s.set_stability(0);
         assert!(!s.enabled);
         assert_eq!(s.stability(), 0);
-        let mut last = 0.0;
+        let mut last = (f64::INFINITY, f64::INFINITY);
         for v in 1..=100u8 {
             s.set_stability(v);
-            assert!(s.enabled && s.finish_line && !s.scalable_distance);
+            assert!(s.enabled && s.finish_line && !s.scalable_distance && s.mode == SmoothMode::Adaptive);
             assert_eq!(s.stability(), v, "reads back");
-            assert!(s.distance > last, "{v}: each step is stronger");
-            last = s.distance;
+            let (cutoff, beta) = euro_params(s.strength);
+            assert!(cutoff < last.0 && beta < last.1, "{v}: each step smooths more");
+            last = (cutoff, beta);
         }
-        assert!((s.distance - STRONGEST).abs() < 0.01);
+        // Settings saved by the first version of the slider (averaging) still read back.
+        let old = StabilizerSettings { enabled: true, distance: WEAKEST * (STRONGEST / WEAKEST).powf(0.4), mode: SmoothMode::Average, ..Default::default() };
+        assert_eq!(old.stability(), 40);
     }
 
     /// How the slider feels, on a shaky hand: a horizontal line at 600 px/s with random
@@ -463,9 +650,10 @@ mod tests {
             let (last, pen) = (out.last().unwrap(), s.pen_position());
             assert!((last.x - pen.x).abs() < 1e-6 && (last.y - pen.y).abs() < 1e-6, "stability {v}: ends where the pen lifted");
         }
-        assert!(lags[0] < 5.0, "stability 10 trails by {:.1} px at 600 px/s", lags[0]);
+        // Light settings stay within about 13 ms of the pen (8 px at 600 px/s).
+        assert!(lags[0] < 8.0, "stability 10 trails by {:.1} px at 600 px/s", lags[0]);
         assert!(lags.windows(2).all(|w| w[1] > w[0]), "stronger trails more: {lags:?}");
-        assert!(lags[4] > 50.0, "stability 100 is heavy: {:.1} px", lags[4]);
+        assert!(lags[4] > 40.0, "stability 100 is heavy: {:.1} px", lags[4]);
     }
 
     #[test]
@@ -552,5 +740,121 @@ mod tests {
         let out = s.poll(60_000_000); // the app froze for a minute
         assert!(out.len() <= 51 * 4, "{}", out.len());
         assert!((out.last().unwrap().x - 10.0).abs() < 1e-9);
+    }
+
+    /// Hands for comparing smoothing: 200 readings a second, a frame every 16 ms.
+    mod hands {
+        use super::super::*;
+
+        pub fn noise(i: u64, amp: f64) -> (f64, f64) {
+            let h = |k: u64| (k.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) as f64 / (1u64 << 31) as f64;
+            (amp * (2.0 * h(i * 2) - 1.0), amp * (2.0 * h(i * 2 + 1) - 1.0))
+        }
+
+        /// Draws `path(t)` (t in seconds) for `secs`; returns the painted points and the
+        /// pen-to-line gap (screen px) at `gap_at` seconds.
+        pub fn draw(set: StabilizerSettings, secs: f64, gap_at: f64, path: impl Fn(f64, u64) -> (f64, f64)) -> (Vec<PaintInfo>, f64) {
+            let first = path(0.0, 0);
+            if !set.enabled {
+                let n = (secs * 200.0) as u64;
+                let pts: Vec<PaintInfo> = (0..=n).map(|i| path(i as f64 * 0.005, i)).map(|p| PaintInfo::new(p.0, p.1, 1.0)).collect();
+                return (pts, 0.0);
+            }
+            let mut s = Stabilizer::start(PaintInfo::new(first.0, first.1, 1.0), 0, set, 1.0);
+            let mut out = vec![PaintInfo::new(first.0, first.1, 1.0)];
+            let mut gap = 0.0;
+            let n = (secs * 200.0) as u64;
+            for i in 1..=n {
+                let t_us = i * 5000;
+                let p = path(t_us as f64 / 1e6, i);
+                s.add(PaintInfo::new(p.0, p.1, 1.0));
+                if t_us % 16_000 < 5000 {
+                    out.extend(s.poll(t_us));
+                }
+                if (t_us as f64 / 1e6 - gap_at).abs() < 0.0026 {
+                    out.extend(s.poll(t_us));
+                    let (a, b) = (s.pen_position(), s.brush_position());
+                    gap = (a.x - b.x).hypot(a.y - b.y);
+                }
+            }
+            out.extend(s.finish(n * 5000 + 1000));
+            (out, gap)
+        }
+
+        /// Smallest distance from a point to the segment a-b.
+        pub fn to_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            (p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dy)
+        }
+
+        /// (wobble on a slow careful line, trailing on a quick stroke, worst distance from a
+        /// drawn corner, shrinking of a drawn circle), all in screen px.
+        pub fn measure(set: StabilizerSettings) -> [f64; 4] {
+            let (slow, _) = draw(set, 2.0, 1.0, |t, i| {
+                let n = noise(i, 2.5);
+                (100.0 + 150.0 * t, 300.0 + n.1 + 1.2 * (2.0 * std::f64::consts::PI * 9.0 * t).sin())
+            });
+            let mid: Vec<f64> = slow.iter().filter(|p| p.x > 140.0 && p.x < 360.0).map(|p| p.y - 300.0).collect();
+            let wobble = (mid.iter().map(|d| d * d).sum::<f64>() / mid.len().max(1) as f64).sqrt();
+            let (_, lag) = draw(set, 0.5, 0.35, |t, i| {
+                let n = noise(i, 1.0);
+                (100.0 + 1500.0 * t + n.0, 300.0 + n.1)
+            });
+            let (corner, _) = draw(set, 1.5, 0.0, |t, i| {
+                let n = noise(i, 1.0);
+                let d = 400.0 * t;
+                if d < 300.0 { (100.0 + d + n.0, 300.0 + n.1) } else { (400.0 + n.0, 300.0 + (d - 300.0) + n.1) }
+            });
+            let off = corner.iter().map(|p| to_segment((p.x, p.y), (100.0, 300.0), (400.0, 300.0)).min(to_segment((p.x, p.y), (400.0, 300.0), (400.0, 600.0)))).fold(0.0, f64::max);
+            let (circle, _) = draw(set, 1.5, 0.0, |t, i| {
+                let n = noise(i, 1.0);
+                let a = 2.0 * std::f64::consts::PI * t;
+                (300.0 + 100.0 * a.cos() + n.0, 300.0 + 100.0 * a.sin() + n.1)
+            });
+            let ring: Vec<f64> = circle.iter().skip(circle.len() / 4).map(|p| (p.x - 300.0).hypot(p.y - 300.0) - 100.0).collect();
+            let shrink = -ring.iter().sum::<f64>() / ring.len().max(1) as f64;
+            [wobble, lag, off, shrink]
+        }
+    }
+
+    /// The Stability slider's adaptive smoothing against the time average it replaced, on
+    /// the same hands: from 50 up it leaves less shake and trails a quick stroke less; from 80
+    /// up it trails less than half as much and keeps circles rounder, and from 90 up corners
+    /// sharper too. (At 50 to 80 it rounds a corner a little more: 2.6 against 1.8 px at 50.)
+    #[test]
+    fn adaptive_smoothing_beats_the_plain_average() {
+        for v in [50u8, 80, 90, 100] {
+            let old = StabilizerSettings { enabled: true, scalable_distance: false, distance: WEAKEST * (STRONGEST / WEAKEST).powf(v as f32 / 100.0), mode: SmoothMode::Average, ..Default::default() };
+            let mut new = StabilizerSettings::default();
+            new.set_stability(v);
+            let (a, b) = (hands::measure(old), hands::measure(new));
+            assert!(b[0] < a[0] && b[1] < a[1], "{v}: wobble {:.2} vs {:.2}, trails {:.1} vs {:.1}", b[0], a[0], b[1], a[1]);
+            if v >= 80 {
+                assert!(b[3] < a[3] && b[1] < a[1] / 2.0, "{v}: circle {:.1} vs {:.1}, trails {:.1} vs {:.1}", b[3], a[3], b[1], a[1]);
+            }
+            if v >= 90 {
+                assert!(b[2] < a[2], "{v}: corner {:.1} vs {:.1}", b[2], a[2]);
+            }
+        }
+    }
+
+    /// Prints old (time average) and new (adaptive) smoothing side by side.
+    /// `cargo test -p recedo-core smoothing_comparison -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn smoothing_comparison() {
+        println!("              wobble   trails   corner   circle shrinks (screen px)");
+        let off = StabilizerSettings::default();
+        let m = hands::measure(off);
+        println!("off          {:7.2}  {:7.1}  {:7.1}  {:7.1}", m[0], m[1], m[2], m[3]);
+        for v in [5u8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
+            let old = StabilizerSettings { enabled: true, scalable_distance: false, distance: WEAKEST * (STRONGEST / WEAKEST).powf(v as f32 / 100.0), mode: SmoothMode::Average, ..Default::default() };
+            let mut new = StabilizerSettings::default();
+            new.set_stability(v);
+            let (a, b) = (hands::measure(old), hands::measure(new));
+            println!("{v:3} average  {:7.2}  {:7.1}  {:7.1}  {:7.1}", a[0], a[1], a[2], a[3]);
+            println!("{v:3} adaptive {:7.2}  {:7.1}  {:7.1}  {:7.1}", b[0], b[1], b[2], b[3]);
+        }
     }
 }

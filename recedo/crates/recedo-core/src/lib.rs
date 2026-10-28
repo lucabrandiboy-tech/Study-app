@@ -25,4 +25,4 @@ pub mod text;
 pub mod tiles;
 pub mod view;
 
-pub use stabilizer::{PaintInfo, Stabilizer, StabilizerSettings};
+pub use stabilizer::{PaintInfo, SmoothMode, Stabilizer, StabilizerSettings};

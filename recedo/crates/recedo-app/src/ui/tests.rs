@@ -909,6 +909,35 @@ fn f_undoes_and_shift_f_fills() {
     assert_eq!(s.ed.history.entries().1, 1, "nothing undone while writing");
 }
 
+/// While the stabilizer trails the pen, a blue string joins the pen to where the line is being
+/// drawn; once the pen lifts it is gone.
+#[test]
+fn the_stabilizer_string_shows_while_the_line_trails() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    s.ed.tools.stabilizer.set_stability(90);
+    // The string's light blue, in the gap between the line's end and the pen.
+    let blue = |img: &recedo_core::image::Rgba8, x0: f64, x1: f64| (x0 as u32..x1 as u32).flat_map(|x| (445..456).map(move |y| (x, y))).filter(|&(x, y)| { let p = img.pixel(x, y); p[2] > 200 && p[0] < 120 && p[1] > 120 && p[1] < 190 }).count();
+    // A quick stroke: 300 points in 0.15 s.
+    for i in 0..=30u64 {
+        s.ed.pen(&PenSample::synthetic(1_000_000 + i * 5000, 500.0 + i as f64 * 20.0, 450.0, 0.8, true), true, Modifiers::default());
+    }
+    s.ed.tick(1_160_000, web_time::Instant::now());
+    let l = s.ed.leash().expect("a string while the stabilizer smooths");
+    assert!((l.pen.0 - l.brush.0).hypot(l.pen.1 - l.brush.1) > 20.0, "the line trails the quick stroke: {l:?}");
+    let (out, _) = s.ui_frame(raw(vec![]));
+    let img = shot(&g, &mut r, &mut s, out, "24-stabilizer-string");
+    let (x0, x1) = (l.brush.0 + 6.0, l.pen.0 - 8.0);
+    let n = blue(&img, x0, x1);
+    assert!(n * 10 >= (x1 - x0) as usize * 8, "{n} blue string pixels over {:.0} px", x1 - x0);
+    s.ed.pen(&PenSample::synthetic(1_170_000, 1100.0, 450.0, 0.0, false), true, Modifiers::default());
+    let (out, _) = s.ui_frame(raw(vec![]));
+    let img = shot(&g, &mut r, &mut s, out, "25-stabilizer-string-gone");
+    assert!(s.ed.leash().is_none() && blue(&img, x0, x1) < n / 4, "gone after the pen lifts");
+}
+
 #[test]
 fn a_small_window_keeps_room_for_the_painting() {
     // The Windows self-test's window: 1008 × 681. The panels give way so the canvas area

@@ -232,7 +232,18 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Mip levels: opaque rows read in place | Over a white background the picture is opaque, and premultiplying changes nothing there. 4K picture, level 0 + all mip levels, one core: 56.7 → 33.2 ms; the browser's layer-opacity drag 19.2 → 13.6 ms per frame (median). Exactness: `mip_blocks_equal_the_plain_formula`. A two-step (vertical, then horizontal) averaging loop was tried and was no faster, so it was not kept. |
 | Self-test measures at whole screen pixels, empty spot 3 screen pixels from paint and edges | At 12.8 % zoom half a pixel is 4 canvas pixels; the old checks measured between pixels and at the painting's corner. The CI report (screen centre white, painted spot dark) showed the app drew correctly. |
 
-## 12. Licences
+## 12. The Stability slider (asked for after the interface)
+
+| Decision | Why |
+|---|---|
+| A speed-adaptive filter (One Euro, Casiez et al. 2012, two stages) instead of the plain time average for the slider | The average smooths every speed alike, so a setting that steadies a slow line drags far behind a quick one. Measured on the same simulated hands, at equal or better wobble the adaptive filter trails a quick stroke a half to a third as far and keeps circles rounder; one stage trailed less but rounded corners more, so two. |
+| Resample every millisecond and join readings with straight lines | Readings arrive in bursts when the app is busy; spreading them evenly in time (as Krita does) keeps the filter's timing right, and straight joins avoid steps. |
+| Speeds measured on the screen | So the smoothing feels the same at any zoom. |
+| Old settings move to the adaptive filter at the same number; Krita's average stays under "Stabilizer details" | The slider's number keeps its meaning; nothing the user chose is lost. |
+| Hold to straighten only for nearly straight strokes | Snapping curves to a line would destroy work; the tolerance (6 px or 8 % of the length) lets a wobbly line through but not a curve. Pressure along the line follows the hand's, so the line keeps its taper. |
+| A browser test with readings queued 5 ms apart, not waited for one by one | Waiting for each reading made the test pen send one every 123 ms, which no smoothing over time can work with; real pens send 200+ a second. |
+
+## 13. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

@@ -371,6 +371,8 @@ pub struct ToolSettings {
     pub brush: Brush,
     pub eraser: Brush,
     pub stabilizer: StabilizerSettings,
+    /// Holding the pen still at the end of a nearly straight stroke makes it straight.
+    pub hold_to_straighten: bool,
     /// Eyedropper: sample the visible picture (true) or only the current layer.
     pub pick_all_layers: bool,
     /// Eyedropper: average over this radius, in canvas pixels (0 = one pixel).
@@ -400,6 +402,7 @@ impl Default for ToolSettings {
             brush: Brush::default(),
             eraser: Brush { size: 40.0, hardness: 0.7, ..Brush::default() },
             stabilizer: StabilizerSettings::default(),
+            hold_to_straighten: true,
             pick_all_layers: true,
             pick_radius: 0.0,
             fill_tolerance: 0.12,
@@ -508,6 +511,30 @@ enum Interaction {
     Ignore,
 }
 
+/// How long the pen must stay still to straighten a stroke, its least length, how far it may
+/// stray from straight (the larger of these screen pixels and this share of its length), and
+/// how far the pen may move while "still" (screen pixels).
+const STRAIGHTEN_HOLD_US: u64 = 500_000;
+const STRAIGHTEN_MIN_LENGTH: f64 = 30.0;
+const STRAIGHTEN_TOLERANCE: (f64, f64) = (6.0, 0.08);
+const STILL_RADIUS: f64 = 3.0;
+
+/// A brush stroke under way, as needed to straighten it.
+struct StrokeTrack {
+    /// The layer before the stroke.
+    before: TiledLayer,
+    brush: Brush,
+    color: [u8; 3],
+    erase: bool,
+    /// Where the pen went (canvas pixels, with pressure), from the first point.
+    path: Vec<PaintInfo>,
+    /// Where the pen came to rest (screen pixels) and since when (µs).
+    still: ((f64, f64), u64),
+    /// Straightened: the stroke is a straight line from the first point, and the pen moves its
+    /// end until it lifts.
+    straight: bool,
+}
+
 /// A box in canvas pixels: left, top, right, bottom.
 pub type Rect4 = (f64, f64, f64, f64);
 
@@ -587,6 +614,8 @@ pub struct Editor {
     /// The selected layer as it was when the current brush stroke began (to keep the stroke
     /// inside the selection).
     stroke_before: Option<TiledLayer>,
+    /// The brush stroke under way, for straightening it when the pen is held still.
+    track: Option<Box<StrokeTrack>>,
     /// Clone tool: where it copies from (canvas pixels), set with Ctrl+click.
     pub clone_source: Option<CanvasPoint>,
     /// Clone tool: source minus brush, fixed by the first stroke after the source was set.
@@ -652,6 +681,7 @@ impl Editor {
             press_mods: Modifiers::default(),
             outline: None,
             stroke_before: None,
+            track: None,
             clone_source: None,
             clone_offset: None,
             text_edit: None,
@@ -933,6 +963,12 @@ impl Editor {
                 if !erase {
                     self.remember_color();
                 }
+                if self.tools.hold_to_straighten
+                    && let Some(l) = self.doc.layers.get(layer)
+                {
+                    let brush = if erase { self.tools.eraser.clone() } else { self.tools.brush.clone() };
+                    self.track = Some(Box::new(StrokeTrack { before: l.pixels.clone(), brush, color: self.color, erase, path: vec![info], still: ((s.x, s.y), s.recv_us), straight: false }));
+                }
                 let d = session.take_dirty();
                 self.clip_stroke(layer, &d);
                 self.mark_tiles(d);
@@ -951,6 +987,74 @@ impl Editor {
         if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
             select::clip_to(&mut l.pixels, before, sel, tiles.iter().copied());
         }
+    }
+
+    /// Straightens the stroke if the pen has been still long enough at the end of a stroke
+    /// that is nearly straight already (a curve is never straightened).
+    fn straighten_if_held(&mut self, layer: usize, now_us: u64) {
+        let Some(t) = &self.track else { return };
+        if t.straight || now_us.saturating_sub(t.still.1) < STRAIGHTEN_HOLD_US || t.path.len() < 2 {
+            return;
+        }
+        let zoom = self.view.zoom;
+        let (a, b) = (t.path[0], *t.path.last().expect("points"));
+        let chord = (b.x - a.x).hypot(b.y - a.y) * zoom;
+        if chord < STRAIGHTEN_MIN_LENGTH {
+            return;
+        }
+        let (dx, dy) = ((b.x - a.x) * zoom / chord, (b.y - a.y) * zoom / chord);
+        let worst = t.path.iter().map(|p| ((p.x - a.x) * zoom * dy - (p.y - a.y) * zoom * dx).abs()).fold(0.0, f64::max);
+        if worst > STRAIGHTEN_TOLERANCE.0.max(STRAIGHTEN_TOLERANCE.1 * chord) {
+            return;
+        }
+        if let Some(t) = &mut self.track {
+            t.straight = true;
+        }
+        self.draw_straight(layer, b);
+    }
+
+    /// Repaints the straightened stroke: the layer as it was, then a straight line from the
+    /// stroke's first point to `end`, with the pressure the hand used along the way.
+    fn draw_straight(&mut self, layer: usize, end: PaintInfo) {
+        let Some(t) = &self.track else { return };
+        let Some(l) = self.doc.layers.get_mut(layer) else { return };
+        let old = std::mem::replace(&mut l.pixels, t.before.clone());
+        // The pressure at each share of the way along the hand's path.
+        let mut along = vec![0.0];
+        for w in t.path.windows(2) {
+            along.push(along.last().expect("one") + (w[1].x - w[0].x).hypot(w[1].y - w[0].y));
+        }
+        let total = along.last().copied().unwrap_or(0.0).max(1e-9);
+        let pressure_at = |f: f64| {
+            let i = along.partition_point(|&d| d < f * total).min(t.path.len() - 1);
+            t.path[i].pressure
+        };
+        let a = t.path[0];
+        let mut painter = recedo_core::brush::StrokePainter::new(t.brush.clone(), t.color, t.erase);
+        let mut dirty = HashSet::new();
+        let steps = 32;
+        for i in 0..=steps {
+            let f = i as f64 / steps as f64;
+            let mut p = a;
+            p.x = a.x + (end.x - a.x) * f;
+            p.y = a.y + (end.y - a.y) * f;
+            p.pressure = pressure_at(f);
+            painter.add(&mut l.pixels, p, &mut dirty);
+        }
+        // Every tile the freehand stroke or the line touched.
+        let mut tiles: HashSet<TileKey> = HashSet::new();
+        for k in old.tile_keys().chain(l.pixels.tile_keys()) {
+            let same = match (old.tile(k), l.pixels.tile(k)) {
+                (Some(x), Some(y)) => std::sync::Arc::ptr_eq(x, y),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                tiles.insert(k);
+            }
+        }
+        self.clip_stroke(layer, &tiles);
+        self.mark_tiles(tiles);
     }
 
     /// A retouch stroke starts (smudge, blur, ... spray).
@@ -999,13 +1103,25 @@ impl Editor {
         let mut pick = None;
         match &mut self.interaction {
             Interaction::Stroke(session) => {
-                session.add(&mut self.doc, info, s.recv_us);
-                let d = session.take_dirty();
                 let layer = session.layer();
-                if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
-                    select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
+                if let Some(t) = &mut self.track {
+                    t.path.push(info);
+                    if (s.x - t.still.0.0).hypot(s.y - t.still.0.1) > STILL_RADIUS {
+                        t.still = ((s.x, s.y), s.recv_us);
+                    }
                 }
-                self.mark_tiles(d);
+                if self.track.as_ref().is_some_and(|t| t.straight) {
+                    // Straightened: the pen moves the line's end.
+                    self.draw_straight(layer, info);
+                } else {
+                    session.add(&mut self.doc, info, s.recv_us);
+                    let d = session.take_dirty();
+                    if let (Some(sel), Some(before), Some(l)) = (&self.doc.selection, &self.stroke_before, self.doc.layers.get_mut(layer)) {
+                        select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
+                    }
+                    self.mark_tiles(d);
+                    self.straighten_if_held(layer, s.recv_us);
+                }
             }
             Interaction::Retouch { stroke, before, layer, .. } => {
                 // Its own layer, even if another one is selected meanwhile (Page Up / Down).
@@ -1072,11 +1188,15 @@ impl Editor {
         self.owner = None;
         match interaction {
             Interaction::Stroke(session) => {
-                let layer = session.layer();
-                let d = session.end(&mut self.doc, now_us);
-                self.clip_stroke(layer, &d);
+                // A straightened stroke is already the line (the stabilizer's catching up
+                // would paint the freehand ending over it).
+                if !self.track.take().is_some_and(|t| t.straight) {
+                    let layer = session.layer();
+                    let d = session.end(&mut self.doc, now_us);
+                    self.clip_stroke(layer, &d);
+                    self.mark_tiles(d);
+                }
                 self.stroke_before = None;
-                self.mark_tiles(d);
                 self.autosaver.changed(Instant::now());
             }
             Interaction::Retouch { before, name, .. } => {
@@ -1631,7 +1751,9 @@ impl Editor {
     /// Call every frame: the stabilizer keeps moving the brush towards a pen held still,
     /// background saves finish, autosave runs when due.
     pub fn tick(&mut self, now_us: u64, now: Instant) {
-        if let Interaction::Stroke(session) = &mut self.interaction {
+        if let Interaction::Stroke(session) = &mut self.interaction
+            && !self.track.as_ref().is_some_and(|t| t.straight)
+        {
             session.tick(&mut self.doc, now_us);
             let d = session.take_dirty();
             let layer = session.layer();
@@ -1639,6 +1761,8 @@ impl Editor {
                 select::clip_to(&mut l.pixels, before, sel, d.iter().copied());
             }
             self.mark_tiles(d);
+            // A pen held still sends nothing: the frames check how long it has been still.
+            self.straighten_if_held(layer, now_us);
         }
         self.poll_jobs();
         let busy = self.stroke_active() || !self.jobs.is_empty();

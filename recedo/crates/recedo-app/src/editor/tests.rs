@@ -224,7 +224,7 @@ fn a_second_device_cannot_join_a_stroke() {
 #[test]
 fn the_stabilizer_needs_ticks_and_finishes_on_lift() {
     let mut e = editor();
-    e.tools.stabilizer = StabilizerSettings { enabled: true, distance: 50.0, ..Default::default() };
+    e.tools.stabilizer = StabilizerSettings { enabled: true, distance: 50.0, mode: recedo_core::stabilizer::SmoothMode::Average, ..Default::default() };
     e.pen(&pt(0, 20.0, 50.0, true), true, Modifiers::default());
     e.pen(&pt(1, 300.0, 50.0, true), true, Modifiers::default());
     assert!(e.needs_ticks());
@@ -1228,4 +1228,105 @@ fn stability_smooths_a_shaky_line_on_the_layer() {
     let (off, mid, strong) = (wobble(0), wobble(50), wobble(90));
     println!("wobble on the layer: off {off:.2} px, 50 {mid:.2} px, 90 {strong:.2} px");
     assert!(mid < off * 0.7 && strong < mid, "off {off:.2}, 50 {mid:.2}, 90 {strong:.2}");
+}
+
+/// Draws a stroke along `path` (screen = canvas here), a reading every 5 ms with a frame
+/// every 15 ms; then holds the pen still for `hold_ms` (frames only, as a pen at rest sends
+/// nothing), optionally moves on to `then`, and lifts. Returns the time at the end.
+fn hold_stroke(e: &mut Editor, path: &[(f64, f64)], hold_ms: u64, then: Option<(f64, f64)>) -> u64 {
+    let mut t = 1_000_000u64;
+    for (i, &(x, y)) in path.iter().enumerate() {
+        e.pen(&PenSample::synthetic(t, x, y, 0.3 + 0.5 * i as f32 / path.len() as f32, true), true, Modifiers::default());
+        e.tick(t, Instant::now());
+        t += 5000;
+    }
+    let end = *path.last().expect("points");
+    let stop = t + hold_ms * 1000;
+    while t < stop {
+        t += 15_000;
+        e.tick(t, Instant::now());
+    }
+    let last = match then {
+        Some(p) => {
+            for k in 1..=10 {
+                let f = k as f64 / 10.0;
+                t += 5000;
+                e.pen(&PenSample::synthetic(t, end.0 + (p.0 - end.0) * f, end.1 + (p.1 - end.1) * f, 0.8, true), true, Modifiers::default());
+            }
+            p
+        }
+        None => end,
+    };
+    t += 5000;
+    e.pen(&PenSample::synthetic(t, last.0, last.1, 0.0, false), true, Modifiers::default());
+    t
+}
+
+/// The painted pixels' farthest distance from the line a-b, and how many there are.
+fn off_line(e: &Editor, a: (f64, f64), b: (f64, f64)) -> (f64, usize) {
+    let l = &e.doc.layers[e.active].pixels;
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = dx.hypot(dy);
+    let mut worst: f64 = 0.0;
+    let mut n = 0;
+    for y in 0..300 {
+        for x in 0..400 {
+            if l.pixel(x, y)[3] > 128 {
+                n += 1;
+                let (px, py) = (x as f64 + 0.5 - a.0, y as f64 + 0.5 - a.1);
+                worst = worst.max((px * dy - py * dx).abs() / len);
+            }
+        }
+    }
+    (worst, n)
+}
+
+fn shaky_line(from: (f64, f64), to: (f64, f64), n: usize, amp: f64) -> Vec<(f64, f64)> {
+    (0..=n)
+        .map(|i| {
+            let f = i as f64 / n as f64;
+            let wobble = if i == 0 || i == n { 0.0 } else { amp * ((i * 7 % 5) as f64 - 2.0) / 2.0 };
+            (from.0 + (to.0 - from.0) * f, from.1 + (to.1 - from.1) * f + wobble)
+        })
+        .collect()
+}
+
+/// Holding the pen still at the end of a nearly straight stroke makes it a straight line (one
+/// undo step); moving on before lifting moves the line's end. A curve, a short stroke, a
+/// stroke lifted without a pause, or the option off: the stroke stays as drawn.
+#[test]
+fn holding_still_straightens_a_nearly_straight_stroke() {
+    let wobbly = shaky_line((50.0, 100.0), (330.0, 160.0), 60, 4.0);
+    // Held: straight. The brush is 10 px wide, so painted pixels lie within ~6 px of the line.
+    let mut e = editor();
+    let steps = e.history.entries().1;
+    hold_stroke(&mut e, &wobbly, 700, None);
+    let (worst, n) = off_line(&e, (50.0, 100.0), (330.0, 160.0));
+    assert!(n > 1500 && worst < 6.5, "straightened: {n} pixels, worst {worst:.1} px from the line");
+    assert_eq!(e.history.entries().1, steps + 1, "one undo step");
+    e.undo();
+    assert_eq!(off_line(&e, (50.0, 100.0), (330.0, 160.0)).1, 0, "undo takes it all away");
+    // Not held: as drawn (the wobble reaches past the straight line's edge).
+    let mut e = editor();
+    hold_stroke(&mut e, &wobbly, 0, None);
+    let (worst, _) = off_line(&e, (50.0, 100.0), (330.0, 160.0));
+    assert!(worst > 7.0, "lifted at once: kept as drawn ({worst:.1} px)");
+    // Moving on after the snap moves the end.
+    let mut e = editor();
+    hold_stroke(&mut e, &wobbly, 700, Some((330.0, 250.0)));
+    let (worst, n) = off_line(&e, (50.0, 100.0), (330.0, 250.0));
+    assert!(n > 1500 && worst < 6.5, "the end followed the pen: worst {worst:.1} px");
+    // A curve held still stays a curve.
+    let mut e = editor();
+    let arc: Vec<(f64, f64)> = (0..=60).map(|i| { let a = std::f64::consts::PI * i as f64 / 60.0; (190.0 - 120.0 * a.cos(), 200.0 - 90.0 * a.sin()) }).collect();
+    hold_stroke(&mut e, &arc, 700, None);
+    assert!(off_line(&e, (70.0, 200.0), (310.0, 200.0)).0 > 60.0, "a curve is not straightened");
+    // A short stroke and the option off: as drawn.
+    let mut e = editor();
+    hold_stroke(&mut e, &shaky_line((50.0, 100.0), (70.0, 104.0), 8, 4.0), 700, None);
+    assert!(off_line(&e, (50.0, 100.0), (70.0, 104.0)).0 > 6.5, "short strokes stay as drawn");
+    let mut e = editor();
+    e.tools.hold_to_straighten = false;
+    hold_stroke(&mut e, &wobbly, 700, None);
+    assert!(off_line(&e, (50.0, 100.0), (330.0, 160.0)).0 > 7.0, "off: as drawn");
 }

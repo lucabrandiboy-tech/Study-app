@@ -5,7 +5,7 @@
 //! and [`StrokeTracker::tick`] must be called every frame while a stroke lasts, so the
 //! line keeps catching up with the pen even when no new samples arrive.
 
-use recedo_core::{PaintInfo, Stabilizer, StabilizerSettings};
+use recedo_core::{PaintInfo, SmoothMode, Stabilizer, StabilizerSettings};
 use recedo_tablet::{Flags, PenSample, Source};
 
 use crate::brush::{BrushSettings, DabBatch, StrokeBuilder, push_dabs};
@@ -105,7 +105,7 @@ impl StrokeTracker {
                     builder.add(s, &mut self.scratch);
                     self.dabs_made += self.scratch.len();
                     push_dabs(out, erase, &self.scratch);
-                    let stabilizer = self.stabilizer.enabled.then(|| Stabilizer::start(paint_info(s), s.recv_us, self.stabilizer, 1.0));
+                    let stabilizer = self.stabilizer.enabled.then(|| Stabilizer::start(paint_info(s), s.recv_us, StabilizerSettings { mode: SmoothMode::Average, ..self.stabilizer }, 1.0));
                     let has_tilt = s.flags.has(Flags::HAS_TILT);
                     self.active = Some(Active { source: s.source, cursor: s.cursor, builder, stabilizer, has_tilt });
                     self.strokes_started += 1;

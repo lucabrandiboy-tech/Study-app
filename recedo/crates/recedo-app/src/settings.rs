@@ -138,6 +138,7 @@ impl Settings {
             b.min_size = if b.min_size.is_finite() { b.min_size.clamp(0.0, 1.0) } else { 0.02 };
         }
         let st = &mut self.tools.stabilizer;
+        st.migrate();
         st.distance = if st.distance.is_finite() { st.distance.clamp(3.0, 500.0) } else { 50.0 };
         st.delay_distance = if st.delay_distance.is_finite() { st.delay_distance.clamp(1.0, 500.0) } else { 50.0 };
         self.tools.pick_radius = if self.tools.pick_radius.is_finite() { self.tools.pick_radius.clamp(0.0, 50.0) } else { 0.0 };
@@ -223,6 +224,32 @@ mod tests {
         let ids: std::collections::HashSet<&str> = Tool::ALL.iter().map(|t| t.id()).collect();
         assert_eq!(ids.len(), Tool::ALL.len());
         assert!(Tool::ALL.iter().all(|t| Tool::from_id(t.id()) == Some(*t)));
+    }
+
+    /// Settings saved before the adaptive stabilizer: it becomes the adaptive one, as strong as
+    /// the Stability slider showed it; settings without any stabilizer get the default.
+    #[test]
+    fn an_older_stabilizer_becomes_the_adaptive_one() {
+        use recedo_core::stabilizer::SmoothMode;
+        let dir = std::env::temp_dir().join(format!("recedo-stab-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("recedo.json");
+        let mut first = recedo_core::StabilizerSettings { mode: SmoothMode::Average, ..Default::default() };
+        first.set_stability(37);
+        std::fs::write(&path, format!(r#"{{"tools": {{"stabilizer": {{"enabled": true, "distance": {}, "finish_line": true, "scalable_distance": false}}}}}}"#, first.distance)).unwrap();
+        let s = Settings::load(&path).tools.stabilizer;
+        assert_eq!((s.mode, s.enabled, s.stability()), (SmoothMode::Adaptive, true, 37));
+        std::fs::write(&path, "{}").unwrap();
+        let s = Settings::load(&path).tools.stabilizer;
+        assert_eq!((s.mode, s.enabled), (SmoothMode::Adaptive, false));
+        // Krita's average, chosen in the details, stays chosen.
+        let mut kept = Settings::default();
+        kept.tools.stabilizer.mode = SmoothMode::Average;
+        kept.tools.stabilizer.set_stability(60);
+        kept.save(&path).unwrap();
+        let s = Settings::load(&path).tools.stabilizer;
+        assert_eq!((s.mode, s.stability()), (SmoothMode::Average, 60));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

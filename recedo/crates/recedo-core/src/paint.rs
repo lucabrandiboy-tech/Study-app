@@ -100,10 +100,11 @@ impl PaintSession {
         std::mem::take(&mut self.dirty)
     }
 
-    /// Where the stabilizer's leash is drawn: (brush, pen, radius), if the delay is on.
+    /// Where the stabilizer's string is drawn, while one smooths the stroke: (brush, pen,
+    /// dead-zone radius, 0 without one).
     pub fn leash(&self) -> Option<(PaintInfo, PaintInfo, f64)> {
         let st = self.stabilizer.as_ref()?;
-        Some((st.brush_position(), st.pen_position(), st.leash_radius()?))
+        Some((st.brush_position(), st.pen_position(), st.leash_radius().unwrap_or(0.0)))
     }
 
     pub fn dabs_painted(&self) -> usize {
@@ -146,7 +147,7 @@ mod tests {
     fn stabilized_stroke_needs_ticks_and_finishes_at_the_pen() {
         let mut doc = Document::new(300, 100, None);
         let mut history = History::default();
-        let stab = StabilizerSettings { enabled: true, distance: 40.0, ..Default::default() };
+        let stab = StabilizerSettings { enabled: true, distance: 40.0, mode: crate::stabilizer::SmoothMode::Average, ..Default::default() };
         let brush = Brush { size: 4.0, size_curve: None, ..Default::default() };
         let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush, [0, 0, 0], false, stab, 1.0, pt(10.0, 50.0), 0).unwrap();
         // The pen jumps to x = 250 and is held there.
