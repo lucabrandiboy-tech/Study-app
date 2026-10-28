@@ -175,7 +175,8 @@ async fn run() -> Result<(), String> {
 }
 
 /// `window.recedoStats()`: the last frames' times (ms) as `{frames, ui, picture, draw, total}`,
-/// each `[median, worst]`, and `clear()` to start counting again. For measuring speed.
+/// each `[median, worst]` (and `picture_busy`: the median picture time of the frames that redid
+/// some of it, and how many there were), and `clear()` to start counting again. For measuring speed.
 fn expose_stats(app: &Rc<RefCell<App>>) {
     let a = app.clone();
     let stats = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |clear: JsValue| {
@@ -190,7 +191,11 @@ fn expose_stats(app: &Rc<RefCell<App>>) {
             let median = v.get(v.len() / 2).copied().unwrap_or(0.0);
             format!("[{median:.2},{:.2}]", v.last().copied().unwrap_or(0.0))
         };
-        let json = format!(r#"{{"frames":{},"ui":{},"picture":{},"draw":{},"total":{}}}"#, app.timings.len(), pick(0), pick(1), pick(2), pick(3));
+        // The picture's time in the frames that redid any of it.
+        let mut busy: Vec<f64> = app.timings.iter().map(|t| t[1]).filter(|&ms| ms > 0.5).collect();
+        busy.sort_by(f64::total_cmp);
+        let busy = format!("[{:.2},{}]", busy.get(busy.len() / 2).copied().unwrap_or(0.0), busy.len());
+        let json = format!(r#"{{"frames":{},"ui":{},"picture":{},"picture_busy":{busy},"draw":{},"total":{}}}"#, app.timings.len(), pick(0), pick(1), pick(2), pick(3));
         js_sys::JSON::parse(&json).unwrap_or(JsValue::NULL)
     });
     let _ = js_sys::Reflect::set(&window(), &JsValue::from_str("recedoStats"), stats.as_ref());

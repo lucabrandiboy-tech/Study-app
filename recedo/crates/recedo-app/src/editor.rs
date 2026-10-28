@@ -506,7 +506,7 @@ enum Interaction {
     ZoomTool { anchor: (f64, f64), last_y: f64, moved: f64, out: bool },
     /// A handle of the lasso transform's box dragged; `from` is the box when the pen went
     /// down at `start` (canvas pixels).
-    TransformDrag { handle: Handle, start: (f64, f64), from: Rect4 },
+    TransformDrag { handle: Handle, start: (f64, f64), from: Rect4, from_m: Affine },
     /// The pen is down but nothing happens until it lifts (e.g. a locked layer).
     Ignore,
 }
@@ -547,6 +547,10 @@ pub enum Handle {
     Side(u8),
     /// Inside: moves it.
     Inside,
+    /// Just outside a corner, or the round handle above the box: turns it about its middle.
+    Rotate,
+    /// The middle of a side with Ctrl: slants it.
+    Skew(u8),
 }
 
 /// Part of a layer lifted by the lasso transform, shown scaled into `rect` until it is put
@@ -570,6 +574,86 @@ pub struct Transform {
     /// The box moved since the pixels were last redone (they are redone once a frame, not
     /// for every pen sample).
     pending: bool,
+    /// Rotation, skew and flips on top of the box: a point of the box `p` shows at
+    /// (m0·x + m1·y + m2, m3·x + m4·y + m5) on the canvas.
+    pub m: Affine,
+}
+
+/// An affine map of canvas points: x' = a·x + b·y + c, y' = d·x + e·y + f.
+pub type Affine = [f64; 6];
+
+pub const IDENTITY: Affine = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+/// Where `m` takes `p`.
+pub fn apply(m: &Affine, p: (f64, f64)) -> (f64, f64) {
+    (m[0] * p.0 + m[1] * p.1 + m[2], m[3] * p.0 + m[4] * p.1 + m[5])
+}
+
+/// `a` after `b`.
+fn compose(a: &Affine, b: &Affine) -> Affine {
+    [
+        a[0] * b[0] + a[1] * b[3],
+        a[0] * b[1] + a[1] * b[4],
+        a[0] * b[2] + a[1] * b[5] + a[2],
+        a[3] * b[0] + a[4] * b[3],
+        a[3] * b[1] + a[4] * b[4],
+        a[3] * b[2] + a[4] * b[5] + a[5],
+    ]
+}
+
+fn invert(m: &Affine) -> Option<Affine> {
+    let det = m[0] * m[4] - m[1] * m[3];
+    if det.abs() < 1e-12 || !det.is_finite() {
+        return None;
+    }
+    let (a, b, d, e) = (m[4] / det, -m[1] / det, -m[3] / det, m[0] / det);
+    Some([a, b, -(a * m[2] + b * m[5]), d, e, -(d * m[2] + e * m[5])])
+}
+
+/// The linear map `[a, b, d, e]` about `pivot`.
+fn about(l: [f64; 4], pivot: (f64, f64)) -> Affine {
+    [l[0], l[1], pivot.0 - l[0] * pivot.0 - l[1] * pivot.1, l[2], l[3], pivot.1 - l[2] * pivot.0 - l[3] * pivot.1]
+}
+
+fn rotation(radians: f64) -> [f64; 4] {
+    let (s, c) = radians.sin_cos();
+    [c, -s, s, c]
+}
+
+fn is_identity(m: &Affine) -> bool {
+    m.iter().zip(IDENTITY).all(|(a, b)| (a - b).abs() < 1e-9)
+}
+
+impl Transform {
+    /// The box's corners on the canvas: top left, top right, bottom right, bottom left.
+    pub fn corners(&self) -> [(f64, f64); 4] {
+        let (x0, y0, x1, y1) = self.rect;
+        [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| apply(&self.m, p))
+    }
+
+    /// Where a point of the original shows now (through the box and the rotation).
+    pub fn to_canvas(&self, p: (f64, f64)) -> (f64, f64) {
+        let (s, r) = (self.src, self.rect);
+        let u = if s.2 > s.0 { (p.0 - s.0) / (s.2 - s.0) } else { 0.0 };
+        let v = if s.3 > s.1 { (p.1 - s.1) / (s.3 - s.1) } else { 0.0 };
+        apply(&self.m, (r.0 + u * (r.2 - r.0), r.1 + v * (r.3 - r.1)))
+    }
+
+    /// The middle of the box, on the canvas.
+    pub fn centre(&self) -> (f64, f64) {
+        let (x0, y0, x1, y1) = self.rect;
+        apply(&self.m, ((x0 + x1) / 2.0, (y0 + y1) / 2.0))
+    }
+
+    /// How far it is turned, in degrees (-180..=180).
+    pub fn angle(&self) -> f64 {
+        self.m[3].atan2(self.m[0]).to_degrees()
+    }
+
+    /// Changed from how it was lifted?
+    pub fn changed(&self) -> bool {
+        self.rect != self.src || !is_identity(&self.m)
+    }
 }
 
 /// How near (screen pixels) the pen must be to a handle to take it.
@@ -721,7 +805,7 @@ impl Editor {
 
     pub fn has_unsaved_changes(&self) -> bool {
         // A lasso transform not yet put down counts once it was scaled or moved.
-        self.autosaver.has_unsaved_changes() || self.transform.as_ref().is_some_and(|t| t.rect != t.src)
+        self.autosaver.has_unsaved_changes() || self.transform.as_ref().is_some_and(|t| t.changed())
     }
 
     pub fn is_busy_saving(&self) -> bool {
@@ -740,6 +824,10 @@ impl Editor {
     /// The stabilizer's delay leash on screen, while a stroke uses it.
     pub fn leash(&self) -> Option<Leash> {
         let Interaction::Stroke(s) = &self.interaction else { return None };
+        // A straightened stroke is a line to the pen: nothing trails.
+        if self.track.as_ref().is_some_and(|t| t.straight) {
+            return None;
+        }
         let (b, p, r) = s.leash()?;
         Some(Leash { brush: self.view.to_screen(b.x, b.y), pen: self.view.to_screen(p.x, p.y), radius: r * self.view.zoom })
     }
@@ -935,8 +1023,11 @@ impl Editor {
         } else if tool.is_shape() {
             Interaction::Shape { tool, start: c, end: c }
         } else if tool == Tool::LassoTransform {
-            match self.transform_handle_at(at) {
-                Some(handle) => Interaction::TransformDrag { handle, start: c, from: self.transform.as_ref().expect("a handle").rect },
+            match self.transform_handle_at(at, mods.ctrl) {
+                Some(handle) => {
+                    let t = self.transform.as_ref().expect("a handle");
+                    Interaction::TransformDrag { handle, start: c, from: t.rect, from_m: t.m }
+                }
                 None => {
                     // Away from the box: the part goes down, and a new outline starts.
                     self.commit_transform();
@@ -1165,10 +1256,11 @@ impl Editor {
                 self.view.zoom_by(factor, anchor);
             }
             Interaction::Pick { all_layers } => pick = Some(*all_layers),
-            Interaction::TransformDrag { handle, start, from } => {
-                let rect = drag_box(*handle, *from, *start, canvas, shift);
+            Interaction::TransformDrag { handle, start, from, from_m } => {
+                let (rect, m) = drag_transform(*handle, *from, from_m, *start, canvas, shift);
                 if let Some(t) = &mut self.transform {
                     t.rect = rect;
+                    t.m = m;
                     t.pending = true;
                 }
             }
@@ -1422,9 +1514,9 @@ impl Editor {
         let src = (x0 as f64, y0 as f64, x1 as f64, y1 as f64);
         let origin: HashSet<TileKey> = lifted.tile_keys().collect();
         let lifted = select::Lifted::new(&lifted, (x0 as i32, y0 as i32, x1 as i32, y1 as i32));
-        self.transform = Some(Transform { layer: a, before: Box::new(self.doc.clone()), rest, lifted, src, rect: src, outline: points, shown: origin.clone(), origin, pending: false });
+        self.transform = Some(Transform { layer: a, before: Box::new(self.doc.clone()), rest, lifted, src, rect: src, outline: points, shown: origin.clone(), origin, pending: false, m: IDENTITY });
         self.update_transform();
-        self.notice(NoticeKind::Info, "Drag a corner or side to scale (Shift keeps the shape), inside to move. Enter puts it down, Escape cancels.");
+        self.notice(NoticeKind::Info, "Drag a corner or side to scale (Shift keeps the shape), inside to move, just outside a corner to turn it, Ctrl + a side to slant it. Enter puts it down, Escape cancels.");
     }
 
     /// Shows the part scaled into its box on its layer.
@@ -1432,7 +1524,21 @@ impl Editor {
         let size = (self.doc.width, self.doc.height);
         let Some(t) = &mut self.transform else { return };
         t.pending = false;
-        let floating = t.lifted.scaled(t.rect, size);
+        let floating = if is_identity(&t.m) {
+            t.lifted.scaled(t.rect, size)
+        } else {
+            // Canvas point -> point of the box -> point of the original.
+            let (s, r) = (t.src, t.rect);
+            let (kx, ky) = ((s.2 - s.0) / (r.2 - r.0).max(1e-9), (s.3 - s.1) / (r.3 - r.1).max(1e-9));
+            let to_box = invert(&t.m).unwrap_or(IDENTITY);
+            let to_src = compose(&[kx, 0.0, s.0 - r.0 * kx, 0.0, ky, s.1 - r.1 * ky], &to_box);
+            let c = t.corners();
+            let xs = c.map(|p| p.0);
+            let ys = c.map(|p| p.1);
+            let min = |v: [f64; 4]| v.into_iter().fold(f64::INFINITY, f64::min);
+            let max = |v: [f64; 4]| v.into_iter().fold(f64::NEG_INFINITY, f64::max);
+            t.lifted.mapped(to_src, (min(xs) - 1.0, min(ys) - 1.0, max(xs) + 1.0, max(ys) + 1.0), size)
+        };
         let mut pixels = t.rest.clone();
         select::put_down(&mut pixels, &floating);
         let now: HashSet<TileKey> = floating.tile_keys().collect();
@@ -1450,7 +1556,7 @@ impl Editor {
     /// layer is left exactly as it was.
     pub fn commit_transform(&mut self) {
         let Some(t) = self.transform.take() else { return };
-        if t.rect == t.src {
+        if !t.changed() {
             self.restore_layer(&t);
             return;
         }
@@ -1470,6 +1576,30 @@ impl Editor {
         self.update_transform();
     }
 
+    /// Flips the lasso transform's part left to right (`horizontal`) or upside down, in its own
+    /// frame (a turned part flips along its own sides).
+    pub fn flip_transform(&mut self, horizontal: bool) {
+        let Some(t) = &mut self.transform else { return };
+        let (x0, y0, x1, y1) = t.rect;
+        let l = if horizontal { [-1.0, 0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0, -1.0] };
+        t.m = compose(&t.m, &about(l, ((x0 + x1) / 2.0, (y0 + y1) / 2.0)));
+        self.update_transform();
+    }
+
+    /// Turns the lasso transform's part by `degrees` (clockwise on screen) about its middle.
+    pub fn rotate_transform(&mut self, degrees: f64) {
+        let Some(t) = &mut self.transform else { return };
+        t.m = compose(&about(rotation(degrees.to_radians()), t.centre()), &t.m);
+        self.update_transform();
+    }
+
+    /// Turns the lasso transform's part to `degrees`.
+    pub fn set_transform_angle(&mut self, degrees: f64) {
+        let Some(t) = &self.transform else { return };
+        let by = degrees - t.angle();
+        self.rotate_transform(by);
+    }
+
     /// Escape: the part goes back as it was.
     pub fn cancel_transform(&mut self) {
         if let Some(t) = self.transform.take() {
@@ -1486,22 +1616,46 @@ impl Editor {
     }
 
     /// The handle of the lasso transform's box under a screen point, if any.
-    fn transform_handle_at(&self, at: (f64, f64)) -> Option<Handle> {
+    fn transform_handle_at(&self, at: (f64, f64), ctrl: bool) -> Option<Handle> {
         let t = self.transform.as_ref()?;
         let (x0, y0, x1, y1) = t.rect;
-        let near = |c: (f64, f64)| {
+        let dist = |c: (f64, f64)| {
             let s = self.view.to_screen(c.0, c.1);
-            (s.0 - at.0).hypot(s.1 - at.1) <= HANDLE_REACH
+            (s.0 - at.0).hypot(s.1 - at.1)
         };
-        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        if let Some(i) = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().position(near) {
+        let near = |c: (f64, f64)| dist(c) <= HANDLE_REACH;
+        if self.transform_rotate_knob().is_some_and(|k| (k.0 - at.0).hypot(k.1 - at.1) <= HANDLE_REACH) {
+            return Some(Handle::Rotate);
+        }
+        let corners = t.corners();
+        if let Some(i) = corners.into_iter().position(near) {
             return Some(Handle::Corner(i as u8));
         }
-        if let Some(i) = [(mx, y0), (x1, my), (mx, y1), (x0, my)].into_iter().position(near) {
-            return Some(Handle::Side(i as u8));
+        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let sides = [(mx, y0), (x1, my), (mx, y1), (x0, my)].map(|p| apply(&t.m, p));
+        if let Some(i) = sides.into_iter().position(near) {
+            return Some(if ctrl { Handle::Skew(i as u8) } else { Handle::Side(i as u8) });
         }
         let c = self.view.to_canvas(at.0, at.1);
-        (c.0 >= x0 && c.0 <= x1 && c.1 >= y0 && c.1 <= y1).then_some(Handle::Inside)
+        let inside = invert(&t.m).map(|inv| apply(&inv, c)).is_some_and(|p| p.0 >= x0 && p.0 <= x1 && p.1 >= y0 && p.1 <= y1);
+        if inside {
+            return Some(Handle::Inside);
+        }
+        // Just outside a corner: turn it (as in Clip Studio and Krita).
+        corners.into_iter().any(|c| dist(c) <= HANDLE_REACH * 2.5).then_some(Handle::Rotate)
+    }
+
+    /// The round handle above the lasso transform's box (screen pixels), for turning it.
+    pub fn transform_rotate_knob(&self) -> Option<(f64, f64)> {
+        let t = self.transform.as_ref()?;
+        let (x0, y0, x1, _) = t.rect;
+        let top = apply(&t.m, ((x0 + x1) / 2.0, y0));
+        let (ts, cs) = (self.view.to_screen(top.0, top.1), self.view.to_screen(t.centre().0, t.centre().1));
+        let (dx, dy) = (ts.0 - cs.0, ts.1 - cs.1);
+        let len = dx.hypot(dy);
+        // Straight up from the box's top edge, 26 pixels out.
+        let (ux, uy) = if len > 1e-6 { (dx / len, dy / len) } else { (0.0, -1.0) };
+        Some((ts.0 + ux * 26.0, ts.1 + uy * 26.0))
     }
 
     // ----- selection ------------------------------------------------------------------------
@@ -2323,6 +2477,49 @@ impl Editor {
 pub type CanvasPoint = (f64, f64);
 
 /// Shift while dragging a shape: lines and gradients at multiples of 15°, squares and circles.
+/// The lasso transform's box and map after dragging `handle` from `start` to `at` (canvas
+/// pixels): corners and sides scale in the part's own (turned) frame, inside moves it, the
+/// rotate handle turns it about its middle (Shift: in 15° steps of its whole angle), Ctrl +
+/// a side slants it (the opposite side stays put).
+fn drag_transform(handle: Handle, from: Rect4, from_m: &Affine, start: (f64, f64), at: (f64, f64), shift: bool) -> (Rect4, Affine) {
+    let inv = invert(from_m).unwrap_or(IDENTITY);
+    let (x0, y0, x1, y1) = from;
+    let mid = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    match handle {
+        Handle::Inside => {
+            let mut m = *from_m;
+            m[2] += at.0 - start.0;
+            m[5] += at.1 - start.1;
+            (from, m)
+        }
+        Handle::Corner(_) | Handle::Side(_) => (drag_box(handle, from, apply(&inv, start), apply(&inv, at), shift), *from_m),
+        Handle::Rotate => {
+            let c = apply(from_m, mid);
+            let mut by = (at.1 - c.1).atan2(at.0 - c.0) - (start.1 - c.1).atan2(start.0 - c.0);
+            if shift {
+                let was = from_m[3].atan2(from_m[0]);
+                let step = 15f64.to_radians();
+                by = ((was + by) / step).round() * step - was;
+            }
+            (from, compose(&about(rotation(by), c), from_m))
+        }
+        Handle::Skew(i) => {
+            // The pen's movement in the part's own frame.
+            let (a, b) = (apply(&inv, start), apply(&inv, at));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let (w, h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
+            // The dragged side moves with the pen; the opposite side stays put.
+            let (l, pivot) = match i {
+                0 => ([1.0, -dx / h, 0.0, 1.0], (mid.0, y1)),
+                2 => ([1.0, dx / h, 0.0, 1.0], (mid.0, y0)),
+                1 => ([1.0, 0.0, dy / w, 1.0], (x0, mid.1)),
+                _ => ([1.0, 0.0, -dy / w, 1.0], (x1, mid.1)),
+            };
+            (from, compose(from_m, &about(l, pivot)))
+        }
+    }
+}
+
 /// The lasso transform's box after dragging `handle` from `start` to `at` (canvas pixels).
 /// The opposite corner or side stays put; Shift keeps the box's proportions at a corner. The
 /// box never gets smaller than a pixel and does not turn inside out.
@@ -2331,7 +2528,7 @@ fn drag_box(handle: Handle, from: Rect4, start: (f64, f64), at: (f64, f64), shif
     let (dx, dy) = (at.0 - start.0, at.1 - start.1);
     const MIN: f64 = 1.0;
     match handle {
-        Handle::Inside => (x0 + dx, y0 + dy, x1 + dx, y1 + dy),
+        Handle::Inside | Handle::Rotate | Handle::Skew(_) => (x0 + dx, y0 + dy, x1 + dx, y1 + dy),
         Handle::Side(i) => match i {
             0 => (x0, (y0 + dy).min(y1 - MIN), x1, y1),
             1 => (x0, y0, (x1 + dx).max(x0 + MIN), y1),

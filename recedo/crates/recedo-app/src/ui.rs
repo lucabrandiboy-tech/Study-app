@@ -1403,22 +1403,27 @@ impl AppUi {
         }
         // The lasso transform: the outline drawn, scaled with the part, its box and handles.
         if let Some(t) = &ed.transform {
-            let (s, r) = (t.src, t.rect);
-            let map = |p: (f64, f64)| {
-                let u = if s.2 > s.0 { (p.0 - s.0) / (s.2 - s.0) } else { 0.0 };
-                let v = if s.3 > s.1 { (p.1 - s.1) / (s.3 - s.1) } else { 0.0 };
-                to((r.0 + u * (r.2 - r.0), r.1 + v * (r.3 - r.1)))
-            };
+            let r = t.rect;
+            let map = |p: (f64, f64)| to(t.to_canvas(p));
             let n = t.outline.len();
             for i in 0..n {
                 light.push(egui::Shape::line_segment([map(t.outline[i]), map(t.outline[(i + 1) % n])], Stroke::new(1.0, Color32::from_white_alpha(140))));
             }
-            let c = [to((r.0, r.1)), to((r.2, r.1)), to((r.2, r.3)), to((r.0, r.3))];
+            let c = t.corners().map(to);
             for i in 0..4 {
                 ants(&mut dark, &mut light, c[i], c[(i + 1) % 4]);
             }
             let (mx, my) = ((r.0 + r.2) / 2.0, (r.1 + r.3) / 2.0);
-            for h in c.into_iter().chain([to((mx, r.1)), to((r.2, my)), to((mx, r.3)), to((r.0, my))]) {
+            let sides = [(mx, r.1), (r.2, my), (mx, r.3), (r.0, my)].map(|p| to(crate::editor::apply(&t.m, p)));
+            // The round handle that turns it, on a stalk from the top side.
+            if let Some(k) = ed.transform_rotate_knob() {
+                let k = pt(k);
+                dark.push(egui::Shape::line_segment([sides[0], k], Stroke::new(2.5, Color32::from_black_alpha(150))));
+                light.push(egui::Shape::line_segment([sides[0], k], Stroke::new(1.0, Color32::WHITE)));
+                light.push(egui::Shape::circle_filled(k, 4.5, Color32::WHITE));
+                light.push(egui::Shape::circle_stroke(k, 4.5, Stroke::new(1.0, Color32::from_gray(30))));
+            }
+            for h in c.into_iter().chain(sides) {
                 let b = egui::Rect::from_center_size(h, vec2(7.0, 7.0));
                 light.push(egui::Shape::rect_filled(b, 1.0, Color32::WHITE));
                 light.push(egui::Shape::rect_stroke(b, 1.0, Stroke::new(1.0, Color32::from_gray(30)), egui::StrokeKind::Outside));
@@ -2048,11 +2053,29 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
                 Some(t) => {
                     let (w0, h0) = (t.src.2 - t.src.0, t.src.3 - t.src.1);
                     let (w, h) = (t.rect.2 - t.rect.0, t.rect.3 - t.rect.1);
+                    let mut angle = t.angle().round();
                     ui.label(format!("{w0:.0} × {h0:.0} px, now {w:.0} × {h:.0} px"));
                     let mut pct = (w / w0 * 100.0).round();
                     if ui.add(egui::Slider::new(&mut pct, 5.0..=400.0).logarithmic(true).text("Size").suffix(" %").max_decimals(0)).on_hover_text("Scales it evenly about its middle").changed() {
                         ed.scale_transform(pct);
                     }
+                    if ui.add(egui::Slider::new(&mut angle, -180.0..=180.0).text("Angle").suffix("°").max_decimals(0)).on_hover_text("Turns it about its middle (or drag just outside a corner, or the round handle; Shift: 15° steps)").changed() {
+                        ed.set_transform_angle(angle);
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Flip left-right").clicked() {
+                            ed.flip_transform(true);
+                        }
+                        if ui.button("Flip up-down").clicked() {
+                            ed.flip_transform(false);
+                        }
+                        if ui.button("Turn left 90°").clicked() {
+                            ed.rotate_transform(-90.0);
+                        }
+                        if ui.button("Turn right 90°").clicked() {
+                            ed.rotate_transform(90.0);
+                        }
+                    });
                     ui.horizontal(|ui| {
                         if ui.button("Put down (Enter)").clicked() {
                             ed.commit_transform();
@@ -2063,7 +2086,7 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
                     });
                 }
             }
-            ui.weak("Drag a corner to scale (Shift keeps the shape), the middle of a side to stretch one way, inside to move. Another tool puts it down too.");
+            ui.weak("Drag a corner to scale (Shift keeps the shape), the middle of a side to stretch one way, inside to move. Drag just outside a corner or the round handle to turn it, Ctrl + the middle of a side to slant it. Another tool puts it down too.");
         }
         Tool::Pan => {
             ui.strong("Pan");

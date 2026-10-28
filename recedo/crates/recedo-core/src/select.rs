@@ -321,7 +321,15 @@ pub struct Lifted {
     pub w: u32,
     pub h: u32,
     px: Vec<[u8; 4]>,
+    /// The same, premultiplied (0..=1), for [`Lifted::mapped`].
+    pm: Vec<[f32; 4]>,
+    /// For each 16 x 16 block of the copy: does it have any paint? (Turning mostly-empty
+    /// line art skips the empty parts.)
+    blocks: Vec<bool>,
 }
+
+/// The side of [`Lifted`]'s paint blocks.
+const BLOCK: usize = 16;
 
 impl Lifted {
     /// Copies the area `(x0, y0, x1, y1)` (exclusive) of `layer`.
@@ -333,7 +341,35 @@ impl Lifted {
                 px.push(layer.pixel(x, y));
             }
         }
-        Lifted { x0, y0, w, h, px }
+        let pm: Vec<[f32; 4]> = px
+            .iter()
+            .map(|&[r, g, b, a]| {
+                let a = a as f32 / 255.0;
+                [r as f32 / 255.0 * a, g as f32 / 255.0 * a, b as f32 / 255.0 * a, a]
+            })
+            .collect();
+        let (bw, bh) = ((w as usize).div_ceil(BLOCK), (h as usize).div_ceil(BLOCK));
+        let mut blocks = vec![false; bw * bh];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                if px[y * w as usize + x][3] != 0 {
+                    blocks[(y / BLOCK) * bw + x / BLOCK] = true;
+                }
+            }
+        }
+        Lifted { x0, y0, w, h, px, pm, blocks }
+    }
+
+    /// Is there paint anywhere in the copy's rectangle (x0..=x1, y0..=y1, its own pixels)?
+    fn paint_in(&self, x0: i64, y0: i64, x1: i64, y1: i64) -> bool {
+        let bw = (self.w as usize).div_ceil(BLOCK) as i64;
+        let bh = (self.h as usize).div_ceil(BLOCK) as i64;
+        let (bx0, by0) = ((x0.max(0) / BLOCK as i64), (y0.max(0) / BLOCK as i64));
+        let (bx1, by1) = ((x1.min(self.w as i64 - 1) / BLOCK as i64).min(bw - 1), (y1.min(self.h as i64 - 1) / BLOCK as i64).min(bh - 1));
+        if x1 < 0 || y1 < 0 || bx0 > bx1 || by0 > by1 {
+            return false;
+        }
+        (by0..=by1).any(|by| (bx0..=bx1).any(|bx| self.blocks[(by * bw + bx) as usize]))
     }
 
     /// The pixel at (x, y) of the copy, premultiplied, 0..=1.
@@ -429,6 +465,98 @@ impl Lifted {
                 tx += 1;
             }
             band_y += t;
+        }
+        out
+    }
+}
+
+impl Lifted {
+    /// The pixels put through any affine map (rotated, skewed, flipped, scaled), as a layer
+    /// holding only them, cut to a `width` × `height` canvas. `to_src` takes a canvas point
+    /// of the result to the canvas point of the original it shows (x' = a·x + b·y + c,
+    /// y' = d·x + e·y + f); `bounds` (x0, y0, x1, y1) is where the result can be. Each new
+    /// pixel blends the four original pixels round its point (past the original's edge is
+    /// see-through, so turned edges come out smooth); where the result is smaller than the
+    /// original it averages up to 4 × 4 such samples, so thin lines stay. A flip maps pixel
+    /// centres onto pixel centres and is exact.
+    pub fn mapped(&self, to_src: [f64; 6], bounds: (f64, f64, f64, f64), (width, height): (u32, u32)) -> TiledLayer {
+        use rayon::prelude::*;
+        let [a, b, c, d, e, f] = to_src;
+        let px0 = (bounds.0.floor() as i64).max(0);
+        let py0 = (bounds.1.floor() as i64).max(0);
+        let px1 = (bounds.2.ceil() as i64).min(width as i64);
+        let py1 = (bounds.3.ceil() as i64).min(height as i64);
+        let mut out = TiledLayer::new();
+        if px0 >= px1 || py0 >= py1 {
+            return out;
+        }
+        // How much of the original one new pixel covers: slants and turns keep the area (one
+        // sample, so no edge gets blurred), shrinking to a third covers 9 (3 x 3 samples).
+        let area = (a * e - b * d).abs();
+        let k = (area.sqrt() - 1e-9).ceil().clamp(1.0, 4.0) as usize;
+        let t = TILE as i64;
+        let keys: Vec<(i64, i64)> = (py0.div_euclid(t)..=(py1 - 1).div_euclid(t)).flat_map(|ty| (px0.div_euclid(t)..=(px1 - 1).div_euclid(t)).map(move |tx| (tx, ty))).collect();
+        let sample = |sx: f64, sy: f64| -> [f32; 4] {
+            // Bilinear between pixel centres, in the copy's own coordinates.
+            let (u, v) = (sx - self.x0 as f64 - 0.5, sy - self.y0 as f64 - 0.5);
+            let (x, y) = (u.floor(), v.floor());
+            let (fx, fy) = ((u - x) as f32, (v - y) as f32);
+            let mut acc = [0.0f32; 4];
+            for (ox, oy, w) in [(0, 0, (1.0 - fx) * (1.0 - fy)), (1, 0, fx * (1.0 - fy)), (0, 1, (1.0 - fx) * fy), (1, 1, fx * fy)] {
+                let (cx, cy) = (x as i64 + ox, y as i64 + oy);
+                if w <= 0.0 || cx < 0 || cy < 0 || cx >= self.w as i64 || cy >= self.h as i64 {
+                    continue;
+                }
+                let p = self.pm[cy as usize * self.w as usize + cx as usize];
+                for i in 0..4 {
+                    acc[i] += p[i] * w;
+                }
+            }
+            acc
+        };
+        let tiles: Vec<_> = keys
+            .par_iter()
+            .filter_map(|&(tx, ty)| {
+                // Where this tile's pixels come from in the copy (its corners mapped, a pixel
+                // more all round for the blending): nothing there, nothing to do.
+                let corners = [(tx * t, ty * t), ((tx + 1) * t, ty * t), (tx * t, (ty + 1) * t), ((tx + 1) * t, (ty + 1) * t)]
+                    .map(|(x, y)| (a * x as f64 + b * y as f64 + c - self.x0 as f64, d * x as f64 + e * y as f64 + f - self.y0 as f64));
+                let lo = corners.iter().fold((f64::INFINITY, f64::INFINITY), |m, p| (m.0.min(p.0), m.1.min(p.1)));
+                let hi = corners.iter().fold((f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| (m.0.max(p.0), m.1.max(p.1)));
+                if !self.paint_in(lo.0.floor() as i64 - 2, lo.1.floor() as i64 - 2, hi.0.ceil() as i64 + 2, hi.1.ceil() as i64 + 2) {
+                    return None;
+                }
+                let mut tile = Box::new([0u8; crate::tiles::TILE_BYTES]);
+                let mut any = false;
+                for y in (ty * t).max(py0)..((ty + 1) * t).min(py1) {
+                    for x in (tx * t).max(px0)..((tx + 1) * t).min(px1) {
+                        let mut acc = [0.0f32; 4];
+                        for j in 0..k {
+                            for i in 0..k {
+                                let (qx, qy) = (x as f64 + (i as f64 + 0.5) / k as f64, y as f64 + (j as f64 + 0.5) / k as f64);
+                                let s = sample(a * qx + b * qy + c, d * qx + e * qy + f);
+                                for n in 0..4 {
+                                    acc[n] += s[n];
+                                }
+                            }
+                        }
+                        let kk = (k * k) as f32;
+                        let alpha = acc[3] / kk;
+                        if alpha * 255.0 < 0.5 {
+                            continue;
+                        }
+                        let q = |v: f32| (v * 255.0 + 0.5) as u8;
+                        let inv = 1.0 / acc[3];
+                        let at = (((y - ty * t) * t + (x - tx * t)) * 4) as usize;
+                        tile[at..at + 4].copy_from_slice(&[q(acc[0] * inv), q(acc[1] * inv), q(acc[2] * inv), q(alpha)]);
+                        any = true;
+                    }
+                }
+                any.then(|| ((tx as i32, ty as i32), std::sync::Arc::new(crate::tiles::Tile(tile))))
+            })
+            .collect();
+        for (key, tile) in tiles {
+            out.put_tile(key, Some(tile));
         }
         out
     }
@@ -693,5 +821,71 @@ mod tests {
         // A quarter the size: the 1 px line covers a quarter of a pixel row.
         let row: Vec<u8> = (0..25).map(|x| small.pixel(x, 12)[3]).collect();
         assert!(row.iter().all(|&a| (55..=72).contains(&a)), "{row:?}");
+    }
+
+    /// A small painting to transform: a 30 x 20 block of different colours with see-through
+    /// parts, at (100, 60).
+    fn pattern() -> (TiledLayer, Lifted) {
+        let mut l = TiledLayer::new();
+        for y in 0..20 {
+            for x in 0..30 {
+                let a = if (x + y) % 7 == 0 { 0 } else { 120 + ((x * 5 + y * 3) % 136) as u8 };
+                l.set_pixel(100 + x, 60 + y, [(x * 8) as u8, (y * 12) as u8, ((x * y) % 255) as u8, a]);
+            }
+        }
+        let lifted = Lifted::new(&l, (100, 60, 130, 80));
+        (l, lifted)
+    }
+
+    #[test]
+    fn mapped_copies_flips_and_quarter_turns_exactly() {
+        let (l, lifted) = pattern();
+        let size = (400, 300);
+        // The same place: the same pixels.
+        let same = lifted.mapped([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], (100.0, 60.0, 130.0, 80.0), size);
+        for y in 60..80 {
+            for x in 100..130 {
+                let (a, b) = (l.pixel(x, y), same.pixel(x, y));
+                assert!(a == b || (a[3] == 0 && b[3] == 0), "{x},{y}: {a:?} vs {b:?}");
+            }
+        }
+        // Flipped left to right about x = 115: x' = 230 - x.
+        let flip = lifted.mapped([-1.0, 0.0, 230.0, 0.0, 1.0, 0.0], (100.0, 60.0, 130.0, 80.0), size);
+        for y in 60..80 {
+            for x in 100..130 {
+                let (a, b) = (l.pixel(229 - x, y), flip.pixel(x, y));
+                assert!(a == b || (a[3] == 0 && b[3] == 0), "flip {x},{y}");
+            }
+        }
+        // A quarter turn about (115, 70): the result's (x, y) shows the original's
+        // (115 + (y - 70), 70 - (x - 115)).
+        let turn = lifted.mapped([0.0, 1.0, 45.0, -1.0, 0.0, 185.0], (105.0, 55.0, 125.0, 85.0), size);
+        for y in 55..85 {
+            for x in 105..125 {
+                let (a, b) = (l.pixel(115 + (y - 70), 69 - (x - 115)), turn.pixel(x, y));
+                assert!(a == b || (a[3] == 0 && b[3] == 0), "turn {x},{y}: {a:?} vs {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn mapped_turns_keep_the_paint_and_shrinking_keeps_thin_lines() {
+        let (l, lifted) = pattern();
+        let mass = |l: &TiledLayer| (0..300).flat_map(|y| (0..400).map(move |x| (x, y))).map(|(x, y)| l.pixel(x, y)[3] as f64).sum::<f64>();
+        // 45 degrees about (115, 70).
+        let (s, c) = (std::f64::consts::FRAC_PI_4.sin(), std::f64::consts::FRAC_PI_4.cos());
+        let to_src = [c, s, 115.0 - c * 115.0 - s * 70.0, -s, c, 70.0 + s * 115.0 - c * 70.0];
+        let turned = lifted.mapped(to_src, (90.0, 45.0, 140.0, 95.0), (400, 300));
+        let (m0, m1) = (mass(&l), mass(&turned));
+        assert!((m1 / m0 - 1.0).abs() < 0.03, "paint kept: {m0} -> {m1}");
+        // A one-pixel line shrunk to a third still shows along its length.
+        let mut line = TiledLayer::new();
+        for x in 0..90 {
+            line.set_pixel(10 + x, 20, [0, 0, 0, 255]);
+        }
+        let lifted = Lifted::new(&line, (10, 10, 100, 30));
+        let small = lifted.mapped([3.0, 0.0, -20.0, 0.0, 3.0, -40.0], (10.0, 16.0, 40.0, 24.0), (400, 300));
+        let shown = (10..40).filter(|&x| (16..24).any(|y| small.pixel(x, y)[3] > 40)).count();
+        assert!(shown >= 29, "{shown} of 30 columns show the line");
     }
 }

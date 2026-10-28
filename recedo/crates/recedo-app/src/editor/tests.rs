@@ -1330,3 +1330,68 @@ fn holding_still_straightens_a_nearly_straight_stroke() {
     hold_stroke(&mut e, &wobbly, 700, None);
     assert!(off_line(&e, (50.0, 100.0), (330.0, 160.0)).0 > 7.0, "off: as drawn");
 }
+
+/// The lasso transform turns, slants and flips the part, with the pen as a person does it
+/// (just outside a corner, Ctrl + a side) and with the buttons; Enter makes one undo step.
+#[test]
+fn the_lasso_transform_turns_slants_and_flips() {
+    let mut e = editor();
+    let a = e.active;
+    // A 60 x 20 bar: red on the left half, green on the right half, at (100..160, 120..140).
+    for y in 120..140 {
+        for x in 100..160 {
+            e.doc.layers[a].pixels.set_pixel(x, y, if x < 130 { [255, 0, 0, 255] } else { [0, 200, 0, 255] });
+        }
+    }
+    let original = e.doc.layers[a].pixels.clone();
+    e.tool = Tool::LassoTransform;
+    let ring = [(95.0, 115.0), (165.0, 115.0), (165.0, 145.0), (95.0, 145.0), (95.0, 117.0)];
+    outline(&mut e, &ring, Modifiers::default());
+    let t = e.transform.as_ref().expect("lifted");
+    let c = t.centre();
+    let corner = t.corners()[2];
+    // Turn a quarter: from just outside the bottom-right corner round the middle, Shift for
+    // 15° steps.
+    let (dx, dy) = (corner.0 - c.0, corner.1 - c.1);
+    let len = dx.hypot(dy);
+    // 20 px out: past the corner's own handle (12 px), in the turning zone.
+    let start = (corner.0 + dx / len * 20.0, corner.1 + dy / len * 20.0);
+    let turned = (c.0 - (start.1 - c.1), c.1 + (start.0 - c.0));
+    let shift = Modifiers { shift: true, ..Modifiers::default() };
+    drag_with_mods(&mut e, start, turned, shift);
+    let t = e.transform.as_ref().unwrap();
+    assert!((t.angle() - 90.0).abs() < 0.01, "turned a quarter: {}", t.angle());
+    // The bar now stands upright: red above the middle, green below.
+    let px = |e: &Editor, x: f64, y: f64| e.doc.layers[a].pixels.pixel(x as i32, y as i32);
+    assert_eq!(px(&e, c.0, c.1 - 20.0), [255, 0, 0, 255], "red on top");
+    assert_eq!(px(&e, c.0, c.1 + 20.0), [0, 200, 0, 255], "green below");
+    assert_eq!(px(&e, c.0 - 25.0, c.1)[3], 0, "nothing left and right any more");
+    // Flip it upside down in its own frame (left-right of the bar): green on top.
+    e.flip_transform(true);
+    assert_eq!(px(&e, c.0, c.1 - 20.0), [0, 200, 0, 255], "flipped: green on top");
+    e.commit_transform();
+    assert_eq!(e.history.entries().0, vec!["Transform"]);
+    e.undo();
+    assert_eq!(e.doc.layers[a].pixels, original, "undo: as before");
+    // Slant: Ctrl + drag the bottom side 30 px right: the bottom edge moves, the top stays.
+    outline(&mut e, &ring, Modifiers::default());
+    let t = e.transform.as_ref().unwrap();
+    let r = t.rect;
+    let bottom = ((r.0 + r.2) / 2.0, r.3);
+    let ctrl = Modifiers { ctrl: true, ..Modifiers::default() };
+    drag_with_mods(&mut e, bottom, (bottom.0 + 30.0, bottom.1), ctrl);
+    let t = e.transform.as_ref().unwrap();
+    let k = t.corners();
+    assert!((k[0].0 - r.0).abs() < 0.5 && (k[3].0 - (r.0 + 30.0)).abs() < 0.5, "top left stays, bottom left moved 30: {k:?}");
+    // Each row moves right by 30 px times how far down the box it is: the bar's top row
+    // (y 120) by about 5, its bottom row (y 139) by about 25.
+    let shift = |y: f64| 30.0 * (y + 0.5 - r.1) / (r.3 - r.1);
+    // (2 px in from the edge, which is soft.)
+    assert_eq!(px(&e, 100.0 + shift(120.0) + 2.0, 120.0), [255, 0, 0, 255], "top row");
+    assert_eq!(px(&e, 100.0 + shift(139.0) + 2.0, 139.0), [255, 0, 0, 255], "bottom row, further right");
+    assert_eq!(px(&e, 100.0 + shift(139.0) - 2.0, 139.0)[3], 0, "and nothing just before it");
+    assert_eq!(px(&e, 101.0, 139.0)[3], 0, "the bottom row's old start is empty");
+    assert_eq!(px(&e, 160.0 + shift(120.0) - 2.0, 120.0), [0, 200, 0, 255], "the right end moved too");
+    e.cancel_transform();
+    assert_eq!(e.doc.layers[a].pixels, original, "Escape: as before");
+}
