@@ -15,10 +15,12 @@ pub enum Panel {
     Color,
     Layers,
     History,
+    /// The minimap of the whole painting, the clock, flip and symmetry.
+    Navigator,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 5] = [Panel::Tools, Panel::ToolOptions, Panel::Color, Panel::Layers, Panel::History];
+    pub const ALL: [Panel; 6] = [Panel::Tools, Panel::ToolOptions, Panel::Color, Panel::Layers, Panel::History, Panel::Navigator];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -27,6 +29,7 @@ impl Panel {
             Panel::Color => "Colour",
             Panel::Layers => "Layers",
             Panel::History => "History",
+            Panel::Navigator => "Navigator",
         }
     }
 }
@@ -70,7 +73,11 @@ pub struct Floating {
 /// The layout's version: an older saved layout is replaced by the current default once.
 /// 2: the Clip Studio-like layout (colour, sub tool and tool property on the left).
 /// 3: the same, narrower (the compact interface).
-pub const LAYOUT_VERSION: u32 = 3;
+/// 4: the Navigator panel at the top of the right dock (added to version 3 layouts as they are).
+pub const LAYOUT_VERSION: u32 = 4;
+
+/// The Navigator's share of the right dock (its minimap, clock and buttons).
+const NAVIGATOR_WEIGHT: f32 = 0.35;
 
 /// The Colour panel's share of the left dock: what the wheel needs, no empty space below.
 const COLOR_WEIGHT: f32 = 1.15;
@@ -98,7 +105,7 @@ impl Default for DockLayout {
         DockLayout {
             version: LAYOUT_VERSION,
             left: vec![Stack::weighted(&[Panel::Color], COLOR_WEIGHT), Stack::weighted(&[Panel::Tools], 1.1), Stack::weighted(&[Panel::ToolOptions], 1.5)],
-            right: vec![Stack::of(&[Panel::Layers, Panel::History])],
+            right: vec![Stack::weighted(&[Panel::Navigator], NAVIGATOR_WEIGHT), Stack::of(&[Panel::Layers, Panel::History])],
             floating: Vec::new(),
             left_width: LEFT_WIDTH,
             right_width: 200.0,
@@ -201,8 +208,15 @@ impl DockLayout {
     /// Keeps a loaded layout valid: each panel at most once, no empty stacks, sane widths.
     /// A layout from before the current version becomes the current default.
     pub fn sanitize(&mut self) {
-        if self.version < LAYOUT_VERSION {
+        if self.version < 3 {
             *self = DockLayout::default();
+        }
+        if self.version == 3 {
+            // Laid out before the Navigator: it goes on top of the right dock, the rest stays.
+            if !self.is_open(Panel::Navigator) {
+                self.right.insert(0, Stack::weighted(&[Panel::Navigator], NAVIGATOR_WEIGHT));
+            }
+            self.version = LAYOUT_VERSION;
         }
         // The standard left dock as first saved (with empty space under the colour wheel).
         let weights: Vec<f32> = self.left.iter().map(|s| s.weight).collect();
@@ -467,7 +481,8 @@ mod tests {
         assert!(Panel::ALL.iter().all(|&p| d.is_open(p)));
         d.remove(Panel::History);
         assert!(!d.is_open(Panel::History));
-        assert_eq!(d.right[0].tabs, vec![Panel::Layers]);
+        // (The right dock: the Navigator, then Layers and History.)
+        assert_eq!(d.right[1].tabs, vec![Panel::Layers]);
         d.toggle(Panel::History);
         assert!(d.is_open(Panel::History));
         assert_eq!(d.right.last().unwrap().tabs.last(), Some(&Panel::History));
@@ -484,9 +499,9 @@ mod tests {
         d.move_to(Panel::History, Target::Stack(Side::Left, 0));
         assert_eq!(d.left[0].tabs, vec![Panel::Color, Panel::History]);
         assert_eq!(d.left[0].active, 1);
-        // Layers was alone on the right now; moving it into a left stack empties the right.
+        // Layers was alone in its stack now; moving it into a left stack leaves the Navigator.
         d.move_to(Panel::Layers, Target::Stack(Side::Left, 2));
-        assert!(d.right.is_empty());
+        assert_eq!(d.right.len(), 1);
         assert_eq!(d.left[2].tabs, vec![Panel::ToolOptions, Panel::Layers]);
         // Moving the only tab of a stack onto a later stack whose index shifts.
         let mut e = DockLayout::default();
@@ -503,14 +518,34 @@ mod tests {
         assert!(all_once(&d) && all_once(&e));
     }
 
+    /// A layout saved before the Navigator gets it on top of the right dock, and nothing else
+    /// moves; the default has it there.
+    #[test]
+    fn the_navigator_joins_an_older_layout_once() {
+        let mut old = DockLayout::default();
+        old.remove(Panel::Navigator);
+        old.version = 3;
+        old.left_width = 250.0;
+        old.move_to(Panel::History, Target::Stack(Side::Left, 0));
+        let before = old.clone();
+        old.sanitize();
+        assert_eq!(old.right[0].tabs, vec![Panel::Navigator]);
+        assert_eq!((old.left.clone(), old.left_width, old.right[1..].to_vec()), (before.left, 250.0, before.right));
+        // Closed by the user afterwards: it stays closed.
+        old.remove(Panel::Navigator);
+        old.sanitize();
+        assert!(!old.is_open(Panel::Navigator));
+        assert_eq!(DockLayout::default().right[0].tabs, vec![Panel::Navigator]);
+    }
+
     #[test]
     fn active_tab_stays_valid() {
         let mut d = DockLayout::default();
-        d.right[0].active = 1; // History
+        d.right[1].active = 1; // History
         d.remove(Panel::Layers);
-        assert_eq!(d.right[0].tabs[d.right[0].active], Panel::History);
+        assert_eq!(d.right[1].tabs[d.right[1].active], Panel::History);
         d.remove(Panel::History);
-        assert!(d.right.is_empty());
+        assert_eq!(d.right.len(), 1, "only the Navigator's stack is left");
     }
 
     #[test]

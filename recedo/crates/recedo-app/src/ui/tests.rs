@@ -938,6 +938,68 @@ fn the_stabilizer_string_shows_while_the_line_trails() {
     assert!(s.ed.leash().is_none() && blue(&img, x0, x1) < n / 4, "gone after the pen lifts");
 }
 
+/// The Navigator: its minimap shows the painting, a click there moves the view to it; Flip
+/// mirrors the view; Symmetry X / Y turn the mirror lines on.
+#[test]
+fn the_navigator_moves_the_view_flips_and_turns_symmetry_on() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    // A black block in the painting's top-left corner, painted with a big brush.
+    s.ed.color = [0, 0, 0];
+    s.ed.tools.brush.size = 120.0;
+    s.ed.tools.brush.hardness = 1.0;
+    let mut t = 1_000_000;
+    for y in [60.0, 140.0] {
+        for i in 0..=20 {
+            let p = s.ed.view.to_screen(60.0 + i as f64 * 9.0, y);
+            s.ed.pen(&PenSample::synthetic(t, p.0, p.1, 1.0, true), true, Modifiers::default());
+            t += 4000;
+        }
+        let p = s.ed.view.to_screen(240.0, y);
+        s.ed.pen(&PenSample::synthetic(t, p.0, p.1, 0.0, false), true, Modifiers::default());
+        t += 4000;
+    }
+    s.ui.previews.every = std::time::Duration::ZERO;
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    shot(&g, &mut r, &mut s, out, "26-navigator");
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    let img = shot(&g, &mut r, &mut s, out, "26-navigator");
+    let button = |s: &Session, name: &str| s.ui.navigator_buttons.iter().find(|b| b.0 == name).map(|b| b.1).expect(name);
+    // The minimap shows the painting: black where the block is, white where it is not.
+    let map = button(&s, "map");
+    assert!((map.width() / map.height() - 1280.0 / 720.0).abs() < 0.05, "the map has the painting's shape: {map:?}");
+    let at = |u: f32, v: f32| {
+        let p = map.min + vec2(map.width() * u, map.height() * v);
+        img.pixel(p.x as u32, p.y as u32)
+    };
+    assert!(at(150.0 / 1280.0, 100.0 / 720.0)[0] < 40, "black block on the map: {:?}", at(150.0 / 1280.0, 100.0 / 720.0));
+    assert!(at(0.7, 0.7)[0] > 215, "white paper on the map: {:?}", at(0.7, 0.7));
+    // Click the minimap's lower right: that point comes to the middle of the canvas.
+    s.ed.view.pan(300.0, 200.0);
+    quiet(&g, &mut r, &mut s, click(map.min + vec2(map.width() * 0.75, map.height() * 0.75)));
+    let (vx, vy, vw, vh) = s.ed.viewport;
+    let c = s.ed.view.to_canvas(vx + vw / 2.0, vy + vh / 2.0);
+    assert!((c.0 - 960.0).abs() < 12.0 && (c.1 - 540.0).abs() < 12.0, "the view's middle is now {c:?}");
+    // The buttons under the clock: Flip, then Symmetry X and Y.
+    let button = |s: &Session, name: &str| button(s, name).center();
+    assert!(!s.ed.view.mirror && !s.ed.tools.symmetry_x && !s.ed.tools.symmetry_y);
+    let flip = button(&s, "Flip");
+    assert!(flip.y > map.max.y + 20.0, "under the minimap and the clock");
+    quiet(&g, &mut r, &mut s, click(flip));
+    assert!(s.ed.view.mirror, "Flip mirrors the view");
+    let x = button(&s, "X");
+    quiet(&g, &mut r, &mut s, click(x));
+    let y = button(&s, "Y");
+    quiet(&g, &mut r, &mut s, click(y));
+    assert!(s.ed.tools.symmetry_x && s.ed.tools.symmetry_y, "Symmetry X and Y on");
+    assert!(s.ed.symmetry().x == Some(640.0) && s.ed.symmetry().y == Some(360.0));
+    quiet(&g, &mut r, &mut s, click(flip));
+    assert!(!s.ed.view.mirror, "Flip again: as it was");
+    s.ui.previews.every = super::previews::THUMBNAIL_EVERY;
+}
+
 #[test]
 fn a_small_window_keeps_room_for_the_painting() {
     // The Windows self-test's window: 1008 × 681. The panels give way so the canvas area

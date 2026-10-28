@@ -1395,3 +1395,30 @@ fn the_lasso_transform_turns_slants_and_flips() {
     e.cancel_transform();
     assert_eq!(e.doc.layers[a].pixels, original, "Escape: as before");
 }
+
+/// Symmetry X and Y: a brush stroke is painted four times, mirrored about the painting's
+/// middle; a straightened stroke too; one undo step takes them all.
+#[test]
+fn symmetry_mirrors_brush_strokes_and_straightened_lines() {
+    let mut e = editor();
+    e.tools.symmetry_x = true;
+    e.tools.symmetry_y = true;
+    let a = e.active;
+    stroke(&mut e, 50.0, 30.0, 120.0);
+    let l = &e.doc.layers[a].pixels;
+    // Painting 400 x 300: mirrored at x 200 and y 150.
+    for (x, y) in [(60, 50), (339, 50), (60, 249), (339, 249)] {
+        assert!(l.pixel(x, y)[3] > 200, "a copy at {x},{y}");
+    }
+    assert_eq!(l.pixel(200, 50)[3], 0, "nothing on the mirror line itself");
+    let steps = e.history.entries().1;
+    // Straightened: the four lines are straight too.
+    hold_stroke(&mut e, &shaky_line((40.0, 100.0), (150.0, 130.0), 40, 4.0), 700, None);
+    assert_eq!(e.history.entries().1, steps + 1, "one undo step");
+    let l = &e.doc.layers[a].pixels;
+    // The mirrored line's middle (x' = 400 - 95, y' = 300 - 115).
+    assert!(l.pixel(305, 185)[3] > 200, "the mirrored straight line");
+    e.undo();
+    e.undo();
+    assert_eq!(e.doc.layers[a].pixels.tile_keys().count(), 0, "all copies undone");
+}

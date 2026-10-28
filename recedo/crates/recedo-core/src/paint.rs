@@ -10,9 +10,43 @@ use crate::history::History;
 use crate::stabilizer::{PaintInfo, Stabilizer, StabilizerSettings};
 use crate::tiles::TileKey;
 
+/// Mirror lines for symmetric painting, in canvas pixels: `x` is a vertical line at that x
+/// (left and right mirror each other), `y` a horizontal one.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Symmetry {
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+}
+
+impl Symmetry {
+    /// `p` and its mirror images (1, 2 or 4 points; `p` first). Tilt and rotation are mirrored
+    /// with it, so a tilted pen leans the mirrored way.
+    pub fn copies(&self, p: PaintInfo) -> Vec<PaintInfo> {
+        let mut out = vec![p];
+        if let Some(ax) = self.x {
+            let q = PaintInfo { x: 2.0 * ax - p.x, tilt_x: -p.tilt_x, rotation: (360.0 - p.rotation).rem_euclid(360.0), ..p };
+            out.push(q);
+        }
+        if let Some(ay) = self.y {
+            let n = out.len();
+            for i in 0..n {
+                let q = out[i];
+                out.push(PaintInfo { y: 2.0 * ay - q.y, tilt_y: -q.tilt_y, rotation: (180.0 - q.rotation).rem_euclid(360.0), ..q });
+            }
+        }
+        out
+    }
+
+    pub fn count(&self) -> usize {
+        (1 + self.x.is_some() as usize) * (1 + self.y.is_some() as usize)
+    }
+}
+
 pub struct PaintSession {
     layer: usize,
-    painter: StrokePainter,
+    /// One brush per mirror image (one without symmetry), each its own continuous stroke.
+    painters: Vec<StrokePainter>,
+    symmetry: Symmetry,
     stabilizer: Option<Stabilizer>,
     dirty: HashSet<TileKey>,
 }
@@ -34,6 +68,7 @@ impl PaintSession {
         color: [u8; 3],
         erase: bool,
         stabilizer: StabilizerSettings,
+        symmetry: Symmetry,
         zoom: f64,
         first: PaintInfo,
         now_us: u64,
@@ -48,7 +83,8 @@ impl PaintSession {
         history.record(if erase { "Erase" } else { "Brush stroke" }, doc);
         let mut s = PaintSession {
             layer,
-            painter: StrokePainter::new(brush, color, erase),
+            painters: (0..symmetry.count()).map(|_| StrokePainter::new(brush.clone(), color, erase)).collect(),
+            symmetry,
             stabilizer: stabilizer.enabled.then(|| Stabilizer::start(first, now_us, stabilizer, zoom)),
             dirty: HashSet::new(),
         };
@@ -58,7 +94,9 @@ impl PaintSession {
 
     fn paint(&mut self, doc: &mut Document, p: PaintInfo) {
         if let Some(l) = doc.layers.get_mut(self.layer) {
-            self.painter.add(&mut l.pixels, p, &mut self.dirty);
+            for (painter, q) in self.painters.iter_mut().zip(self.symmetry.copies(p)) {
+                painter.add(&mut l.pixels, q, &mut self.dirty);
+            }
         }
     }
 
@@ -108,7 +146,7 @@ impl PaintSession {
     }
 
     pub fn dabs_painted(&self) -> usize {
-        self.painter.dabs_painted
+        self.painters.iter().map(|p| p.dabs_painted).sum()
     }
 }
 
@@ -128,7 +166,7 @@ mod tests {
         let mut proj = Projection::new(&doc);
         let before = doc.clone();
         let brush = Brush { size: 8.0, size_curve: None, ..Default::default() };
-        let mut s = PaintSession::begin(&mut doc, &mut history, 1, brush, [0, 0, 0], false, StabilizerSettings::default(), 1.0, pt(10.0, 64.0), 0).unwrap();
+        let mut s = PaintSession::begin(&mut doc, &mut history, 1, brush, [0, 0, 0], false, StabilizerSettings::default(), Symmetry::default(), 1.0, pt(10.0, 64.0), 0).unwrap();
         for i in 1..=40 {
             s.add(&mut doc, pt(10.0 + i as f64 * 5.0, 64.0), i * 5000);
             let dirty = s.take_dirty();
@@ -149,7 +187,7 @@ mod tests {
         let mut history = History::default();
         let stab = StabilizerSettings { enabled: true, distance: 40.0, mode: crate::stabilizer::SmoothMode::Average, ..Default::default() };
         let brush = Brush { size: 4.0, size_curve: None, ..Default::default() };
-        let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush, [0, 0, 0], false, stab, 1.0, pt(10.0, 50.0), 0).unwrap();
+        let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush, [0, 0, 0], false, stab, Symmetry::default(), 1.0, pt(10.0, 50.0), 0).unwrap();
         // The pen jumps to x = 250 and is held there.
         s.add(&mut doc, pt(250.0, 50.0), 1000);
         let early = doc.layers[0].pixels.pixel(240, 50)[3];
@@ -167,7 +205,7 @@ mod tests {
         let mut doc = Document::new(64, 64, None);
         let mut h = History::default();
         let go = |doc: &mut Document, h: &mut History, layer| {
-            PaintSession::begin(doc, h, layer, Brush::default(), [0; 3], false, StabilizerSettings::default(), 1.0, pt(5.0, 5.0), 0).map(|_| ())
+            PaintSession::begin(doc, h, layer, Brush::default(), [0; 3], false, StabilizerSettings::default(), Symmetry::default(), 1.0, pt(5.0, 5.0), 0).map(|_| ())
         };
         doc.layers[0].locked = true;
         assert!(go(&mut doc, &mut h, 0).unwrap_err().contains("locked"));
@@ -177,5 +215,33 @@ mod tests {
         assert!(go(&mut doc, &mut h, 7).is_err());
         assert!(!h.can_undo(), "refused strokes leave no undo step");
         assert_eq!(doc.layers[0].pixels.tile_count(), 0);
+    }
+
+    #[test]
+    fn symmetry_mirrors_points_and_strokes() {
+        let p = PaintInfo { x: 10.0, y: 20.0, pressure: 0.5, tilt_x: 30.0, tilt_y: 10.0, rotation: 40.0 };
+        let both = Symmetry { x: Some(50.0), y: Some(100.0) }.copies(p);
+        let xy: Vec<(f64, f64)> = both.iter().map(|q| (q.x, q.y)).collect();
+        assert_eq!(xy, vec![(10.0, 20.0), (90.0, 20.0), (10.0, 180.0), (90.0, 180.0)]);
+        assert_eq!((both[1].tilt_x, both[2].tilt_y), (-30.0, -10.0), "a tilted pen leans the mirrored way");
+        assert_eq!(Symmetry::default().copies(p).len(), 1);
+        // A stroke with a vertical mirror line at x = 64 paints its mirror image exactly.
+        let mut doc = Document::new(128, 64, None);
+        let mut history = History::new(10);
+        let brush = Brush { size: 6.0, hardness: 1.0, size_curve: None, ..Brush::default() };
+        let sym = Symmetry { x: Some(64.0), y: None };
+        let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush, [0, 0, 0], false, StabilizerSettings::default(), sym, 1.0, pt(10.0, 20.0), 0).unwrap();
+        for i in 1..=20 {
+            s.add(&mut doc, pt(10.0 + i as f64, 20.0 + i as f64), i * 1000);
+        }
+        s.end(&mut doc, 30_000);
+        let l = &doc.layers[0].pixels;
+        let painted = (0..64).flat_map(|y| (0..128).map(move |x| (x, y))).filter(|&(x, y)| l.pixel(x, y)[3] > 0).count();
+        assert!(painted > 100);
+        for y in 0..64 {
+            for x in 0..64 {
+                assert_eq!(l.pixel(x, y), l.pixel(127 - x, y), "{x},{y} mirrors {},{y}", 127 - x);
+            }
+        }
     }
 }

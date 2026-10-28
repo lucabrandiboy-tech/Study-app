@@ -34,6 +34,39 @@ pub const TEXT_SANS: &str = "text sans";
 /// Clip Studio-like greys: mid-grey panels, darker bars, a blue-grey selection.
 /// The highlight colour: selected rows and tabs, slider fill.
 pub const ACCENT: Color32 = Color32::from_rgb(64, 110, 186);
+/// A lighter one for lines over pictures (the navigator's view outline).
+const ACCENT_LIGHT: Color32 = Color32::from_rgb(110, 170, 255);
+
+/// The time where the user is, as their system writes it (the browser's own format there),
+/// and the seconds until it next changes.
+pub fn local_time() -> (String, u64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let d = js_sys::Date::new_0();
+        let opts = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&opts, &"hour".into(), &"numeric".into());
+        let _ = js_sys::Reflect::set(&opts, &"minute".into(), &"2-digit".into());
+        let s: String = d.to_locale_time_string_with_options("default", &opts).into();
+        (s, 60 - d.get_seconds() as u64)
+    }
+    #[cfg(all(windows, not(target_arch = "wasm32")))]
+    {
+        use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+        // SAFETY: plain out-parameter call.
+        let st = unsafe {
+            let mut st = std::mem::zeroed();
+            GetLocalTime(&mut st);
+            st
+        };
+        (format!("{:02}:{:02}", st.wHour, st.wMinute), 60 - st.wSecond as u64)
+    }
+    #[cfg(not(any(windows, target_arch = "wasm32")))]
+    {
+        // Elsewhere (the tests on Linux): universal time.
+        let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        (format!("{:02}:{:02}", s / 3600 % 24, s / 60 % 60), 60 - s % 60)
+    }
+}
 
 pub fn apply_theme(ctx: &egui::Context) {
     let g = Color32::from_gray;
@@ -207,6 +240,8 @@ pub struct AppUi {
     pub previews: Previews,
     /// Where the tool strip's buttons were last drawn (`None`: All tools), for the tests.
     pub strip: Vec<(Option<Tool>, egui::Rect)>,
+    /// Where the Navigator's buttons were drawn last frame, for the tests.
+    pub navigator_buttons: Vec<(&'static str, egui::Rect)>,
 }
 
 const TOAST_TIME: Duration = Duration::from_secs(5);
@@ -237,6 +272,7 @@ impl AppUi {
             eraser_preset,
             previews: Previews::default(),
             strip: Vec::new(),
+            navigator_buttons: Vec::new(),
         }
     }
 
@@ -827,7 +863,66 @@ impl AppUi {
             Panel::Color => self.color_panel(ui, ed),
             Panel::Layers => self.layers_panel(ui, ed),
             Panel::History => history_panel(ui, ed),
+            Panel::Navigator => self.navigator_panel(ui, ed),
         }
+    }
+
+    /// The minimap of the whole painting (the part on screen outlined; click or drag to go
+    /// there), the time where the user is, and the flip and symmetry buttons.
+    fn navigator_panel(&mut self, ui: &mut Ui, ed: &mut Editor) {
+        let (dw, dh) = (ed.doc.width as f32, ed.doc.height as f32);
+        let avail = ui.available_width();
+        // The map takes the room the clock and the buttons leave.
+        let k = (avail / dw).min((ui.available_height() - 66.0).max(60.0) / dh);
+        let size = vec2((dw * k).max(1.0), (dh * k).max(1.0));
+        let ppp = ui.ctx().pixels_per_point();
+        let tex = self.previews.navigator(ui.ctx(), &ed.projection.image, ed.projection_rev, (size.x * ppp).round() as u32, (size.y * ppp).round() as u32);
+        let (rect, resp) = ui.allocate_exact_size(vec2(avail, size.y), egui::Sense::click_and_drag());
+        let rect = egui::Rect::from_center_size(rect.center(), size);
+        self.navigator_buttons.clear();
+        self.navigator_buttons.push(("map", rect));
+        let p = ui.painter();
+        checkerboard(p, rect, 6.0);
+        p.image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+        p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::from_gray(20)), egui::StrokeKind::Outside);
+        // The part of the painting on screen (turned and mirrored as the view is).
+        let to_map = |c: (f64, f64)| egui::pos2(rect.min.x + c.0 as f32 * k, rect.min.y + c.1 as f32 * k);
+        let (x, y, w, h) = ed.viewport;
+        let corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)].map(|s| to_map(ed.view.to_canvas(s.0, s.1)));
+        let clip = p.with_clip_rect(rect.expand(1.0));
+        clip.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(2.0, Color32::from_black_alpha(140))));
+        clip.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.2, ACCENT_LIGHT)));
+        if let Some(at) = resp.interact_pointer_pos()
+            && (resp.is_pointer_button_down_on() || resp.clicked())
+        {
+            let c = (((at.x - rect.min.x) / k) as f64, ((at.y - rect.min.y) / k) as f64);
+            ed.centre_on((c.0.clamp(0.0, dw as f64), c.1.clamp(0.0, dh as f64)));
+        }
+        resp.on_hover_text("Click or drag to move the view there");
+        // The time where the user is, refreshed on the minute.
+        let (time, wait) = local_time();
+        ui.vertical_centered(|ui| ui.label(RichText::new(time).size(18.0).color(Color32::from_gray(225))));
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(wait.max(1)));
+        ui.horizontal_wrapped(|ui| {
+            let button = |ui: &mut Ui, on: bool, text: &str, tip: &str| ui.add(egui::Button::new(text).selected(on).min_size(vec2(26.0, 22.0))).on_hover_text(tip);
+            let r = button(ui, ed.view.mirror, "Flip", "Shows the painting mirrored left to right, to check it with fresh eyes (M). The painting itself is not changed.");
+            if r.clicked() {
+                ed.toggle_mirror();
+            }
+            self.navigator_buttons.push(("Flip", r.rect));
+            ui.separator();
+            ui.label("Symmetry");
+            let r = button(ui, ed.tools.symmetry_x, "X", "Brush and eraser strokes are mirrored left to right, about the painting's middle");
+            if r.clicked() {
+                ed.tools.symmetry_x = !ed.tools.symmetry_x;
+            }
+            self.navigator_buttons.push(("X", r.rect));
+            let r = button(ui, ed.tools.symmetry_y, "Y", "Brush and eraser strokes are mirrored top to bottom, about the painting's middle");
+            if r.clicked() {
+                ed.tools.symmetry_y = !ed.tools.symmetry_y;
+            }
+            self.navigator_buttons.push(("Y", r.rect));
+        });
     }
 
     /// A panel's tab title; Sub tool and Tool property say what they show, as in Clip Studio.
@@ -1344,6 +1439,16 @@ impl AppUi {
                 painter.add(egui::Shape::closed_line(ring, Stroke::new(1.7, Color32::from_black_alpha(alpha))));
             }
             painter.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, Color32::from_gray(20))));
+        }
+        // Symmetry: its mirror lines across the painting.
+        let sym = ed.symmetry();
+        if !self.canvas_only && (sym.x.is_some() || sym.y.is_some()) {
+            let (w, h) = (ed.doc.width as f64, ed.doc.height as f64);
+            let lines = sym.x.map(|x| [(x, 0.0), (x, h)]).into_iter().chain(sym.y.map(|y| [(0.0, y), (w, y)]));
+            for [a, b] in lines {
+                painter.line_segment([to(a), to(b)], Stroke::new(2.5, Color32::from_black_alpha(60)));
+                painter.add(egui::Shape::dashed_line(&[to(a), to(b)], Stroke::new(1.2, ACCENT_LIGHT), 8.0, 5.0));
+            }
         }
         // Lines drawn dark under light, so they show on any colour.
         let ants = |shapes: &mut Vec<egui::Shape>, light: &mut Vec<egui::Shape>, a: egui::Pos2, b: egui::Pos2| {

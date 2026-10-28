@@ -14,7 +14,7 @@ use recedo_core::doc::{Document, new_uuid};
 use recedo_core::fill::Mask;
 use recedo_core::history::History;
 use recedo_core::image;
-use recedo_core::paint::PaintSession;
+use recedo_core::paint::{PaintSession, Symmetry};
 use recedo_core::projection::Projection;
 use recedo_core::retouch::{Retouch, RetouchBrush, RetouchStroke};
 use recedo_core::select::{self, Combine};
@@ -373,6 +373,10 @@ pub struct ToolSettings {
     pub stabilizer: StabilizerSettings,
     /// Holding the pen still at the end of a nearly straight stroke makes it straight.
     pub hold_to_straighten: bool,
+    /// Brush and eraser strokes mirrored left-right (about the painting's middle, up and
+    /// down) and/or top-bottom.
+    pub symmetry_x: bool,
+    pub symmetry_y: bool,
     /// Eyedropper: sample the visible picture (true) or only the current layer.
     pub pick_all_layers: bool,
     /// Eyedropper: average over this radius, in canvas pixels (0 = one pixel).
@@ -403,6 +407,8 @@ impl Default for ToolSettings {
             eraser: Brush { size: 40.0, hardness: 0.7, ..Brush::default() },
             stabilizer: StabilizerSettings::default(),
             hold_to_straighten: true,
+            symmetry_x: false,
+            symmetry_y: false,
             pick_all_layers: true,
             pick_radius: 0.0,
             fill_tolerance: 0.12,
@@ -533,6 +539,8 @@ struct StrokeTrack {
     /// Straightened: the stroke is a straight line from the first point, and the pen moves its
     /// end until it lifts.
     straight: bool,
+    /// The stroke's mirror lines (the straight line is mirrored the same way).
+    symmetry: Symmetry,
 }
 
 /// A box in canvas pixels: left, top, right, bottom.
@@ -731,6 +739,9 @@ pub struct Editor {
     fit_pending: bool,
     /// Goes up whenever pixels change (the layer thumbnails follow it).
     pub pixels_rev: u64,
+    /// The [`Editor::pixels_rev`] the projection was last brought up to (the UI runs before
+    /// the frame's refresh, so its pictures of the projection follow this one).
+    pub projection_rev: u64,
     /// The lasso transform's part, while it is being scaled or moved.
     pub transform: Option<Transform>,
     /// The view just after the painting was fitted to the window, while it is still that
@@ -784,6 +795,7 @@ impl Editor {
             refresh_all: true,
             fit_pending: true,
             pixels_rev: 0,
+            projection_rev: 0,
             transform: None,
             fitted: None,
             jobs: Vec::new(),
@@ -892,6 +904,7 @@ impl Editor {
             _ => None,
         };
         self.projection.set_stroke_layer(stroke_layer);
+        self.projection_rev = self.pixels_rev;
         if self.refresh_all {
             self.refresh_all = false;
             self.dirty.clear();
@@ -1049,7 +1062,8 @@ impl Editor {
         let info = self.paint_info(s);
         let layer = self.active;
         self.stroke_before = self.doc.selection.is_some().then(|| self.doc.layers.get(layer).map(|l| l.pixels.clone())).flatten();
-        match PaintSession::begin(&mut self.doc, &mut self.history, layer, brush, self.color, erase, self.tools.stabilizer, self.view.zoom, info, s.recv_us) {
+        let symmetry = self.symmetry();
+        match PaintSession::begin(&mut self.doc, &mut self.history, layer, brush, self.color, erase, self.tools.stabilizer, symmetry, self.view.zoom, info, s.recv_us) {
             Ok(mut session) => {
                 if !erase {
                     self.remember_color();
@@ -1058,7 +1072,7 @@ impl Editor {
                     && let Some(l) = self.doc.layers.get(layer)
                 {
                     let brush = if erase { self.tools.eraser.clone() } else { self.tools.brush.clone() };
-                    self.track = Some(Box::new(StrokeTrack { before: l.pixels.clone(), brush, color: self.color, erase, path: vec![info], still: ((s.x, s.y), s.recv_us), straight: false }));
+                    self.track = Some(Box::new(StrokeTrack { before: l.pixels.clone(), brush, color: self.color, erase, path: vec![info], still: ((s.x, s.y), s.recv_us), straight: false, symmetry: self.symmetry() }));
                 }
                 let d = session.take_dirty();
                 self.clip_stroke(layer, &d);
@@ -1121,7 +1135,8 @@ impl Editor {
             t.path[i].pressure
         };
         let a = t.path[0];
-        let mut painter = recedo_core::brush::StrokePainter::new(t.brush.clone(), t.color, t.erase);
+        // One line per mirror image.
+        let mut painters: Vec<_> = (0..t.symmetry.count()).map(|_| recedo_core::brush::StrokePainter::new(t.brush.clone(), t.color, t.erase)).collect();
         let mut dirty = HashSet::new();
         let steps = 32;
         for i in 0..=steps {
@@ -1130,7 +1145,9 @@ impl Editor {
             p.x = a.x + (end.x - a.x) * f;
             p.y = a.y + (end.y - a.y) * f;
             p.pressure = pressure_at(f);
-            painter.add(&mut l.pixels, p, &mut dirty);
+            for (painter, q) in painters.iter_mut().zip(t.symmetry.copies(p)) {
+                painter.add(&mut l.pixels, q, &mut dirty);
+            }
         }
         // Every tile the freehand stroke or the line touched.
         let mut tiles: HashSet<TileKey> = HashSet::new();
@@ -1146,6 +1163,22 @@ impl Editor {
         }
         self.clip_stroke(layer, &tiles);
         self.mark_tiles(tiles);
+    }
+
+    /// The mirror lines brush strokes use now: through the painting's middle.
+    pub fn symmetry(&self) -> Symmetry {
+        Symmetry {
+            x: self.tools.symmetry_x.then_some(self.doc.width as f64 / 2.0),
+            y: self.tools.symmetry_y.then_some(self.doc.height as f64 / 2.0),
+        }
+    }
+
+    /// Moves the view so the canvas point `c` is in the middle of the canvas area (the
+    /// navigator's minimap).
+    pub fn centre_on(&mut self, c: (f64, f64)) {
+        let (x, y, w, h) = self.viewport;
+        let s = self.view.to_screen(c.0, c.1);
+        self.view.pan(x + w / 2.0 - s.0, y + h / 2.0 - s.1);
     }
 
     /// A retouch stroke starts (smudge, blur, ... spray).
@@ -1458,7 +1491,7 @@ impl Editor {
         };
         let mut scratch = History::new(1);
         let brush = self.tools.brush.clone();
-        if let Ok(mut session) = PaintSession::begin(&mut self.doc, &mut scratch, self.active, brush, color, false, StabilizerSettings::default(), self.view.zoom, points[0], now_us) {
+        if let Ok(mut session) = PaintSession::begin(&mut self.doc, &mut scratch, self.active, brush, color, false, StabilizerSettings::default(), Symmetry::default(), self.view.zoom, points[0], now_us) {
             for p in &points[1..] {
                 session.add(&mut self.doc, *p, now_us);
             }

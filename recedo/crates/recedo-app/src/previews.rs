@@ -38,10 +38,40 @@ pub fn sized(brush: &Brush, size: f32) -> Brush {
     Brush { size, ..brush.clone() }
 }
 
-/// A layer's pixels shrunk to `w` × `h`: each pixel the coverage-weighted average of all the
-/// layer's pixels under it (every second one in each direction on paintings over two million
-/// pixels), so even a thin line shows. Only the tiles that exist are read; the rest of the
-/// layer is its default pixel.
+/// A picture shrunk to `w` × `h`: each pixel the average of what it covers (every second
+/// pixel on pictures over 2 megapixels), see-through parts kept see-through.
+pub fn shrink(img: &recedo_core::image::Rgba8, w: u32, h: u32) -> ColorImage {
+    let (dw, dh) = (img.width as usize, img.height as usize);
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let stride = if dw * dh > 2_000_000 { 2 } else { 1 };
+    let mut bins = vec![[0u64; 5]; w * h];
+    for y in (0..dh).step_by(stride) {
+        let row = (y * h / dh) * w;
+        for x in (0..dw).step_by(stride) {
+            let i = (y * dw + x) * 4;
+            let p = &img.data[i..i + 4];
+            let a = p[3] as u64;
+            let bin = &mut bins[row + x * w / dw];
+            bin[0] += p[0] as u64 * a;
+            bin[1] += p[1] as u64 * a;
+            bin[2] += p[2] as u64 * a;
+            bin[3] += a;
+            bin[4] += 1;
+        }
+    }
+    let px = bins
+        .iter()
+        .map(|b| {
+            if b[3] == 0 {
+                return egui::Color32::TRANSPARENT;
+            }
+            let c = |v: u64| (v / b[3]) as u8;
+            egui::Color32::from_rgba_unmultiplied(c(b[0]), c(b[1]), c(b[2]), (b[3] / b[4].max(1)) as u8)
+        })
+        .collect();
+    ColorImage::new([w, h], px)
+}
+
 pub fn thumbnail(doc: &Document, index: usize, w: u32, h: u32) -> ColorImage {
     let layer = &doc.layers[index].pixels;
     let (dw, dh) = (doc.width as i64, doc.height as i64);
@@ -111,7 +141,7 @@ pub fn thumbnail_size(doc: &Document, side: u32) -> (u32, u32) {
 }
 
 /// While pixels keep changing (a stroke), thumbnails are redone at most this often.
-const THUMBNAIL_EVERY: Duration = Duration::from_millis(400);
+pub(crate) const THUMBNAIL_EVERY: Duration = Duration::from_millis(400);
 
 struct Thumb {
     uuid: String,
@@ -135,13 +165,15 @@ fn tiles_signature(layer: &TiledLayer) -> (usize, usize) {
 pub struct Previews {
     strokes: HashMap<String, TextureHandle>,
     thumbs: Vec<Option<Thumb>>,
+    /// The navigator's picture of the whole painting: (texture, the painting's revision, when).
+    navigator: Option<(TextureHandle, u64, Instant)>,
     /// How long thumbnails wait between updates ([`THUMBNAIL_EVERY`]; the tests change it).
     pub every: Duration,
 }
 
 impl Default for Previews {
     fn default() -> Previews {
-        Previews { strokes: HashMap::new(), thumbs: Vec::new(), every: THUMBNAIL_EVERY }
+        Previews { strokes: HashMap::new(), thumbs: Vec::new(), navigator: None, every: THUMBNAIL_EVERY }
     }
 }
 
@@ -152,6 +184,25 @@ impl Previews {
     pub fn forget(&mut self) {
         self.strokes.clear();
         self.thumbs.clear();
+        self.navigator = None;
+    }
+
+    /// The navigator's small picture of the whole painting (`img`, the combined picture), at
+    /// most `w` × `h`; redone when the painting changed, at most every [`Previews::every`].
+    pub fn navigator(&mut self, ctx: &Context, img: &recedo_core::image::Rgba8, rev: u64, w: u32, h: u32) -> TextureHandle {
+        if let Some((t, r, at)) = &self.navigator {
+            let fresh = *r == rev && t.size() == [w as usize, h as usize];
+            let since = at.elapsed();
+            if fresh || (t.size() == [w as usize, h as usize] && since < self.every) {
+                if !fresh {
+                    ctx.request_repaint_after(self.every - since);
+                }
+                return t.clone();
+            }
+        }
+        let t = ctx.load_texture("navigator", shrink(img, w, h), TextureOptions::LINEAR);
+        self.navigator = Some((t.clone(), rev, Instant::now()));
+        t
     }
 
     /// A stroke sample, `w` × `h` pixels.
