@@ -223,7 +223,16 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Scaling resamples in two passes (across, then down) with each new column's and row's weights worked once: bilinear when enlarging, an average of up to 16 samples per axis when shrinking, edge pixels continued past the copy's edge and partly covered pixels weighted | Bilinear alone drops thin lines when shrinking; the first version, sampling in 2-D for every new pixel and writing through the tile map pixel by pixel, took 398 ms for a 1500×1000 part at 1.5×; this one 91 ms. | Engine tests; timing |
 | While dragging, the part's pixels are redone once per screen frame, not per pen sample | A tablet sends up to 200 samples a second; the box itself follows every one. | Editor test |
 
-## 11. Licences
+## 11. Speed and robustness work (after the interface)
+
+| Decision | Why |
+|---|---|
+| Free egui's textures after `queue.submit`, not before | A texture dropped in the frame that still draws it was destroyed first and the submission failed (a crash). Found by the Wine self-test in a 1024x768 screen. |
+| Browser: `preventDefault` on `webglcontextlost`, rebuild instance, device, renderer and egui's letter atlas on `webglcontextrestored` | Without it the browser never gives the context back. The painting lives on the CPU, so only GPU objects are rebuilt. The atlas is rebuilt by `set_font_providers(vec![])`, which only makes egui reload its fonts (the app adds no providers). |
+| Mip levels: opaque rows read in place | Over a white background the picture is opaque, and premultiplying changes nothing there. 4K picture, level 0 + all mip levels, one core: 56.7 → 33.2 ms; the browser's layer-opacity drag 19.2 → 13.6 ms per frame (median). Exactness: `mip_blocks_equal_the_plain_formula`. A two-step (vertical, then horizontal) averaging loop was tried and was no faster, so it was not kept. |
+| Self-test measures at whole screen pixels, empty spot 3 screen pixels from paint and edges | At 12.8 % zoom half a pixel is 4 canvas pixels; the old checks measured between pixels and at the painting's corner. The CI report (screen centre white, painted spot dark) showed the app drew correctly. |
+
+## 12. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).
