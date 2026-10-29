@@ -260,7 +260,7 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Decision | Why |
 |---|---|
 | R opens it; rectangle select moves to Shift+R | The user asked for R. Selections are used less often than switching tools and colours. |
-| Tap to keep it open, or hold, point and let go (a quarter second decides) | Both ways are standard (Blender's pie menus, Krita's pop-up palette): tapping suits a pen, holding is one motion. |
+| Tap to keep it open, or hold, point and let go; letting go picks only if the pointer moved onto a slice | Both ways are standard (Blender's pie menus, Krita's pop-up palette): tapping suits a pen, holding is one motion. It first went by time (a quarter second); on the Windows CI's slow software renderer a frame takes about 200 ms, so a quick tap arrived as a "hold" and closed the menu (the self-test caught it). Movement cannot be fooled by a busy machine. |
 | The tool bar's first eight tools, not a separate list | The bar is already the user's own choice and order (tool library); a second list to keep up would be clutter. Eight slices stay big enough to hit with a pen. |
 | Recent colours, then basic ones | A ring that is never empty; the recent ones are what a painter goes back to. |
 | A window-sized area on top while it is open | Every press goes to the menu, so a press outside closes it and never starts a stroke; the canvas needs no extra rule. |

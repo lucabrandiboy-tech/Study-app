@@ -625,7 +625,7 @@ impl AppUi {
                 let at = ctx.pointer_hover_pos().unwrap_or(screen.center());
                 self.radial = Some(crate::radial::Radial::new(at, screen, &self.settings.hotbar_tools(), &ed.recent_colors));
             }
-        } else if r_up && let Some(menu) = &self.radial {
+        } else if r_up && let Some(menu) = &mut self.radial {
             let (pick, close) = menu.key_released(ctx.pointer_hover_pos());
             self.radial_done(ed, pick, close);
         }

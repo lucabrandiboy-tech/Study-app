@@ -1038,7 +1038,7 @@ fn a_small_window_keeps_room_for_the_painting() {
 
 #[test]
 fn r_opens_the_radial_menu_and_picks_tools_and_colours() {
-    use crate::radial::{HOLD, Slot};
+    use crate::radial::Slot;
     let Some(g) = gpu() else { return };
     let mut s = session();
     let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
@@ -1059,6 +1059,16 @@ fn r_opens_the_radial_menu_and_picks_tools_and_colours() {
     let eraser = menu.centre_of(Slot::Tool(1));
     let (out, _) = frames(&g, &mut r, &mut s, vec![Event::PointerMoved(eraser)]);
     shot(&g, &mut r, &mut s, out, "27-radial");
+    // R pressed and, frames later (a slow machine), let go without moving: still open.
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, false, none)], c);
+    assert!(s.ui.radial.is_none(), "R again closed it");
+    at(&mut s, &mut r, vec![key(Key::R, true, none)], c);
+    for _ in 0..3 {
+        quiet(&g, &mut r, &mut s, vec![]);
+    }
+    at(&mut s, &mut r, vec![key(Key::R, false, none)], c);
+    assert!(s.ui.radial.is_some(), "a late tap leaves it open");
+    let eraser = s.ui.radial.as_ref().unwrap().centre_of(Slot::Tool(1));
     // Click the eraser's slice.
     at(&mut s, &mut r, click(eraser), eraser);
     assert_eq!(s.ed.tool, Tool::Eraser);
@@ -1067,7 +1077,6 @@ fn r_opens_the_radial_menu_and_picks_tools_and_colours() {
     // Hold R, point at a colour, let go: picked.
     at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, true, none)], c);
     let menu = s.ui.radial.as_mut().expect("open");
-    menu.opened -= HOLD;
     let white = menu.centre_of(Slot::Color(menu.colors.iter().position(|&c| c == [255, 255, 255]).expect("white is offered")));
     // A held key repeats: the repeats neither close nor reopen it.
     at(&mut s, &mut r, vec![Event::Key { key: Key::R, physical_key: Some(Key::R), pressed: true, repeat: true, modifiers: none }], white);

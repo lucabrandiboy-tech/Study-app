@@ -1,12 +1,13 @@
 //! The radial quick menu (R): a ring round the pointer with the tool bar's first tools in
 //! the outer ring and colours in the inner one. Tap R to keep it open and click a slice, or
 //! hold R, move to a slice and let go. Any press outside it, R again or Escape closes it.
+//!
+//! Whether letting go of R picks depends on the pointer having moved onto a slice, never on
+//! time: a slow frame makes a quick tap arrive late, and it must still leave the menu open.
 
 use std::f32::consts::TAU;
-use std::time::Duration;
 
 use egui::{Color32, Pos2, Rect, Stroke, Vec2, vec2};
-use web_time::Instant;
 
 use crate::editor::Tool;
 
@@ -17,8 +18,9 @@ pub const SPLIT: f32 = 80.0;
 pub const HOLE: f32 = 40.0;
 /// At most this many tools and colours.
 pub const MAX_SLICES: usize = 8;
-/// R held at least this long and let go: that is a pick, not a tap that keeps it open.
-pub const HOLD: Duration = Duration::from_millis(250);
+/// How far (interface points) the pointer must move after R opened the menu before letting
+/// go of R picks the slice under it.
+pub const MOVE: f32 = 10.0;
 
 /// The colours after the recent ones, when fewer than [`MAX_SLICES`] were used yet.
 const BASIC: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [220, 40, 40], [245, 200, 30], [40, 160, 70], [40, 170, 220], [40, 70, 200], [150, 60, 190]];
@@ -34,7 +36,9 @@ pub enum Slot {
 pub struct Radial {
     /// The ring's middle (interface points).
     pub at: Pos2,
-    pub opened: Instant,
+    /// Where the pointer was when the menu opened, and whether it has moved off there since.
+    start: Pos2,
+    moved: bool,
     pub tools: Vec<Tool>,
     pub colors: Vec<[u8; 3]>,
     /// The press that started on the ring (a release elsewhere picks nothing).
@@ -51,6 +55,7 @@ pub enum Pick {
 impl Radial {
     /// A menu round `at`, moved in so the whole ring is inside `screen`.
     pub fn new(at: Pos2, screen: Rect, bar: &[Tool], recent: &[[u8; 3]]) -> Radial {
+        let start = at;
         let room = screen.shrink(OUTER + 4.0);
         let at = if room.is_positive() { at.clamp(room.min, room.max) } else { screen.center() };
         let tools: Vec<Tool> = bar.iter().copied().take(MAX_SLICES).collect();
@@ -60,7 +65,7 @@ impl Radial {
                 colors.push(c);
             }
         }
-        Radial { at, opened: Instant::now(), tools, colors, pressed: None }
+        Radial { at, start, moved: false, tools, colors, pressed: None }
     }
 
     pub fn slot_at(&self, p: Pos2) -> Slot {
@@ -87,6 +92,7 @@ impl Radial {
 
     /// The pointer this frame: `Some(pick)` and/or `true` to close.
     pub fn pointer(&mut self, hover: Option<Pos2>, pressed: bool, released: bool) -> (Option<Pick>, bool) {
+        self.track(hover);
         let slot = hover.map_or(Slot::Outside, |p| self.slot_at(p));
         if pressed {
             if matches!(slot, Slot::Outside | Slot::Centre) {
@@ -105,13 +111,24 @@ impl Radial {
         (None, false)
     }
 
-    /// R let go: after a hold, the slice under the pointer is picked and the menu closes; a
-    /// quick tap leaves it open.
-    pub fn key_released(&self, hover: Option<Pos2>) -> (Option<Pick>, bool) {
-        if self.opened.elapsed() < HOLD {
+    /// Notes whether the pointer has moved since the menu opened.
+    pub fn track(&mut self, hover: Option<Pos2>) {
+        if hover.is_some_and(|h| (h - self.start).length() > MOVE) {
+            self.moved = true;
+        }
+    }
+
+    /// R let go: if the pointer was moved onto a slice, that slice is picked and the menu
+    /// closes; otherwise (a tap, however long it took to arrive) it stays open.
+    pub fn key_released(&mut self, hover: Option<Pos2>) -> (Option<Pick>, bool) {
+        self.track(hover);
+        if !self.moved {
             return (None, false);
         }
-        (hover.and_then(|p| self.pick(self.slot_at(p))), true)
+        match hover.and_then(|p| self.pick(self.slot_at(p))) {
+            Some(p) => (Some(p), true),
+            None => (None, false),
+        }
     }
 
     /// Draws the ring; `current` is the tool in use, `color` the colour.
@@ -263,10 +280,24 @@ mod tests {
         assert_eq!(m.pointer(Some(m.at), true, false), (None, true), "so does the middle");
         // A release with no press on the ring (the press that opened it, say) picks nothing.
         assert_eq!(m.pointer(Some(eraser), false, true), (None, false));
-        // R: a tap keeps it open; after a hold, letting go picks.
-        assert_eq!(m.key_released(Some(eraser)), (None, false));
-        m.opened -= HOLD;
+        // R let go after moving onto a slice: picked.
         assert_eq!(m.key_released(Some(eraser)), (Some(Pick::Tool(Tool::DEFAULT_BAR[1])), true));
-        assert_eq!(m.key_released(None), (None, true), "held and let go over nothing: closes");
+        // Moved, then back to the middle and let go: stays open (nothing chosen).
+        assert_eq!(m.key_released(Some(m.at)), (None, false));
+    }
+
+    #[test]
+    fn a_tap_on_r_leaves_it_open_however_late_it_arrives() {
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0));
+        let mut m = Radial::new(pos2(500.0, 350.0), screen, &Tool::DEFAULT_BAR, &[]);
+        // No time is involved: the pointer has not moved, so letting go never picks.
+        assert_eq!(m.key_released(Some(pos2(500.0, 350.0))), (None, false));
+        // Opened near the screen's edge the ring moves in, so the pointer may already be over
+        // a slice: a tap still picks nothing.
+        let mut edge = Radial::new(pos2(30.0, 350.0), screen, &Tool::DEFAULT_BAR, &[]);
+        assert!(matches!(edge.slot_at(pos2(30.0, 350.0)), Slot::Tool(_) | Slot::Color(_)), "the pointer is on a slice");
+        assert_eq!(edge.key_released(Some(pos2(31.0, 351.0))), (None, false));
+        // A small wobble (under MOVE) is still a tap.
+        assert_eq!(m.key_released(Some(pos2(505.0, 353.0))), (None, false));
     }
 }
