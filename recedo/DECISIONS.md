@@ -243,7 +243,17 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Hold to straighten only for nearly straight strokes | Snapping curves to a line would destroy work; the tolerance (6 px or 8 % of the length) lets a wobbly line through but not a curve. Pressure along the line follows the hand's, so the line keeps its taper. |
 | A browser test with readings queued 5 ms apart, not waited for one by one | Waiting for each reading made the test pen send one every 123 ms, which no smoothing over time can work with; real pens send 200+ a second. |
 
-## 13. Licences
+## 13. Navigator and symmetry (asked for after the Stability slider)
+
+| Decision | Why |
+|---|---|
+| The minimap is made from the projection (the combined picture already kept for the screen), shrunk by averaging | No second combining of the layers; thin lines still show. It is redone only when the picture changed, at most every 0.4 s while painting, so a stroke does not pay for it each frame. |
+| The minimap follows `projection_rev`, the revision the projection was brought up to, not `pixels_rev` | The UI runs before the frame's refresh: keyed on `pixels_rev`, the map copied the old picture under the new number and never updated. The UI test caught it. |
+| The clock is the system's local time: the browser's `Date` in the browser, `GetLocalTime` on Windows | "The time where you are" without asking for a time zone; it redraws on the minute, not every frame. |
+| Symmetry mirrors about the painting's middle, one stroke painter per copy, one undo step | The same brush engine paints each copy, so every brush works mirrored; one step because it is one stroke to the user. A movable axis and radial symmetry are later steps. |
+| Flip in the Navigator is the existing mirror view (M), not a change to the pixels | Artists flip to check a drawing with fresh eyes; changing the pixels would be a different command (and is on the lasso transform already). |
+
+## 14. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

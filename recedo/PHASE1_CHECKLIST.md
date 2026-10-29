@@ -131,6 +131,12 @@ Each step says what you should see. If something is different, note the step num
    (**Shift** keeps its shape), dragging inside moves it, and only the selected layer
    changes. **Enter** puts it down; **Ctrl+Z** puts it back; **Escape** before Enter
    cancels. Tell me if it feels slow on a big area.
+12. **Navigator** (top of the right side): *Expected:* a small picture of the whole painting,
+   your local time under it, then **Flip**, **Symmetry X** and **Y**. Zoom in (**+**), then
+   click or drag on the small picture: the view goes there. **Flip** mirrors the view (the
+   painting itself does not change). Turn on **X** and **Y** and paint in one corner:
+   *Expected:* the stroke appears in all four corners, dashed blue lines show the middles,
+   and one **Ctrl+Z** takes all four away.
 
 ## 6. What to send back
 
@@ -156,6 +162,6 @@ The brush editor, textures, the radial pop-up palette, pen button settings, pres
 editor (Phase 2); palettes, colour wheel styles, 16-bit painting, colour management
 (Phase 3); groups, masks, filters, alpha lock, thumbnails (Phase 4); polygon lasso, feather /
 grow / shrink, scaling and rotating, radial gradients (Phase 5); polygon and Bézier shapes,
-assistants, symmetry, text that stays editable, reference images (Phase 6); shortcut editor,
-workspaces, light theme, navigator (Phase 7); WebP, PDF, timelapse (Phase 8); animation
+assistants, radial symmetry, text that stays editable, reference images (Phase 6); shortcut editor,
+workspaces, light theme (Phase 7); WebP, PDF, timelapse (Phase 8); animation
 (Phase 9); installer (Phase 10).

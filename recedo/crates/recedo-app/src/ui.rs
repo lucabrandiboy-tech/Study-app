@@ -898,7 +898,6 @@ impl AppUi {
             let c = (((at.x - rect.min.x) / k) as f64, ((at.y - rect.min.y) / k) as f64);
             ed.centre_on((c.0.clamp(0.0, dw as f64), c.1.clamp(0.0, dh as f64)));
         }
-        resp.on_hover_text("Click or drag to move the view there");
         // The time where the user is, refreshed on the minute.
         let (time, wait) = local_time();
         ui.vertical_centered(|ui| ui.label(RichText::new(time).size(18.0).color(Color32::from_gray(225))));
