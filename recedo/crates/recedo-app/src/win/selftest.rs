@@ -381,15 +381,23 @@ fn tool_tests(r: &mut Results, hwnd: HWND, c: Area) {
     let third = (x1 - x0) / 3.0;
     let (left, mid, right) = ((x0 + third * 0.5, y), (x0 + third * 1.5, y), (x0 + third * 2.5, y));
 
-    // R picks rectangle select; Delete clears inside the selection only.
+    // R opens the radial menu round the pointer; Escape closes it.
+    move_to(hwnd, (x0 + third, y - 40.0));
     keys(&[b'R' as u16]);
+    let opened = with_app(|a| a.session.ui.radial.is_some()).unwrap_or(false);
+    keys(&[VK_ESCAPE]);
+    let closed = with_app(|a| a.session.ui.radial.is_none()).unwrap_or(false);
+    r.check("keyboard: R opens the radial menu, Escape closes it", opened && closed, format!("opened: {opened}, closed: {closed}"));
+
+    // Shift+R picks rectangle select; Delete clears inside the selection only.
+    keys(&[VK_SHIFT, b'R' as u16]);
     let picked = tool();
     drag(hwnd, (x0 + third, y - 40.0), (x0 + third * 2.0, y + 40.0), Button::Left, 10);
     let selected = with_app(|a| a.session.ed.has_selection()).unwrap_or(false);
     keys(&[VK_DELETE]);
     let (l, m, rt) = with_app(|a| (painted_at(a, layer, left, 2), painted_at(a, layer, mid, 2), painted_at(a, layer, right, 2))).unwrap_or_default();
     r.check(
-        "tools: R selects a rectangle, Delete clears inside it only",
+        "tools: Shift+R selects a rectangle, Delete clears inside it only",
         picked == Tool::SelectRect && selected && l && !m && rt,
         format!("tool {picked:?}, selected: {selected}; paint left / middle / right of the line: {l} / {m} / {rt}"),
     );
