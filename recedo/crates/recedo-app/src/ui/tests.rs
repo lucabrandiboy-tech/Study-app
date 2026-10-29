@@ -1017,3 +1017,68 @@ fn a_small_window_keeps_room_for_the_painting() {
     let bottom = s.ui.strip.iter().map(|(_, r)| r.max.y).fold(0.0, f32::max);
     assert!(bottom <= c.max.y, "{bottom}");
 }
+
+#[test]
+fn r_opens_the_radial_menu_and_picks_tools_and_colours() {
+    use crate::radial::{HOLD, Slot};
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    let key = |k: Key, pressed: bool, m: egui::Modifiers| Event::Key { key: k, physical_key: Some(k), pressed, repeat: false, modifiers: m };
+    let none = egui::Modifiers::NONE;
+    let c = s.canvas_rect.center();
+    let at = |s: &mut Session, r: &mut Renderer, mut ev: Vec<Event>, p: Pos2| {
+        ev.insert(0, Event::PointerMoved(p));
+        quiet(&g, r, s, ev);
+    };
+    // Tap R: the menu opens round the pointer and stays open; the canvas takes no presses.
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, false, none)], c);
+    let menu = s.ui.radial.as_ref().expect("R opens the menu");
+    assert!((menu.at - c).length() < 1.0, "round the pointer: {:?} vs {c:?}", menu.at);
+    assert_eq!(menu.tools, Tool::DEFAULT_BAR[..8].to_vec(), "the tool bar's first tools");
+    assert!(!s.over_canvas(c.x as f64 + 300.0, c.y as f64), "no painting while it is open");
+    let eraser = menu.centre_of(Slot::Tool(1));
+    let (out, _) = frames(&g, &mut r, &mut s, vec![Event::PointerMoved(eraser)]);
+    shot(&g, &mut r, &mut s, out, "27-radial");
+    // Click the eraser's slice.
+    at(&mut s, &mut r, click(eraser), eraser);
+    assert_eq!(s.ed.tool, Tool::Eraser);
+    assert!(s.ui.radial.is_none(), "a pick closes it");
+    assert!(s.over_canvas(c.x as f64 + 300.0, c.y as f64));
+    // Hold R, point at a colour, let go: picked.
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, true, none)], c);
+    let menu = s.ui.radial.as_mut().expect("open");
+    menu.opened -= HOLD;
+    let white = menu.centre_of(Slot::Color(menu.colors.iter().position(|&c| c == [255, 255, 255]).expect("white is offered")));
+    // A held key repeats: the repeats neither close nor reopen it.
+    at(&mut s, &mut r, vec![Event::Key { key: Key::R, physical_key: Some(Key::R), pressed: true, repeat: true, modifiers: none }], white);
+    assert!(s.ui.radial.is_some(), "key repeats leave it open");
+    at(&mut s, &mut r, vec![key(Key::R, false, none)], white);
+    assert_eq!(s.ed.color, [255, 255, 255]);
+    assert!(s.ui.radial.is_none());
+    // R again, then a press outside the ring: closes, nothing painted, tool unchanged.
+    let far = c + vec2(250.0, 0.0);
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, false, none)], c);
+    assert!(s.ui.radial.is_some());
+    s.ed.pen(&PenSample::synthetic(1_000_000, far.x as f64, far.y as f64, 1.0, true), s.over_canvas(far.x as f64, far.y as f64), Modifiers::default());
+    at(&mut s, &mut r, click(far), far);
+    assert!(s.ui.radial.is_none(), "a press outside closes it");
+    for i in 1..10 {
+        let p = far + vec2(0.0, i as f32 * 10.0);
+        s.ed.pen(&PenSample::synthetic(1_000_000 + i * 8000, p.x as f64, p.y as f64, 1.0, true), s.over_canvas(p.x as f64, p.y as f64), Modifiers::default());
+    }
+    s.ed.pen(&PenSample::synthetic(1_200_000, far.x as f64, far.y as f64 + 90.0, 0.0, false), true, Modifiers::default());
+    assert_eq!(s.ed.history.entries().1, 0, "the press that closed it painted nothing: {:?}", s.ed.history.entries().0);
+    assert_eq!(s.ed.tool, Tool::Eraser);
+    // Escape and R again close it too; Shift+R is rectangle select.
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, false, none)], c);
+    at(&mut s, &mut r, vec![key(Key::Escape, true, none)], c);
+    assert!(s.ui.radial.is_none(), "Escape closes it");
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, false, none)], c);
+    at(&mut s, &mut r, vec![key(Key::R, true, none), key(Key::R, false, none)], c);
+    assert!(s.ui.radial.is_none(), "R again closes it");
+    at(&mut s, &mut r, vec![key(Key::R, true, egui::Modifiers::SHIFT), key(Key::R, false, egui::Modifiers::SHIFT)], c);
+    assert_eq!(s.ed.tool, Tool::SelectRect);
+    assert!(s.ui.radial.is_none(), "Shift+R does not open it");
+}

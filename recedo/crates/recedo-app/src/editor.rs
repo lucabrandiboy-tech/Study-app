@@ -316,7 +316,7 @@ impl Tool {
             Tool::Gradient => "Shift+G",
             Tool::Line => "V",
             Tool::Smudge => "S",
-            Tool::SelectRect => "R",
+            Tool::SelectRect => "Shift+R",
             Tool::SelectLasso => "L",
             Tool::MagicWand => "W",
             Tool::Crop => "C",

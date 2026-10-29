@@ -12,6 +12,7 @@ mod dock;
 mod editor;
 mod icons;
 mod previews;
+mod radial;
 mod session;
 mod settings;
 mod ui;

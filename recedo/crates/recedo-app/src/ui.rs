@@ -242,6 +242,8 @@ pub struct AppUi {
     pub strip: Vec<(Option<Tool>, egui::Rect)>,
     /// Where the Navigator's buttons were drawn last frame, for the tests.
     pub navigator_buttons: Vec<(&'static str, egui::Rect)>,
+    /// The radial quick menu, while it is open (R).
+    pub radial: Option<crate::radial::Radial>,
 }
 
 const TOAST_TIME: Duration = Duration::from_secs(5);
@@ -273,6 +275,7 @@ impl AppUi {
             previews: Previews::default(),
             strip: Vec::new(),
             navigator_buttons: Vec::new(),
+            radial: None,
         }
     }
 
@@ -453,6 +456,7 @@ impl AppUi {
         }
         self.toasts_ui(&ctx, canvas_rect);
         self.dialogs(&ctx, ed, &mut requests);
+        self.radial_menu(&ctx, ed);
         // Text being written: its box (in Tool options) comes to the front when writing
         // starts, and picking another tool places the text, as in other painting apps (it
         // would otherwise stay on the canvas as a preview, never painted).
@@ -529,6 +533,9 @@ impl AppUi {
             ed.swap_colors();
         }
         // An open menu or list closes on Escape by itself: the key is left to it.
+        if self.radial.is_some() && hit(none, Key::Escape) {
+            self.radial = None;
+        }
         if !egui::Popup::is_any_open(ctx) && hit(none, Key::Escape) {
             ed.cancel_crop();
             ed.cancel_text();
@@ -593,7 +600,36 @@ impl AppUi {
         if hit(none, Key::V) {
             ed.tool = Tool::Line;
         }
-        for (key, tool) in [(Key::S, Tool::Smudge), (Key::R, Tool::SelectRect), (Key::L, Tool::SelectLasso), (Key::W, Tool::MagicWand), (Key::C, Tool::Crop), (Key::T, Tool::Text), (Key::Z, Tool::Zoom)] {
+        // R: the radial menu (Shift+R: rectangle select). Read from the key events, since a
+        // held key repeats and the menu also needs the key being let go.
+        if hit(shift, Key::R) {
+            ed.tool = Tool::SelectRect;
+        }
+        let (mut r_down, mut r_up) = (false, false);
+        ctx.input_mut(|i| {
+            i.events.retain(|e| match e {
+                egui::Event::Key { key: Key::R, pressed, repeat, modifiers, .. } if !modifiers.shift && !modifiers.command && !modifiers.alt => {
+                    if *pressed && !*repeat {
+                        r_down = true;
+                    } else if !*pressed {
+                        r_up = true;
+                    }
+                    false
+                }
+                _ => true,
+            })
+        });
+        if r_down {
+            if self.radial.take().is_none() && !ed.pen_held() {
+                let screen = ctx.content_rect();
+                let at = ctx.pointer_hover_pos().unwrap_or(screen.center());
+                self.radial = Some(crate::radial::Radial::new(at, screen, &self.settings.hotbar_tools(), &ed.recent_colors));
+            }
+        } else if r_up && let Some(menu) = &self.radial {
+            let (pick, close) = menu.key_released(ctx.pointer_hover_pos());
+            self.radial_done(ed, pick, close);
+        }
+        for (key, tool) in [(Key::S, Tool::Smudge), (Key::L, Tool::SelectLasso), (Key::W, Tool::MagicWand), (Key::C, Tool::Crop), (Key::T, Tool::Text), (Key::Z, Tool::Zoom)] {
             if hit(none, key) {
                 ed.tool = tool;
             }
@@ -922,6 +958,41 @@ impl AppUi {
             }
             self.navigator_buttons.push(("Y", r.rect));
         });
+    }
+
+    /// The radial quick menu over everything: one area the size of the window, so no press
+    /// reaches the canvas or the panels while it is open (a press outside the ring closes it).
+    fn radial_menu(&mut self, ctx: &egui::Context, ed: &mut Editor) {
+        if self.radial.is_none() {
+            return;
+        }
+        if self.dialog.is_some() {
+            self.radial = None;
+            return;
+        }
+        let screen = ctx.content_rect();
+        let hover = ctx.pointer_hover_pos();
+        let (pressed, released) = ctx.input(|i| (i.pointer.any_pressed(), i.pointer.any_released()));
+        egui::Area::new(Id::unique("radial menu")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+            ui.allocate_exact_size(screen.size(), egui::Sense::click_and_drag());
+            if let Some(menu) = &self.radial {
+                menu.draw(ui.painter(), hover, ed.tool, ed.color, ACCENT);
+            }
+        });
+        let Some(menu) = &mut self.radial else { return };
+        let (pick, close) = menu.pointer(hover, pressed, released);
+        self.radial_done(ed, pick, close);
+    }
+
+    fn radial_done(&mut self, ed: &mut Editor, pick: Option<crate::radial::Pick>, close: bool) {
+        match pick {
+            Some(crate::radial::Pick::Tool(t)) => ed.tool = t,
+            Some(crate::radial::Pick::Color(c)) => ed.color = c,
+            None => {}
+        }
+        if close {
+            self.radial = None;
+        }
     }
 
     /// A panel's tab title; Sub tool and Tool property say what they show, as in Clip Studio.
@@ -1801,7 +1872,7 @@ impl AppUi {
                         tip(ui, "Tools", "The icons on the far left are your tools (point at one for its name and key). The grid button at the top lists all 32: click one to use it, tick \"On bar\" to keep it there. Sub tool shows the brushes (or the tools of the same kind), Tool property their settings.");
                         tip(ui, "Move around", "Space + drag pans, the mouse wheel zooms, 2 fits the painting to the window, 4 and 6 turn it, 5 straightens it. G hides everything but the painting (G or Escape brings it back).");
                         tip(ui, "Layers and colour", "The colour wheel is on the left: the ring picks the colour, the square how light and strong it is; X swaps it with the second colour. Layers are on the right: the Opacity slider there makes the selected layer see-through. Ctrl+click on the painting picks a colour.");
-                        tip(ui, "Selections", "Box select (R), the magic wand (W) and the others keep painting inside the selection. The Select menu has the rest.");
+                        tip(ui, "Selections", "Box select (Shift+R), the magic wand (W) and the others keep painting inside the selection. The Select menu has the rest.");
                         tip(ui, "Scaling part of a layer", "The lasso transform: draw round what to change, then drag a corner to make it bigger or smaller (Shift keeps its shape), or drag inside to move it. Enter puts it down, Escape cancels.");
                         if self.web {
                             tip(ui, "Reference", "\"Reference\" in the toolbar opens a box on the right to search pictures, videos and articles, or play a YouTube link, while you draw.");
@@ -2487,7 +2558,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("X", "Swap the colour and the sub colour"),
     ("V", "Line"),
     ("S", "Smudge"),
-    ("R  L  W", "Rectangle select, lasso select, magic wand"),
+    ("R", "Radial menu: tools and colours round the pointer (tap R and click, or hold R, point, let go)"),
+    ("Shift + R  L  W", "Rectangle select, lasso select, magic wand"),
     ("C", "Crop (Enter crops, Escape cancels)"),
     ("T", "Text (Ctrl+Enter places it)"),
     ("Z", "Zoom tool"),

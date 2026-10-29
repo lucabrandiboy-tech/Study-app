@@ -16,6 +16,8 @@ mod editor;
 mod icons;
 #[path = "../../recedo-app/src/previews.rs"]
 mod previews;
+#[path = "../../recedo-app/src/radial.rs"]
+mod radial;
 #[path = "../../recedo-app/src/session.rs"]
 mod session;
 #[path = "../../recedo-app/src/settings.rs"]
