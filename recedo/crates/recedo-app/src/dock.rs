@@ -77,7 +77,7 @@ pub struct Floating {
 pub const LAYOUT_VERSION: u32 = 4;
 
 /// The Navigator's share of the right dock (its minimap, clock and buttons).
-const NAVIGATOR_WEIGHT: f32 = 0.35;
+const NAVIGATOR_WEIGHT: f32 = 0.5;
 
 /// The Colour panel's share of the left dock: what the wheel needs, no empty space below.
 const COLOR_WEIGHT: f32 = 1.15;

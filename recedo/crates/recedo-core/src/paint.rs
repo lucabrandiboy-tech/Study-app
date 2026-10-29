@@ -10,35 +10,76 @@ use crate::history::History;
 use crate::stabilizer::{PaintInfo, Stabilizer, StabilizerSettings};
 use crate::tiles::TileKey;
 
-/// Mirror lines for symmetric painting, in canvas pixels: `x` is a vertical line at that x
-/// (left and right mirror each other), `y` a horizontal one.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Symmetric painting, in canvas pixels. Without spokes: `x` mirrors left and right about the
+/// vertical line through `centre`, `y` top and bottom about the horizontal one (1, 2 or 4
+/// copies). With `spokes` n > 1: n copies turned round `centre`, and with `x` (or `y`) each
+/// is mirrored too, like a kaleidoscope (2n copies).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Symmetry {
-    pub x: Option<f64>,
-    pub y: Option<f64>,
+    pub centre: (f64, f64),
+    pub x: bool,
+    pub y: bool,
+    pub spokes: u32,
+}
+
+impl Default for Symmetry {
+    fn default() -> Symmetry {
+        Symmetry { centre: (0.0, 0.0), x: false, y: false, spokes: 1 }
+    }
 }
 
 impl Symmetry {
-    /// `p` and its mirror images (1, 2 or 4 points; `p` first). Tilt and rotation are mirrored
-    /// with it, so a tilted pen leans the mirrored way.
+    /// `p` and its copies (`p` first). Tilt and rotation are mirrored and turned with it, so a
+    /// tilted pen leans the mirrored or turned way.
     pub fn copies(&self, p: PaintInfo) -> Vec<PaintInfo> {
+        let (cx, cy) = self.centre;
+        let mirror_x = |q: PaintInfo| PaintInfo { x: 2.0 * cx - q.x, tilt_x: -q.tilt_x, rotation: (360.0 - q.rotation).rem_euclid(360.0), ..q };
+        let mirror_y = |q: PaintInfo| PaintInfo { y: 2.0 * cy - q.y, tilt_y: -q.tilt_y, rotation: (180.0 - q.rotation).rem_euclid(360.0), ..q };
         let mut out = vec![p];
-        if let Some(ax) = self.x {
-            let q = PaintInfo { x: 2.0 * ax - p.x, tilt_x: -p.tilt_x, rotation: (360.0 - p.rotation).rem_euclid(360.0), ..p };
-            out.push(q);
+        if self.spokes > 1 {
+            if self.x {
+                out.push(mirror_x(p));
+            } else if self.y {
+                out.push(mirror_y(p));
+            }
+            let base = out.clone();
+            for k in 1..self.spokes {
+                let turn = k as f64 * 360.0 / self.spokes as f64;
+                let (s, c) = turn.to_radians().sin_cos();
+                for q in &base {
+                    // Clockwise on screen (y points down).
+                    let (dx, dy) = (q.x - cx, q.y - cy);
+                    let (tx, ty) = (q.tilt_x as f64, q.tilt_y as f64);
+                    out.push(PaintInfo {
+                        x: cx + dx * c - dy * s,
+                        y: cy + dx * s + dy * c,
+                        tilt_x: (tx * c - ty * s) as f32,
+                        tilt_y: (tx * s + ty * c) as f32,
+                        rotation: ((q.rotation as f64 + turn) % 360.0) as f32,
+                        ..*q
+                    });
+                }
+            }
+            return out;
         }
-        if let Some(ay) = self.y {
+        if self.x {
+            out.push(mirror_x(p));
+        }
+        if self.y {
             let n = out.len();
             for i in 0..n {
-                let q = out[i];
-                out.push(PaintInfo { y: 2.0 * ay - q.y, tilt_y: -q.tilt_y, rotation: (180.0 - q.rotation).rem_euclid(360.0), ..q });
+                out.push(mirror_y(out[i]));
             }
         }
         out
     }
 
     pub fn count(&self) -> usize {
-        (1 + self.x.is_some() as usize) * (1 + self.y.is_some() as usize)
+        if self.spokes > 1 {
+            self.spokes as usize * (1 + (self.x || self.y) as usize)
+        } else {
+            (1 + self.x as usize) * (1 + self.y as usize)
+        }
     }
 }
 
@@ -220,7 +261,7 @@ mod tests {
     #[test]
     fn symmetry_mirrors_points_and_strokes() {
         let p = PaintInfo { x: 10.0, y: 20.0, pressure: 0.5, tilt_x: 30.0, tilt_y: 10.0, rotation: 40.0 };
-        let both = Symmetry { x: Some(50.0), y: Some(100.0) }.copies(p);
+        let both = Symmetry { centre: (50.0, 100.0), x: true, y: true, spokes: 1 }.copies(p);
         let xy: Vec<(f64, f64)> = both.iter().map(|q| (q.x, q.y)).collect();
         assert_eq!(xy, vec![(10.0, 20.0), (90.0, 20.0), (10.0, 180.0), (90.0, 180.0)]);
         assert_eq!((both[1].tilt_x, both[2].tilt_y), (-30.0, -10.0), "a tilted pen leans the mirrored way");
@@ -229,7 +270,7 @@ mod tests {
         let mut doc = Document::new(128, 64, None);
         let mut history = History::new(10);
         let brush = Brush { size: 6.0, hardness: 1.0, size_curve: None, ..Brush::default() };
-        let sym = Symmetry { x: Some(64.0), y: None };
+        let sym = Symmetry { centre: (64.0, 32.0), x: true, ..Symmetry::default() };
         let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush, [0, 0, 0], false, StabilizerSettings::default(), sym, 1.0, pt(10.0, 20.0), 0).unwrap();
         for i in 1..=20 {
             s.add(&mut doc, pt(10.0 + i as f64, 20.0 + i as f64), i * 1000);
@@ -243,5 +284,56 @@ mod tests {
                 assert_eq!(l.pixel(x, y), l.pixel(127 - x, y), "{x},{y} mirrors {},{y}", 127 - x);
             }
         }
+    }
+
+    #[test]
+    fn spokes_turn_copies_round_the_centre() {
+        let p = PaintInfo { x: 110.0, y: 100.0, pressure: 0.7, tilt_x: 20.0, tilt_y: 0.0, rotation: 10.0 };
+        let four = Symmetry { centre: (100.0, 100.0), spokes: 4, ..Symmetry::default() };
+        let c = four.copies(p);
+        assert_eq!(c.len(), 4);
+        assert_eq!(four.count(), 4);
+        let round = |v: f64| (v * 1e6).round() / 1e6;
+        let xy: Vec<(f64, f64)> = c.iter().map(|q| (round(q.x), round(q.y))).collect();
+        // Clockwise on screen: right, below, left, above.
+        assert_eq!(xy, vec![(110.0, 100.0), (100.0, 110.0), (90.0, 100.0), (100.0, 90.0)]);
+        assert!((c[1].tilt_x.abs() < 1e-4) && (c[1].tilt_y - 20.0).abs() < 1e-4, "the pen's lean turns with it: {:?}", c[1]);
+        assert_eq!((c[1].rotation, c[1].pressure), (100.0, 0.7));
+        // A kaleidoscope: each spoke mirrored too.
+        let snow = Symmetry { centre: (100.0, 100.0), x: true, spokes: 6, ..Symmetry::default() };
+        assert_eq!((snow.copies(p).len(), snow.count()), (12, 12));
+        let q = PaintInfo { x: 100.0 + 10.0 * 30f64.to_radians().cos(), y: 100.0 - 10.0 * 30f64.to_radians().sin(), ..p };
+        let pts = snow.copies(q);
+        assert!(pts.iter().all(|r| ((r.x - 100.0).hypot(r.y - 100.0) - 10.0).abs() < 1e-9), "all on the same circle");
+        assert!(pts.iter().any(|r| (r.x - (100.0 - (q.x - 100.0))).abs() < 1e-9 && (r.y - q.y).abs() < 1e-9), "its left-right mirror is one of them");
+        // Spokes with Y alone mirror top and bottom.
+        let y = Symmetry { centre: (100.0, 100.0), y: true, spokes: 3, ..Symmetry::default() };
+        assert_eq!(y.copies(q)[1].y, 200.0 - q.y);
+    }
+
+    #[test]
+    fn a_stroke_with_four_spokes_is_the_same_turned_a_quarter() {
+        let mut doc = Document::new(128, 128, None);
+        let mut history = History::new(10);
+        let brush = Brush { size: 7.0, hardness: 0.8, size_curve: None, ..Brush::default() };
+        let sym = Symmetry { centre: (64.0, 64.0), spokes: 4, ..Symmetry::default() };
+        let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush, [0, 0, 0], false, StabilizerSettings::default(), sym, 1.0, pt(70.0, 20.0), 0).unwrap();
+        for i in 1..=30 {
+            s.add(&mut doc, pt(70.0 + i as f64 * 1.3, 20.0 + i as f64 * 0.7), i * 1000);
+        }
+        s.end(&mut doc, 40_000);
+        let l = &doc.layers[0].pixels;
+        let (mut painted, mut off) = (0, 0);
+        for y in 0..128 {
+            for x in 0..128 {
+                // Turned a quarter clockwise round (64, 64): (x, y) -> (127 - y, x).
+                let (a, b) = (l.pixel(x, y)[3] as i32, l.pixel(127 - y, x)[3] as i32);
+                painted += (a > 0) as u32;
+                off = off.max((a - b).abs());
+            }
+        }
+        assert!(painted > 400, "four strokes painted: {painted} pixels");
+        assert!(off <= 2, "each copy is the first turned (largest difference {off})");
+        assert_eq!(l.pixel(64, 64)[3], 0, "nothing in the middle");
     }
 }

@@ -141,6 +141,9 @@ impl Settings {
         st.migrate();
         st.distance = if st.distance.is_finite() { st.distance.clamp(3.0, 500.0) } else { 50.0 };
         st.delay_distance = if st.delay_distance.is_finite() { st.delay_distance.clamp(1.0, 500.0) } else { 50.0 };
+        self.tools.symmetry_spokes = self.tools.symmetry_spokes.clamp(2, crate::editor::MAX_SPOKES);
+        let c = &mut self.tools.symmetry_centre;
+        *c = if c.iter().all(|v| v.is_finite()) { c.map(|v| v.clamp(0.0, 1.0)) } else { [0.5, 0.5] };
         self.tools.pick_radius = if self.tools.pick_radius.is_finite() { self.tools.pick_radius.clamp(0.0, 50.0) } else { 0.0 };
         let r = &mut self.tools.retouch;
         let fix = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };

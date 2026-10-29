@@ -373,10 +373,16 @@ pub struct ToolSettings {
     pub stabilizer: StabilizerSettings,
     /// Holding the pen still at the end of a nearly straight stroke makes it straight.
     pub hold_to_straighten: bool,
-    /// Brush and eraser strokes mirrored left-right (about the painting's middle, up and
-    /// down) and/or top-bottom.
+    /// Brush and eraser strokes mirrored left-right (about the vertical line through the
+    /// symmetry centre) and/or top-bottom.
     pub symmetry_x: bool,
     pub symmetry_y: bool,
+    /// Copies turned round the centre (`symmetry_spokes` of them); with X or Y each spoke is
+    /// mirrored too.
+    pub symmetry_radial: bool,
+    pub symmetry_spokes: u32,
+    /// Where the mirror lines cross, as a share of the painting's width and height.
+    pub symmetry_centre: [f64; 2],
     /// Eyedropper: sample the visible picture (true) or only the current layer.
     pub pick_all_layers: bool,
     /// Eyedropper: average over this radius, in canvas pixels (0 = one pixel).
@@ -409,6 +415,9 @@ impl Default for ToolSettings {
             hold_to_straighten: true,
             symmetry_x: false,
             symmetry_y: false,
+            symmetry_radial: false,
+            symmetry_spokes: 6,
+            symmetry_centre: [0.5, 0.5],
             pick_all_layers: true,
             pick_radius: 0.0,
             fill_tolerance: 0.12,
@@ -428,6 +437,8 @@ impl Default for ToolSettings {
 pub const MIN_BRUSH: f32 = 1.0;
 pub const MAX_BRUSH: f32 = 1000.0;
 pub const MAX_RECENT_COLORS: usize = 16;
+/// The most spokes radial symmetry has.
+pub const MAX_SPOKES: u32 = 32;
 
 /// Keyboard modifier state at the time of an input event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -513,6 +524,8 @@ enum Interaction {
     /// A handle of the lasso transform's box dragged; `from` is the box when the pen went
     /// down at `start` (canvas pixels).
     TransformDrag { handle: Handle, start: (f64, f64), from: Rect4, from_m: Affine },
+    /// The symmetry centre being put where the pen is.
+    SymmetryCentre,
     /// The pen is down but nothing happens until it lifts (e.g. a locked layer).
     Ignore,
 }
@@ -739,6 +752,8 @@ pub struct Editor {
     fit_pending: bool,
     /// Goes up whenever pixels change (the layer thumbnails follow it).
     pub pixels_rev: u64,
+    /// The next press on the canvas puts the symmetry centre there (the Navigator's button).
+    pub placing_centre: bool,
     /// The [`Editor::pixels_rev`] the projection was last brought up to (the UI runs before
     /// the frame's refresh, so its pictures of the projection follow this one).
     pub projection_rev: u64,
@@ -795,6 +810,7 @@ impl Editor {
             refresh_all: true,
             fit_pending: true,
             pixels_rev: 0,
+            placing_centre: false,
             projection_rev: 0,
             transform: None,
             fitted: None,
@@ -1006,6 +1022,9 @@ impl Editor {
             Interaction::Zoom { anchor: at, last_y: s.y }
         } else if mods.space || tool == Tool::Pan {
             Interaction::Pan { last: at }
+        } else if self.placing_centre {
+            self.set_symmetry_centre(c);
+            Interaction::SymmetryCentre
         } else if tool == Tool::Rotate {
             Interaction::Rotate { last_angle: self.angle_from_centre(at) }
         } else if tool == Tool::Zoom {
@@ -1165,12 +1184,26 @@ impl Editor {
         self.mark_tiles(tiles);
     }
 
-    /// The mirror lines brush strokes use now: through the painting's middle.
+    /// The symmetry brush strokes use now.
     pub fn symmetry(&self) -> Symmetry {
+        let t = &self.tools;
+        let [fx, fy] = t.symmetry_centre;
         Symmetry {
-            x: self.tools.symmetry_x.then_some(self.doc.width as f64 / 2.0),
-            y: self.tools.symmetry_y.then_some(self.doc.height as f64 / 2.0),
+            centre: (fx * self.doc.width as f64, fy * self.doc.height as f64),
+            x: t.symmetry_x,
+            y: t.symmetry_y,
+            spokes: if t.symmetry_radial { t.symmetry_spokes.clamp(2, MAX_SPOKES) } else { 1 },
         }
+    }
+
+    /// Puts the symmetry centre at the canvas point `c` (kept on the painting), snapped to the
+    /// middle within 8 screen pixels.
+    fn set_symmetry_centre(&mut self, c: (f64, f64)) {
+        let (w, h) = (self.doc.width as f64, self.doc.height as f64);
+        let snap = 8.0 / self.view.zoom;
+        let x = if (c.0 - w / 2.0).abs() < snap { w / 2.0 } else { c.0.clamp(0.0, w) };
+        let y = if (c.1 - h / 2.0).abs() < snap { h / 2.0 } else { c.1.clamp(0.0, h) };
+        self.tools.symmetry_centre = [x / w, y / h];
     }
 
     /// Moves the view so the canvas point `c` is in the middle of the canvas area (the
@@ -1301,6 +1334,7 @@ impl Editor {
                 // Shift straightens; for selections it was the "add" key when the pen went down.
                 *end = if shift && !tool.is_select() && *tool != Tool::Crop { constrain(*tool, *start, canvas) } else { canvas };
             }
+            Interaction::SymmetryCentre => self.set_symmetry_centre(canvas),
             Interaction::Ignore | Interaction::Idle => {}
         }
         if let Some(all) = pick {
@@ -1335,6 +1369,7 @@ impl Editor {
             Interaction::Lasso { tool, points } => self.commit_lasso(tool, points),
             Interaction::ZoomTool { anchor, moved, out, .. } if moved < 3.0 => self.view.step_zoom(!out, anchor),
             Interaction::TransformDrag { .. } => self.update_transform(),
+            Interaction::SymmetryCentre => self.placing_centre = false,
             _ => {}
         }
     }

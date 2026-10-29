@@ -994,9 +994,27 @@ fn the_navigator_moves_the_view_flips_and_turns_symmetry_on() {
     let y = button(&s, "Y");
     quiet(&g, &mut r, &mut s, click(y));
     assert!(s.ed.tools.symmetry_x && s.ed.tools.symmetry_y, "Symmetry X and Y on");
-    assert!(s.ed.symmetry().x == Some(640.0) && s.ed.symmetry().y == Some(360.0));
+    assert_eq!(s.ed.symmetry(), recedo_core::paint::Symmetry { centre: (640.0, 360.0), x: true, y: true, spokes: 1 });
     quiet(&g, &mut r, &mut s, click(flip));
     assert!(!s.ed.view.mirror, "Flip again: as it was");
+    // Radial: the spoke count wakes up; Move centre waits for a press; Middle resets it.
+    let spokes = s.ui.navigator_buttons.iter().find(|b| b.0 == "spokes").map(|b| b.1).expect("spokes");
+    assert!(spokes.right() <= map.right() + 1.0, "the spoke count fits in the panel");
+    let b = button(&s, "Radial");
+    quiet(&g, &mut r, &mut s, click(b));
+    assert!(s.ed.tools.symmetry_radial);
+    assert_eq!(s.ed.symmetry().count(), 12, "six spokes, mirrored (X is on)");
+    let b = button(&s, "Move centre");
+    quiet(&g, &mut r, &mut s, click(b));
+    assert!(s.ed.placing_centre);
+    s.ed.tools.symmetry_centre = [0.3, 0.6];
+    let b = button(&s, "Middle");
+    quiet(&g, &mut r, &mut s, click(b));
+    assert!(!s.ed.placing_centre && s.ed.tools.symmetry_centre == [0.5, 0.5]);
+    s.ed.tools.symmetry_y = false;
+    s.ed.tools.symmetry_centre = [0.6, 0.45];
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    shot(&g, &mut r, &mut s, out, "28-radial-symmetry");
     s.ui.previews.every = super::previews::THUMBNAIL_EVERY;
 }
 

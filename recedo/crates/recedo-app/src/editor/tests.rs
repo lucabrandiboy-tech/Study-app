@@ -1422,3 +1422,44 @@ fn symmetry_mirrors_brush_strokes_and_straightened_lines() {
     e.undo();
     assert_eq!(e.doc.layers[a].pixels.tile_keys().count(), 0, "all copies undone");
 }
+
+/// Radial symmetry: copies turned round the centre (and mirrored with X); the centre is put
+/// with a press after "Move centre", snaps to the middle, and is no undo step.
+#[test]
+fn radial_symmetry_turns_copies_round_a_movable_centre() {
+    let mut e = editor();
+    let a = e.active;
+    e.tools.symmetry_radial = true;
+    e.tools.symmetry_spokes = 4;
+    // A short stroke right of the middle (200, 150), 60 px out.
+    stroke(&mut e, 150.0, 255.0, 265.0);
+    let l = &e.doc.layers[a].pixels;
+    for (x, y) in [(260, 150), (200, 210), (140, 150), (200, 90)] {
+        assert!(l.pixel(x, y)[3] > 200, "a spoke at {x},{y}");
+    }
+    assert_eq!(l.pixel(230, 180)[3], 0, "nothing between the spokes");
+    e.undo();
+    // Move the centre: the press puts it where the pen is, dragging moves it.
+    e.placing_centre = true;
+    drag_with(&mut e, (100.0, 100.0), (120.0, 90.0), Modifiers::default());
+    assert!(!e.placing_centre, "one placing per click of the button");
+    assert_eq!(e.tools.symmetry_centre, [120.0 / 400.0, 90.0 / 300.0]);
+    assert_eq!(e.history.entries().1, 0, "moving the centre is no undo step");
+    assert_eq!(e.symmetry().centre, (120.0, 90.0));
+    // Three spokes and X (a kaleidoscope): six copies of a dot round (120, 90).
+    e.tools.symmetry_spokes = 3;
+    e.tools.symmetry_x = true;
+    assert_eq!(e.symmetry().count(), 6);
+    stroke(&mut e, 50.0, 119.0, 121.0);
+    let l = &e.doc.layers[a].pixels;
+    // The dot 40 px above the centre, turned by 120° and 240°: below right and below left.
+    for deg in [0.0f64, 120.0, 240.0] {
+        let (s, c) = deg.to_radians().sin_cos();
+        let (x, y) = (120.0 + 40.0 * s, 90.0 - 40.0 * c);
+        assert!(l.pixel(x.round() as i32, y.round() as i32)[3] > 200, "a copy turned {deg}° at {x:.0},{y:.0}");
+    }
+    // Near the middle, the centre snaps to it.
+    e.placing_centre = true;
+    drag_with(&mut e, (150.0, 100.0), (203.0, 147.0), Modifiers::default());
+    assert_eq!(e.tools.symmetry_centre, [0.5, 0.5]);
+}

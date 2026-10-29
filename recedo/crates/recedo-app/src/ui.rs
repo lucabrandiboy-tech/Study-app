@@ -909,7 +909,7 @@ impl AppUi {
         let (dw, dh) = (ed.doc.width as f32, ed.doc.height as f32);
         let avail = ui.available_width();
         // The map takes the room the clock and the buttons leave.
-        let k = (avail / dw).min((ui.available_height() - 66.0).max(60.0) / dh);
+        let k = (avail / dw).min((ui.available_height() - 122.0).max(60.0) / dh);
         let size = vec2((dw * k).max(1.0), (dh * k).max(1.0));
         let ppp = ui.ctx().pixels_per_point();
         let tex = self.previews.navigator(ui.ctx(), &ed.projection.image, ed.projection_rev, (size.x * ppp).round() as u32, (size.y * ppp).round() as u32);
@@ -938,8 +938,8 @@ impl AppUi {
         let (time, wait) = local_time();
         ui.vertical_centered(|ui| ui.label(RichText::new(time).size(18.0).color(Color32::from_gray(225))));
         ui.ctx().request_repaint_after(std::time::Duration::from_secs(wait.max(1)));
+        let button = |ui: &mut Ui, on: bool, text: &str, tip: &str| ui.add(egui::Button::new(text).selected(on).min_size(vec2(26.0, 22.0))).on_hover_text(tip);
         ui.horizontal_wrapped(|ui| {
-            let button = |ui: &mut Ui, on: bool, text: &str, tip: &str| ui.add(egui::Button::new(text).selected(on).min_size(vec2(26.0, 22.0))).on_hover_text(tip);
             let r = button(ui, ed.view.mirror, "Flip", "Shows the painting mirrored left to right, to check it with fresh eyes (M). The painting itself is not changed.");
             if r.clicked() {
                 ed.toggle_mirror();
@@ -947,16 +947,40 @@ impl AppUi {
             self.navigator_buttons.push(("Flip", r.rect));
             ui.separator();
             ui.label("Symmetry");
-            let r = button(ui, ed.tools.symmetry_x, "X", "Brush and eraser strokes are mirrored left to right, about the painting's middle");
+            let r = button(ui, ed.tools.symmetry_x, "X", "Brush and eraser strokes are mirrored left to right, about the line through the symmetry centre (with Radial: each spoke is mirrored too)");
             if r.clicked() {
                 ed.tools.symmetry_x = !ed.tools.symmetry_x;
             }
             self.navigator_buttons.push(("X", r.rect));
-            let r = button(ui, ed.tools.symmetry_y, "Y", "Brush and eraser strokes are mirrored top to bottom, about the painting's middle");
+            let r = button(ui, ed.tools.symmetry_y, "Y", "Brush and eraser strokes are mirrored top to bottom, about the line through the symmetry centre");
             if r.clicked() {
                 ed.tools.symmetry_y = !ed.tools.symmetry_y;
             }
             self.navigator_buttons.push(("Y", r.rect));
+        });
+        ui.horizontal(|ui| {
+            let t = &mut ed.tools;
+            let r = button(ui, t.symmetry_radial, "Radial", "Brush and eraser strokes are copied round the symmetry centre, like spokes (with X or Y on: mirrored too, like a kaleidoscope)");
+            if r.clicked() {
+                t.symmetry_radial = !t.symmetry_radial;
+            }
+            self.navigator_buttons.push(("Radial", r.rect));
+            let r = ui.add_enabled(t.symmetry_radial, egui::DragValue::new(&mut t.symmetry_spokes).range(2..=crate::editor::MAX_SPOKES).speed(0.05)).on_hover_text("How many spokes (drag, or click and type)");
+            self.navigator_buttons.push(("spokes", r.rect));
+            ui.label(RichText::new("spokes").color(Color32::from_gray(150)));
+        });
+        ui.horizontal(|ui| {
+            let r = button(ui, ed.placing_centre, "Move centre", "Then press on the canvas where the symmetry centre goes (drag to place it; it snaps to the middle)");
+            if r.clicked() {
+                ed.placing_centre = !ed.placing_centre;
+            }
+            self.navigator_buttons.push(("Move centre", r.rect));
+            let r = button(ui, false, "Middle", "Puts the symmetry centre back in the painting's middle");
+            if r.clicked() {
+                ed.tools.symmetry_centre = [0.5, 0.5];
+                ed.placing_centre = false;
+            }
+            self.navigator_buttons.push(("Middle", r.rect));
         });
     }
 
@@ -1510,15 +1534,49 @@ impl AppUi {
             }
             painter.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, Color32::from_gray(20))));
         }
-        // Symmetry: its mirror lines across the painting.
+        // Symmetry: its mirror lines or spokes across the painting, and its centre.
         let sym = ed.symmetry();
-        if !self.canvas_only && (sym.x.is_some() || sym.y.is_some()) {
+        if !self.canvas_only && (sym.count() > 1 || ed.placing_centre) {
             let (w, h) = (ed.doc.width as f64, ed.doc.height as f64);
-            let lines = sym.x.map(|x| [(x, 0.0), (x, h)]).into_iter().chain(sym.y.map(|y| [(0.0, y), (w, y)]));
+            let (cx, cy) = sym.centre;
+            // From the centre to the painting's edge, `deg` clockwise from straight up.
+            let ray = |deg: f64| {
+                let (s, c) = deg.to_radians().sin_cos();
+                let (dx, dy) = (s, -c);
+                let reach = |d: f64, from: f64, size: f64| if d > 1e-9 { (size - from) / d } else if d < -1e-9 { -from / d } else { f64::INFINITY };
+                let t = reach(dx, cx, w).min(reach(dy, cy, h));
+                [(cx, cy), (cx + dx * t, cy + dy * t)]
+            };
+            let mut lines = Vec::new();
+            if sym.spokes > 1 {
+                let n = sym.spokes as f64;
+                // With a mirror the wedges are halved: a line at every mirror axis.
+                let (step, from) = if sym.x {
+                    (180.0 / n, 0.0)
+                } else if sym.y {
+                    (180.0 / n, 90.0)
+                } else {
+                    (360.0 / n, 0.0)
+                };
+                let count = if sym.x || sym.y { 2 * sym.spokes } else { sym.spokes };
+                lines.extend((0..count).map(|k| ray(from + k as f64 * step)));
+            } else {
+                if sym.x {
+                    lines.push([(cx, 0.0), (cx, h)]);
+                }
+                if sym.y {
+                    lines.push([(0.0, cy), (w, cy)]);
+                }
+            }
             for [a, b] in lines {
                 painter.line_segment([to(a), to(b)], Stroke::new(2.5, Color32::from_black_alpha(60)));
                 painter.add(egui::Shape::dashed_line(&[to(a), to(b)], Stroke::new(1.2, ACCENT_LIGHT), 8.0, 5.0));
             }
+            let c = to((cx, cy));
+            let r = if ed.placing_centre { 9.0 } else { 5.0 };
+            painter.circle(c, r, Color32::from_black_alpha(80), Stroke::new(1.5, ACCENT_LIGHT));
+            painter.line_segment([c - vec2(r + 4.0, 0.0), c + vec2(r + 4.0, 0.0)], Stroke::new(1.0, ACCENT_LIGHT));
+            painter.line_segment([c - vec2(0.0, r + 4.0), c + vec2(0.0, r + 4.0)], Stroke::new(1.0, ACCENT_LIGHT));
         }
         // Lines drawn dark under light, so they show on any colour.
         let ants = |shapes: &mut Vec<egui::Shape>, light: &mut Vec<egui::Shape>, a: egui::Pos2, b: egui::Pos2| {
