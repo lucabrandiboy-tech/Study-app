@@ -85,8 +85,8 @@ impl Symmetry {
 
 pub struct PaintSession {
     layer: usize,
-    /// One brush per mirror image (one without symmetry), each its own continuous stroke.
-    painters: Vec<StrokePainter>,
+    /// The brush, painting every copy (symmetry) as one stroke.
+    painter: StrokePainter,
     symmetry: Symmetry,
     stabilizer: Option<Stabilizer>,
     dirty: HashSet<TileKey>,
@@ -124,7 +124,7 @@ impl PaintSession {
         history.record(if erase { "Erase" } else { "Brush stroke" }, doc);
         let mut s = PaintSession {
             layer,
-            painters: (0..symmetry.count()).map(|_| StrokePainter::new(brush.clone(), color, erase)).collect(),
+            painter: StrokePainter::with_copies(brush, color, erase, symmetry.count()),
             symmetry,
             stabilizer: stabilizer.enabled.then(|| Stabilizer::start(first, now_us, stabilizer, zoom)),
             dirty: HashSet::new(),
@@ -135,9 +135,7 @@ impl PaintSession {
 
     fn paint(&mut self, doc: &mut Document, p: PaintInfo) {
         if let Some(l) = doc.layers.get_mut(self.layer) {
-            for (painter, q) in self.painters.iter_mut().zip(self.symmetry.copies(p)) {
-                painter.add(&mut l.pixels, q, &mut self.dirty);
-            }
+            self.painter.add_copies(&mut l.pixels, &self.symmetry.copies(p), &mut self.dirty);
         }
     }
 
@@ -187,7 +185,7 @@ impl PaintSession {
     }
 
     pub fn dabs_painted(&self) -> usize {
-        self.painters.iter().map(|p| p.dabs_painted).sum()
+        self.painter.dabs_painted
     }
 }
 
@@ -335,5 +333,49 @@ mod tests {
         assert!(painted > 400, "four strokes painted: {painted} pixels");
         assert!(off <= 2, "each copy is the first turned (largest difference {off})");
         assert_eq!(l.pixel(64, 64)[3], 0, "nothing in the middle");
+    }
+
+    /// A stroke across its own mirror line: the copies overlap and are one stroke (no copy
+    /// wipes out what another painted, and Wash never goes past the stroke's opacity).
+    #[test]
+    fn overlapping_copies_are_one_stroke() {
+        for opacity in [1.0f32, 0.5] {
+            let mut doc = Document::new(128, 64, None);
+            let mut history = History::new(10);
+            let brush = Brush { size: 9.0, hardness: 1.0, opacity, size_curve: None, ..Brush::default() };
+            let sym = Symmetry { centre: (64.0, 32.0), x: true, ..Symmetry::default() };
+            // Zigzagging over the line at x = 64, so each copy keeps coming back over the other.
+            let mut s = PaintSession::begin(&mut doc, &mut history, 0, brush.clone(), [0, 0, 0], false, StabilizerSettings::default(), sym, 1.0, pt(40.0, 32.0), 0).unwrap();
+            for i in 1..=60 {
+                let x = 40.0 + 48.0 * ((i as f64 / 12.0).sin().abs());
+                s.add(&mut doc, pt(x, 32.0 + (i % 3) as f64 * 0.5), i * 1000);
+            }
+            s.end(&mut doc, 70_000);
+            let l = &doc.layers[0].pixels;
+            let want = (opacity * 255.0).round() as i32;
+            for x in 40..88 {
+                let a = l.pixel(x, 32)[3] as i32;
+                assert!((a - want).abs() <= 2, "opacity {opacity}: x {x} has {a}, the stroke is {want}");
+            }
+            // Everywhere, at least what each copy paints alone (nothing wiped out).
+            for flip in [false, true] {
+                let mut alone = Document::new(128, 64, None);
+                let mut h = History::new(10);
+                let at = |x: f64| if flip { 128.0 - x } else { x };
+                let mut s = PaintSession::begin(&mut alone, &mut h, 0, brush.clone(), [0, 0, 0], false, StabilizerSettings::default(), Symmetry::default(), 1.0, pt(at(40.0), 32.0), 0).unwrap();
+                for i in 1..=60 {
+                    let x = 40.0 + 48.0 * ((i as f64 / 12.0).sin().abs());
+                    s.add(&mut alone, pt(at(x), 32.0 + (i % 3) as f64 * 0.5), i * 1000);
+                }
+                s.end(&mut alone, 70_000);
+                let one = &alone.layers[0].pixels;
+                for y in 0..64 {
+                    for x in 0..128 {
+                        let (both, a) = (l.pixel(x, y)[3] as i32, one.pixel(x, y)[3] as i32);
+                        assert!(both >= a - 2, "opacity {opacity}: {x},{y} has {both}, one copy alone paints {a}");
+                    }
+                }
+            }
+        }
     }
 }

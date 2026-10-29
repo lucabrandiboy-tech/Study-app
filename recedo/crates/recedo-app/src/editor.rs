@@ -1154,8 +1154,8 @@ impl Editor {
             t.path[i].pressure
         };
         let a = t.path[0];
-        // One line per mirror image.
-        let mut painters: Vec<_> = (0..t.symmetry.count()).map(|_| recedo_core::brush::StrokePainter::new(t.brush.clone(), t.color, t.erase)).collect();
+        // One line per copy (symmetry), painted as one stroke.
+        let mut painter = recedo_core::brush::StrokePainter::with_copies(t.brush.clone(), t.color, t.erase, t.symmetry.count());
         let mut dirty = HashSet::new();
         let steps = 32;
         for i in 0..=steps {
@@ -1164,9 +1164,7 @@ impl Editor {
             p.x = a.x + (end.x - a.x) * f;
             p.y = a.y + (end.y - a.y) * f;
             p.pressure = pressure_at(f);
-            for (painter, q) in painters.iter_mut().zip(t.symmetry.copies(p)) {
-                painter.add(&mut l.pixels, q, &mut dirty);
-            }
+            painter.add_copies(&mut l.pixels, &t.symmetry.copies(p), &mut dirty);
         }
         // Every tile the freehand stroke or the line touched.
         let mut tiles: HashSet<TileKey> = HashSet::new();

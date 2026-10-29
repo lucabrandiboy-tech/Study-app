@@ -197,7 +197,8 @@ pub struct StrokePainter {
     pub brush: Brush,
     pub color: [u8; 3],
     pub erase: bool,
-    spacer: DabSpacer,
+    /// One per copy of the stroke (symmetry); they share the coverage and the tiles below.
+    spacers: Vec<DabSpacer>,
     /// Wash: the stroke's coverage so far, per tile (alpha only).
     mask: HashMap<TileKey, Box<[u8; TILE_PIXELS]>>,
     /// Wash: the layer's tiles from before the stroke (`None` = the tile did not exist).
@@ -208,14 +209,29 @@ pub struct StrokePainter {
 
 impl StrokePainter {
     pub fn new(brush: Brush, color: [u8; 3], erase: bool) -> StrokePainter {
-        StrokePainter { brush, color, erase, spacer: DabSpacer::default(), mask: HashMap::new(), before: HashMap::new(), dabs: Vec::new(), dabs_painted: 0 }
+        StrokePainter::with_copies(brush, color, erase, 1)
+    }
+
+    /// The same stroke painted at `copies` places at once (symmetry). They are one stroke:
+    /// where copies overlap, Wash still covers no more than the stroke's opacity, and no copy
+    /// redraws a tile from before another copy painted it.
+    pub fn with_copies(brush: Brush, color: [u8; 3], erase: bool, copies: usize) -> StrokePainter {
+        let spacers = (0..copies.max(1)).map(|_| DabSpacer::default()).collect();
+        StrokePainter { brush, color, erase, spacers, mask: HashMap::new(), before: HashMap::new(), dabs: Vec::new(), dabs_painted: 0 }
     }
 
     /// Adds a stroke point and paints the dabs it makes; changed tiles go into `dirty`.
     pub fn add(&mut self, layer: &mut TiledLayer, p: PaintInfo, dirty: &mut HashSet<TileKey>) {
+        self.add_copies(layer, &[p], dirty);
+    }
+
+    /// Adds a point for each copy (`ps[i]` continues copy `i`).
+    pub fn add_copies(&mut self, layer: &mut TiledLayer, ps: &[PaintInfo], dirty: &mut HashSet<TileKey>) {
         let mut dabs = std::mem::take(&mut self.dabs);
         dabs.clear();
-        self.spacer.add(&self.brush, p, &mut dabs);
+        for (spacer, &p) in self.spacers.iter_mut().zip(ps) {
+            spacer.add(&self.brush, p, &mut dabs);
+        }
         for d in &dabs {
             self.paint(layer, d, dirty);
         }
