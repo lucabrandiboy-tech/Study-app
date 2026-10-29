@@ -139,7 +139,7 @@ impl Settings {
         }
         let st = &mut self.tools.stabilizer;
         st.migrate();
-        st.distance = if st.distance.is_finite() { st.distance.clamp(3.0, 500.0) } else { 50.0 };
+        st.distance = if st.distance.is_finite() { st.distance.clamp(3.0, 800.0) } else { 50.0 };
         st.delay_distance = if st.delay_distance.is_finite() { st.delay_distance.clamp(1.0, 500.0) } else { 50.0 };
         self.tools.symmetry_spokes = self.tools.symmetry_spokes.clamp(2, crate::editor::MAX_SPOKES);
         let c = &mut self.tools.symmetry_centre;

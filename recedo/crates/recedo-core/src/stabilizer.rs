@@ -90,7 +90,7 @@ pub struct StabilizerSettings {
     pub scalable_distance: bool,
     /// How the line is smoothed (the Stability slider picks [`SmoothMode::Adaptive`]).
     pub mode: SmoothMode,
-    /// Adaptive mode's strength, 0..=1 (the Stability slider / 100). Negative when read from
+    /// Adaptive mode's strength, 0..=2 (the Stability slider / 100). Negative when read from
     /// settings saved before it existed (see [`StabilizerSettings::migrate`]).
     #[serde(default = "missing_strength")]
     pub strength: f32,
@@ -129,19 +129,23 @@ impl Default for StabilizerSettings {
     }
 }
 
-/// The window, in ms, of the strongest stability (100): about as heavy as Clip Studio's 100.
+/// The window, in ms, of stability 100: about as heavy as Clip Studio's 100. Above 100 the
+/// window keeps growing, to twice this at [`MAX_STABILITY`].
 const STRONGEST: f32 = 400.0;
+/// The Stability slider's top: twice as smooth as 100 (the smoothing spans twice the time).
+pub const MAX_STABILITY: u8 = 200;
 /// The window of the weakest stability above 0 (1).
 const WEAKEST: f32 = 3.0;
 
 impl StabilizerSettings {
-    /// One number for how smooth lines are, 0 (off) to 100 (strongest), like the
-    /// "Stabilization" slider of other painting apps. Steps are even in feel: each one
-    /// lengthens the averaging window by the same factor, so low settings stay fine-grained.
+    /// One number for how smooth lines are, 0 (off) to [`MAX_STABILITY`], like the
+    /// "Stabilization" slider of other painting apps (whose top, 100, is this one's 100; 200
+    /// smooths over twice the time). Steps are even in feel: each one lengthens the
+    /// smoothing time by the same factor, so low settings stay fine-grained.
     /// Settings saved before the adaptive mode: the stabilizer becomes the adaptive one, as
     /// strong as the Stability slider showed it.
     pub fn migrate(&mut self) {
-        if !(self.strength >= 0.0 && self.strength <= 1.0) {
+        if !(self.strength >= 0.0 && self.strength <= MAX_STABILITY as f32 / 100.0) {
             let t = (self.distance.max(WEAKEST) / WEAKEST).ln() / (STRONGEST / WEAKEST).ln();
             self.strength = t.clamp(0.01, 1.0);
             self.mode = SmoothMode::Adaptive;
@@ -152,24 +156,31 @@ impl StabilizerSettings {
         if !self.enabled {
             return 0;
         }
+        let top = MAX_STABILITY as f32;
         if self.mode == SmoothMode::Adaptive {
-            return (self.strength * 100.0).round().clamp(1.0, 100.0) as u8;
+            return (self.strength * 100.0).round().clamp(1.0, top) as u8;
         }
-        let t = (self.distance.max(WEAKEST) / WEAKEST).ln() / (STRONGEST / WEAKEST).ln();
-        (t * 100.0).round().clamp(1.0, 100.0) as u8
+        let t = if self.distance > STRONGEST {
+            1.0 + (self.distance / STRONGEST).log2()
+        } else {
+            (self.distance.max(WEAKEST) / WEAKEST).ln() / (STRONGEST / WEAKEST).ln()
+        };
+        (t * 100.0).round().clamp(1.0, top) as u8
     }
 
     /// Sets [`StabilizerSettings::stability`]. Above 0 the line always finishes where the pen
     /// lifts, and the smoothing is the same at every zoom (a window of time, as the pen
     /// moves on the screen).
     pub fn set_stability(&mut self, v: u8) {
-        let v = v.min(100);
+        let v = v.min(MAX_STABILITY);
         self.enabled = v > 0;
         if v > 0 {
             // The engine picked under "Stabilizer details" stays (Krita's average: its window).
+            let t = v as f32 / 100.0;
             match self.mode {
-                SmoothMode::Adaptive => self.strength = v as f32 / 100.0,
-                SmoothMode::Average => self.distance = WEAKEST * (STRONGEST / WEAKEST).powf(v as f32 / 100.0),
+                SmoothMode::Adaptive => self.strength = t,
+                SmoothMode::Average if t > 1.0 => self.distance = STRONGEST * 2f32.powf(t - 1.0),
+                SmoothMode::Average => self.distance = WEAKEST * (STRONGEST / WEAKEST).powf(t),
             }
             self.finish_line = true;
             self.scalable_distance = false;
@@ -198,11 +209,16 @@ pub struct Stabilizer {
     last_raw: PaintInfo,
 }
 
-/// How strongly the adaptive mode smooths, from its strength (0..=1): the cutoff frequency
+/// How strongly the adaptive mode smooths, from its strength (0..=2): the cutoff frequency
 /// while the pen is still (Hz; lower is smoother) and how much it rises per screen pixel
-/// per second of speed.
+/// per second of speed. From 1 to 2 both halve, so at every pen speed the filter's time
+/// constant doubles: 200 smooths over twice the time 100 does.
 fn euro_params(strength: f32) -> (f64, f64) {
-    let s = strength.clamp(0.0, 1.0) as f64;
+    let s = strength.clamp(0.0, MAX_STABILITY as f32 / 100.0) as f64;
+    if s > 1.0 {
+        let k = 0.5f64.powf(s - 1.0);
+        return (EURO_STRONG * k, EURO_BETA_STRONG * k);
+    }
     let min_cutoff = EURO_WEAK * (EURO_STRONG / EURO_WEAK).powf(s);
     (min_cutoff, EURO_BETA * (EURO_BETA_STRONG / EURO_BETA).powf(s))
 }
@@ -598,7 +614,7 @@ mod tests {
         assert!(!s.enabled);
         assert_eq!(s.stability(), 0);
         let mut last = (f64::INFINITY, f64::INFINITY);
-        for v in 1..=100u8 {
+        for v in 1..=MAX_STABILITY {
             s.set_stability(v);
             assert!(s.enabled && s.finish_line && !s.scalable_distance && s.mode == SmoothMode::Adaptive);
             assert_eq!(s.stability(), v, "reads back");
@@ -606,9 +622,24 @@ mod tests {
             assert!(cutoff < last.0 && beta < last.1, "{v}: each step smooths more");
             last = (cutoff, beta);
         }
+        // 200 is twice as smooth as 100: half the cutoff at every speed (twice the time).
+        s.set_stability(100);
+        let at_100 = euro_params(s.strength);
+        s.set_stability(200);
+        let at_200 = euro_params(s.strength);
+        assert!((at_200.0 * 2.0 - at_100.0).abs() < 1e-12 && (at_200.1 * 2.0 - at_100.1).abs() < 1e-12, "{at_100:?} vs {at_200:?}");
+        s.set_stability(250);
+        assert_eq!(s.stability(), MAX_STABILITY, "no higher than the top");
         // Settings saved by the first version of the slider (averaging) still read back.
         let old = StabilizerSettings { enabled: true, distance: WEAKEST * (STRONGEST / WEAKEST).powf(0.4), mode: SmoothMode::Average, ..Default::default() };
         assert_eq!(old.stability(), 40);
+        // Krita's average reads back too, above 100 as well (200: twice the window of 100).
+        let mut avg = StabilizerSettings { mode: SmoothMode::Average, ..Default::default() };
+        for v in [1u8, 60, 100, 101, 150, 200] {
+            avg.set_stability(v);
+            assert_eq!(avg.stability(), v);
+        }
+        assert_eq!(avg.distance, 2.0 * STRONGEST);
     }
 
     /// How the slider feels, on a shaky hand: a horizontal line at 600 px/s with random
@@ -654,6 +685,51 @@ mod tests {
         assert!(lags[0] < 8.0, "stability 10 trails by {:.1} px at 600 px/s", lags[0]);
         assert!(lags.windows(2).all(|w| w[1] > w[0]), "stronger trails more: {lags:?}");
         assert!(lags[4] > 40.0, "stability 100 is heavy: {:.1} px", lags[4]);
+    }
+
+    /// Above 100, on a shaky hand drawing slowly and steadily for 4 s (once the line has
+    /// settled): steadier at each step, trailing about twice as far at 200 as at 100.
+    #[test]
+    fn the_top_of_the_slider_smooths_up_to_twice_as_long() {
+        for speed in [150.0, 600.0] {
+            let shaky = |t: f64| {
+                let i = (t * 200.0).round() as u64;
+                let h = (i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) >> 33) as f64 / (1u64 << 31) as f64;
+                PaintInfo::new(t * speed, 100.0 + 3.0 * (2.0 * h - 1.0), 1.0)
+            };
+            let mut results = Vec::new();
+            for v in [100u8, 150, 200] {
+                let mut set = StabilizerSettings::default();
+                set.set_stability(v);
+                let mut s = Stabilizer::start(shaky(0.0), 0, set, 1.0);
+                let (mut out, mut lag, mut t) = (Vec::new(), Vec::new(), 0u64);
+                while t < 4_000_000 {
+                    t += 5_000;
+                    s.add(shaky(t as f64 / 1e6));
+                    if t.is_multiple_of(15_000) {
+                        out.extend(s.poll(t));
+                        if t > 2_000_000 {
+                            lag.push(s.pen_position().x - s.brush_position().x);
+                        }
+                    }
+                }
+                // Drawn from 1.5 s on (the line has settled), not the finish line.
+                let from = 1.5 * speed;
+                let ys: Vec<f64> = out.iter().filter(|p| p.x > from).map(|p| (p.y - 100.0).abs()).collect();
+                assert!(ys.len() > 100);
+                let wobble = ys.iter().sum::<f64>() / ys.len() as f64;
+                let lag = lag.iter().sum::<f64>() / lag.len() as f64;
+                println!("{speed} px/s, stability {v}: wobble {wobble:.3} px, trails {lag:.1} px");
+                results.push((wobble, lag));
+                let (last, pen) = (out.last().copied().unwrap_or(s.brush_position()), s.pen_position());
+                let end = s.finish(t);
+                let end = end.last().copied().unwrap_or(last);
+                assert!((end.x - pen.x).abs() < 1e-6 && (end.y - pen.y).abs() < 1e-6, "{v}: ends where the pen lifted");
+            }
+            assert!(results.windows(2).all(|w| w[1].0 < w[0].0), "{speed} px/s: steadier at each step: {results:?}");
+            let (lag_100, lag_200) = (results[0].1, results[2].1);
+            assert!(lag_200 > 1.6 * lag_100 && lag_200 < 2.4 * lag_100, "{speed} px/s: 200 trails {lag_200:.1} px, 100 {lag_100:.1} px");
+        }
     }
 
     #[test]

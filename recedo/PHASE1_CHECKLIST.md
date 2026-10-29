@@ -56,7 +56,8 @@ Each step says what you should see. If something is different, note the step num
    ones barely trail the pen (a thin blue string shows how far the line is behind), and
    every line ends exactly where you lift. Then draw a wobbly, roughly straight line and keep
    the pen still at its end for half a second: it snaps straight, and moving the pen before
-   lifting moves its end. Tell me which Stability number feels right for you.
+   lifting moves its end. The slider goes to 200: from 100 up it keeps getting smoother, to
+   twice as smooth (and twice the trailing) at 200. Tell me which Stability number feels right for you.
 9. **Layers** (right side): click **New**, paint, then click the **eye** of a layer to hide it,
    the **lock** to lock it (painting on a locked layer shows a message instead), drag the
    **Opacity** slider, try a blend mode like **Multiply**. Double-click a layer's name to

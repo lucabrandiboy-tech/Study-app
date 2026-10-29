@@ -2231,7 +2231,7 @@ fn tool_options_panel(ui: &mut Ui, ed: &mut Editor, may_focus: bool, previews: &
                 }
                 ui.add_enabled_ui(s.enabled, |ui| {
                     if s.mode == SmoothMode::Average {
-                        ui.add(egui::Slider::new(&mut s.distance, 3.0..=500.0).logarithmic(true).text("Distance (ms)").max_decimals(0));
+                        ui.add(egui::Slider::new(&mut s.distance, 3.0..=800.0).logarithmic(true).text("Distance (ms)").max_decimals(0));
                         ui.checkbox(&mut s.stabilize_sensors, "Smooth pressure and tilt too");
                         ui.checkbox(&mut s.scalable_distance, "Distance follows the zoom");
                     }
@@ -2586,15 +2586,16 @@ fn ago(secs_since_1970: u64) -> String {
     }
 }
 
-/// How smooth lines are, 0 (off) to 100, like the "Stabilization" slider of other painting
-/// apps (on the toolbar and in Tool property; the details are under "Stabilizer").
+/// How smooth lines are, 0 (off) to 200: up to 100 like the "Stabilization" slider of other
+/// painting apps, then up to twice as smooth (on the toolbar and in Tool property; the
+/// details are under "Stabilizer").
 fn stability_slider(ui: &mut Ui, ed: &mut Editor, width: f32) {
     let mut v = ed.tools.stabilizer.stability();
     ui.scope(|ui| {
         ui.spacing_mut().slider_width = width;
         let r = ui
-            .add(egui::Slider::new(&mut v, 0..=100).text("Stability"))
-            .on_hover_text("How smooth lines are: 0 is off; higher is smoother, and the line trails the pen more while you draw. It always ends where the pen lifts.");
+            .add(egui::Slider::new(&mut v, 0..=recedo_core::stabilizer::MAX_STABILITY).text("Stability"))
+            .on_hover_text("How smooth lines are: 0 is off; higher is smoother, and the line trails the pen more while you draw. 100 is as strong as other apps' strongest; 200 smooths over twice the time. It always ends where the pen lifts.");
         if r.changed() {
             ed.tools.stabilizer.set_stability(v);
         }

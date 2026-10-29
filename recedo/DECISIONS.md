@@ -241,6 +241,7 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Speeds measured on the screen | So the smoothing feels the same at any zoom. |
 | Old settings move to the adaptive filter at the same number; Krita's average stays under "Stabilizer details" | The slider's number keeps its meaning; nothing the user chose is lost. |
 | Hold to straighten only for nearly straight strokes | Snapping curves to a line would destroy work; the tolerance (6 px or 8 % of the length) lets a wobbly line through but not a curve. Pressure along the line follows the hand's, so the line keeps its taper. |
+| Stability goes to 200: above 100 the cutoff halves by 200 (twice the smoothing time), 0-100 unchanged | Asked for: twice as stabilizing. Continuing the 0-100 curve would have made 200 sixty times as strong, not two; halving the cutoff doubles the filter's time constant at every speed, which halves the remaining shake (measured) and doubles the trailing, the honest cost. Saved settings keep their number. |
 | A browser test with readings queued 5 ms apart, not waited for one by one | Waiting for each reading made the test pen send one every 123 ms, which no smoothing over time can work with; real pens send 200+ a second. |
 
 ## 13. Navigator and symmetry (asked for after the Stability slider)
