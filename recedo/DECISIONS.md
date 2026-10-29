@@ -253,7 +253,17 @@ The user asked for many more real tools and a way to choose which ones sit on th
 | Symmetry mirrors about the painting's middle, one stroke painter per copy, one undo step | The same brush engine paints each copy, so every brush works mirrored; one step because it is one stroke to the user. A movable axis and radial symmetry are later steps. |
 | Flip in the Navigator is the existing mirror view (M), not a change to the pixels | Artists flip to check a drawing with fresh eyes; changing the pixels would be a different command (and is on the lasso transform already). |
 
-## 14. Licences
+## 14. The radial quick menu (R)
+
+| Decision | Why |
+|---|---|
+| R opens it; rectangle select moves to Shift+R | The user asked for R. Selections are used less often than switching tools and colours. |
+| Tap to keep it open, or hold, point and let go (a quarter second decides) | Both ways are standard (Blender's pie menus, Krita's pop-up palette): tapping suits a pen, holding is one motion. |
+| The tool bar's first eight tools, not a separate list | The bar is already the user's own choice and order (tool library); a second list to keep up would be clutter. Eight slices stay big enough to hit with a pen. |
+| Recent colours, then basic ones | A ring that is never empty; the recent ones are what a painter goes back to. |
+| A window-sized area on top while it is open | Every press goes to the menu, so a press outside closes it and never starts a stroke; the canvas needs no extra rule. |
+
+## 15. Licences
 
 Recedo is GPL-3.0-or-later, so code ported from Krita (GPL) can be used. Third-party
 components and fonts are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

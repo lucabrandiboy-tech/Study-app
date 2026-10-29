@@ -105,7 +105,7 @@ Each step says what you should see. If something is different, note the step num
    lightly, then harder. *Expected:* the paint is dragged along; pressing harder drags more.
 3. **Blur** (on the tool strip: the drop icon): go over the edge of a stroke a few times. *Expected:* the edge
    gets soft.
-4. **Rectangle select** (**R**): drag a box over part of a stroke, then paint across it with
+4. **Rectangle select** (**Shift+R**): drag a box over part of a stroke, then paint across it with
    the brush. *Expected:* paint only inside the box (the moving dashed line shows the
    selection). **Delete** clears inside it, **Ctrl+D** deselects. Holding **Shift** when you
    start a new selection adds to it, **Alt** takes away.
@@ -137,6 +137,10 @@ Each step says what you should see. If something is different, note the step num
    painting itself does not change). Turn on **X** and **Y** and paint in one corner:
    *Expected:* the stroke appears in all four corners, dashed blue lines show the middles,
    and one **Ctrl+Z** takes all four away.
+13. **Radial menu** (**R**, with the pointer over the canvas): *Expected:* a ring opens round
+   the pointer, tools outside, colours inside. Tap a slice with the pen: that tool or colour,
+   and the ring closes. Or hold **R**, move to a slice and let go. Pressing outside the ring,
+   **R** again or **Escape** closes it without painting.
 
 ## 6. What to send back
 
@@ -158,7 +162,7 @@ To remove Recedo: delete its folder and the two `Recedo` folders above.
 
 ## Not in this version yet
 
-The brush editor, textures, the radial pop-up palette, pen button settings, pressure curve
+The brush editor, textures, brush presets in the radial menu, pen button settings, pressure curve
 editor (Phase 2); palettes, colour wheel styles, 16-bit painting, colour management
 (Phase 3); groups, masks, filters, alpha lock, thumbnails (Phase 4); polygon lasso, feather /
 grow / shrink, scaling and rotating, radial gradients (Phase 5); polygon and Bézier shapes,
