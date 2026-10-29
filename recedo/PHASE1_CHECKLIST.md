@@ -136,7 +136,9 @@ Each step says what you should see. If something is different, note the step num
    click or drag on the small picture: the view goes there. **Flip** mirrors the view (the
    painting itself does not change). Turn on **X** and **Y** and paint in one corner:
    *Expected:* the stroke appears in all four corners, dashed blue lines show the middles,
-   and one **Ctrl+Z** takes all four away.
+   and one **Ctrl+Z** takes all four away. Then turn on **Radial** (6 spokes), click
+   **Move centre** and press on the canvas where the middle of the pattern should go, and
+   paint: six copies round that point; with **X** on as well, twelve (a kaleidoscope).
 13. **Radial menu** (**R**, with the pointer over the canvas): *Expected:* a ring opens round
    the pointer, tools outside, colours inside. Tap a slice with the pen: that tool or colour,
    and the ring closes. Or hold **R**, move to a slice and let go. Pressing outside the ring,
