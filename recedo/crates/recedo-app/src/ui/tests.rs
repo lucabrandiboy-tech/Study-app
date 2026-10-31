@@ -1109,3 +1109,41 @@ fn r_opens_the_radial_menu_and_picks_tools_and_colours() {
     assert_eq!(s.ed.tool, Tool::SelectRect);
     assert!(s.ui.radial.is_none(), "Shift+R does not open it");
 }
+
+#[test]
+fn the_toolbar_pressure_switch_turns_pressure_sizing_on_and_off() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    quiet(&g, &mut r, &mut s, vec![]);
+    let on = s.ed.current_brush_mut().size_curve.is_some();
+    let b = s.ui.pressure_button;
+    assert!(b.is_positive() && b.top() < 60.0, "on the toolbar at the top: {b:?}");
+    quiet(&g, &mut r, &mut s, click(b.center()));
+    assert_eq!(s.ed.current_brush_mut().size_curve.is_some(), !on, "a click switches it");
+    // Off: a light and a hard press paint the same width.
+    s.ed.current_brush_mut().size_curve = None;
+    s.ed.tools.brush.size = 20.0;
+    s.ed.tools.brush.hardness = 1.0;
+    let width_at = |s: &mut Session, y: f32, pressure: f32| {
+        for i in 0..=10 {
+            let p = s.ed.view.to_screen(300.0 + i as f64 * 20.0, y as f64);
+            s.ed.pen(&PenSample::synthetic(1_000_000 + i * 8000, p.0, p.1, pressure, true), true, Modifiers::default());
+        }
+        let p = s.ed.view.to_screen(500.0, y as f64);
+        s.ed.pen(&PenSample::synthetic(1_200_000, p.0, p.1, 0.0, false), true, Modifiers::default());
+        let l = &s.ed.doc.layers[s.ed.active].pixels;
+        let y = y as i32;
+        (y - 40..y + 40).filter(|&yy| l.pixel(400, yy)[3] > 128).count()
+    };
+    let (light, hard) = (width_at(&mut s, 200.0, 0.2), width_at(&mut s, 400.0, 1.0));
+    assert!(light >= 18 && (light as i32 - hard as i32).abs() <= 1, "off: same width ({light} vs {hard})");
+    // On: the light line is thinner.
+    let b = s.ui.pressure_button.center();
+    quiet(&g, &mut r, &mut s, click(b));
+    assert!(s.ed.current_brush_mut().size_curve.is_some());
+    s.ed.undo();
+    s.ed.undo();
+    let (light, hard) = (width_at(&mut s, 200.0, 0.2), width_at(&mut s, 400.0, 1.0));
+    assert!(light * 2 < hard, "on: a light press is thinner ({light} vs {hard})");
+}

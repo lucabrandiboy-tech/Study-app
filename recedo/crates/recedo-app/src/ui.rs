@@ -242,6 +242,8 @@ pub struct AppUi {
     pub strip: Vec<(Option<Tool>, egui::Rect)>,
     /// Where the Navigator's buttons were drawn last frame, for the tests.
     pub navigator_buttons: Vec<(&'static str, egui::Rect)>,
+    /// Where the toolbar's Pressure switch was drawn last frame, for the tests.
+    pub pressure_button: egui::Rect,
     /// The radial quick menu, while it is open (R).
     pub radial: Option<crate::radial::Radial>,
 }
@@ -275,6 +277,7 @@ impl AppUi {
             previews: Previews::default(),
             strip: Vec::new(),
             navigator_buttons: Vec::new(),
+            pressure_button: egui::Rect::NOTHING,
             radial: None,
         }
     }
@@ -1180,6 +1183,16 @@ impl AppUi {
             if act(ui, Action::Bigger, true, false, "Bigger brush (])") {
                 ed.resize_brush(true);
             }
+            // Pressure changes the size (the same switch as in Tool property, at hand).
+            let b = ed.current_brush_mut();
+            let on = b.size_curve.is_some();
+            let r = ui
+                .add(egui::Button::new("Pressure").selected(on).min_size(vec2(0.0, size)))
+                .on_hover_text("Pressure changes the brush size: press lightly for thin lines, harder for thick ones. Off: every line is the full size.");
+            if r.clicked() {
+                b.size_curve = if on { None } else { Some(Curve::linear()) };
+            }
+            self.pressure_button = r.rect;
             ui.separator();
             stability_slider(ui, ed, 64.0);
             ui.separator();
