@@ -1463,3 +1463,53 @@ fn radial_symmetry_turns_copies_round_a_movable_centre() {
     drag_with(&mut e, (150.0, 100.0), (203.0, 147.0), Modifiers::default());
     assert_eq!(e.tools.symmetry_centre, [0.5, 0.5]);
 }
+
+/// Select something, then scale it: Box select round a square, Ctrl+T (transform_selection),
+/// drag a corner to double it or halve it; Enter puts it down (one undo step that brings the
+/// selection back too); Escape puts square and selection back; an empty selection refuses.
+#[test]
+fn a_selection_scales_up_and_down_with_the_transform_box() {
+    let mut e = editor();
+    let a = e.active;
+    for y in 100..140 {
+        for x in 100..140 {
+            e.doc.layers[a].pixels.set_pixel(x, y, [255, 0, 0, 255]);
+        }
+    }
+    let original = e.doc.layers[a].pixels.clone();
+    e.tool = Tool::SelectRect;
+    drag_with_mods(&mut e, (100.0, 100.0), (140.0, 140.0), Modifiers::default());
+    assert!(e.has_selection());
+    let selection = e.doc.selection.clone();
+    assert!(e.transform_selection());
+    assert_eq!(e.tool, Tool::LassoTransform);
+    assert!(!e.has_selection(), "the selection is put aside while the box is up");
+    let src = e.transform.as_ref().expect("the box").src;
+    assert_eq!(src, (100.0, 100.0, 140.0, 140.0), "the box is the selection's");
+    // Bigger: the bottom-right corner to (180, 180).
+    drag_with_mods(&mut e, (140.0, 140.0), (180.0, 180.0), Modifiers::default());
+    let px = |e: &Editor, x: i32, y: i32| e.doc.layers[a].pixels.pixel(x, y);
+    assert_eq!(px(&e, 175, 175), [255, 0, 0, 255], "twice the size");
+    assert_eq!(px(&e, 185, 185)[3], 0);
+    e.commit_transform();
+    assert_eq!(e.history.entries().0, vec!["Select", "Transform"]);
+    e.undo();
+    assert_eq!(e.doc.layers[a].pixels, original, "undo: the square as it was");
+    assert_eq!(e.doc.selection, selection, "and the selection back");
+    // Smaller: the corner to (120, 120); Escape puts everything back.
+    assert!(e.transform_selection());
+    drag_with_mods(&mut e, (140.0, 140.0), (120.0, 120.0), Modifiers::default());
+    assert_eq!(px(&e, 115, 115), [255, 0, 0, 255], "half the size");
+    assert_eq!(px(&e, 130, 130)[3], 0, "the rest of the square is gone while it is small");
+    e.cancel_transform();
+    assert_eq!(e.doc.layers[a].pixels, original, "Escape: as before");
+    assert_eq!(e.doc.selection, selection, "with the selection");
+    // Nothing painted in the selection: nothing to scale.
+    e.tool = Tool::SelectRect;
+    drag_with_mods(&mut e, (300.0, 200.0), (350.0, 250.0), Modifiers::default());
+    assert!(!e.transform_selection());
+    assert!(e.transform.is_none() && e.has_selection(), "refused, the selection kept");
+    // No selection: refused with a message.
+    e.deselect();
+    assert!(!e.transform_selection());
+}

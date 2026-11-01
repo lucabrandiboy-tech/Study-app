@@ -472,9 +472,13 @@ impl AppUi {
             }
         }
         self.writing = ed.text_edit.is_some();
-        // Another tool puts the lasso transform's part down.
+        // Another tool puts the lasso transform's part down; picking it with something
+        // selected puts the box round the selection.
         if ed.transform.is_some() && ed.tool != Tool::LassoTransform {
             ed.commit_transform();
+        }
+        if ed.tool == Tool::LassoTransform && self.last_tool != Tool::LassoTransform && ed.transform.is_none() && ed.has_selection() {
+            ed.transform_selection();
         }
         self.last_tool = ed.tool;
         FrameOutput { canvas_rect, requests }
@@ -524,6 +528,9 @@ impl AppUi {
         // on Ctrl+Shift+I.
         if hit(ctrl, Key::I) {
             ed.invert_selection();
+        }
+        if hit(ctrl, Key::T) {
+            ed.transform_selection();
         }
         if hit(none, Key::Backspace) {
             ed.fill_selection();
@@ -821,6 +828,10 @@ impl AppUi {
             }
             let has = ed.has_selection();
             ui.add_enabled_ui(has, |ui| {
+                if item(ui, "Scale / transform the selection", "Ctrl+T") {
+                    ed.transform_selection();
+                    ui.close();
+                }
                 if item(ui, "Deselect", "Ctrl+D") {
                     ed.deselect();
                     ui.close();
@@ -2485,6 +2496,9 @@ fn selection_controls(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     if has {
+        if ui.add(egui::Button::new("Scale / transform it").min_size(vec2(ui.available_width(), 24.0))).on_hover_text("Puts a box round what is selected: drag a corner to make it bigger or smaller (Shift keeps its shape), inside to move it, just outside a corner to turn it. Enter puts it down. (Ctrl+T in the Windows app; or pick the Transform tool)").clicked() {
+            ed.transform_selection();
+        }
         ui.horizontal_wrapped(|ui| {
             if ui.button("Fill with colour").on_hover_text("Backspace").clicked() {
                 ed.fill_selection();
@@ -2640,6 +2654,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl + A", "Select all"),
     ("Ctrl + Shift + A, Ctrl + D", "Deselect"),
     ("Ctrl + I, Ctrl + Shift + I", "Invert the selection"),
+    ("Ctrl + T", "Scale / transform the selection (Windows app; in a browser pick the Transform tool)"),
     ("Backspace", "Fill the selection (or the layer) with the colour"),
     ("Ctrl + Alt + J", "Copy the selection to a new layer"),
     ("Ctrl + Shift + J", "Cut the selection to a new layer"),

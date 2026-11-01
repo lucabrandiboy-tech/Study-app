@@ -132,6 +132,8 @@ Each step says what you should see. If something is different, note the step num
    (**Shift** keeps its shape), dragging inside moves it, and only the selected layer
    changes. **Enter** puts it down; **Ctrl+Z** puts it back; **Escape** before Enter
    cancels. Tell me if it feels slow on a big area.
+   Or select first: **Box select** (Shift+R) round something, then **Scale / transform it**
+   in Tool property (or pick the Transform tool): the same box appears round the selection.
 12. **Navigator** (top of the right side): *Expected:* a small picture of the whole painting,
    your local time under it, then **Flip**, **Symmetry X** and **Y**. Zoom in (**+**), then
    click or drag on the small picture: the view goes there. **Flip** mirrors the view (the

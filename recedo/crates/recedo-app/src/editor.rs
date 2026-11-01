@@ -296,7 +296,7 @@ impl Tool {
             Tool::SelectLasso => "Draw around what to select (Shift adds, Alt takes away)",
             Tool::MagicWand => "Click to select an area of one colour (Shift adds, Alt takes away)",
             Tool::Move => "Drag the selected pixels, or the whole layer; arrow keys nudge",
-            Tool::LassoTransform => "Draw around part of this layer, then drag a corner to scale it (Shift keeps its shape) or inside to move it; Enter puts it down",
+            Tool::LassoTransform => "Draw around part of this layer (or select it first and press Ctrl+T), then drag a corner to scale it (Shift keeps its shape) or inside to move it; Enter puts it down",
             Tool::Crop => "Drag over the part to keep, then Crop (Enter)",
             Tool::Text => "Click where the text goes, type it, then Place (Ctrl+Enter)",
             Tool::Pan => "Drag to move the view (or hold Space)",
@@ -1563,18 +1563,45 @@ impl Editor {
     /// A finished outline with the lasso transform: lifts what it surrounds on the selected
     /// layer, to be scaled or moved.
     fn start_transform(&mut self, points: Vec<CanvasPoint>) {
-        if let Some(why) = self.layer_refusal() {
-            self.notice(NoticeKind::Warning, format!("{why}: nothing to transform."));
-            return;
-        }
         let (w, h) = (self.doc.width, self.doc.height);
         let mask = fill::polygons(w, h, std::slice::from_ref(&points));
+        self.lift_for_transform(&mask, points, "draw around some paint");
+    }
+
+    /// Ctrl+T, or the transform tool picked while something is selected: the selection's
+    /// part of the selected layer gets the transform box, to be scaled, moved or turned. The
+    /// selection is put aside meanwhile (Escape brings it back; undo after putting the part
+    /// down brings both back). False if there is no selection or nothing in it.
+    pub fn transform_selection(&mut self) -> bool {
+        self.finish_interaction();
+        self.commit_transform();
+        let Some(sel) = self.doc.selection.clone() else {
+            self.notice(NoticeKind::Info, "Select something first (Box select, Lasso select or the Magic wand), then Ctrl+T to scale it.");
+            return false;
+        };
+        let (x0, y0, x1, y1) = sel.bounds;
+        let (x0, y0, x1, y1) = (x0 as f64, y0 as f64, x1 as f64, y1 as f64);
+        self.tool = Tool::LassoTransform;
+        if !self.lift_for_transform(&sel, vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)], "select some paint") {
+            return false;
+        }
+        self.doc.selection = None;
+        true
+    }
+
+    /// Lifts what `mask` covers on the selected layer into the transform box; `outline` is
+    /// drawn where it came from.
+    fn lift_for_transform(&mut self, mask: &Mask, points: Vec<CanvasPoint>, how: &str) -> bool {
+        if let Some(why) = self.layer_refusal() {
+            self.notice(NoticeKind::Warning, format!("{why}: nothing to transform."));
+            return false;
+        }
         let a = self.active;
-        let (rest, lifted) = select::lift(&self.doc.layers[a].pixels, &mask);
+        let (rest, lifted) = select::lift(&self.doc.layers[a].pixels, mask);
         if lifted.tile_count() == 0 || mask.is_empty() {
             let name = self.doc.layers[a].name.clone();
-            self.notice(NoticeKind::Info, format!("Nothing there to transform: draw around some paint on layer \"{name}\"."));
-            return;
+            self.notice(NoticeKind::Info, format!("Nothing there to transform: {how} on layer \"{name}\"."));
+            return false;
         }
         let (x0, y0, x1, y1) = mask.bounds;
         let src = (x0 as f64, y0 as f64, x1 as f64, y1 as f64);
@@ -1583,6 +1610,7 @@ impl Editor {
         self.transform = Some(Transform { layer: a, before: Box::new(self.doc.clone()), rest, lifted, src, rect: src, outline: points, shown: origin.clone(), origin, pending: false, m: IDENTITY });
         self.update_transform();
         self.notice(NoticeKind::Info, "Drag a corner or side to scale (Shift keeps the shape), inside to move, just outside a corner to turn it, Ctrl + a side to slant it. Enter puts it down, Escape cancels.");
+        true
     }
 
     /// Shows the part scaled into its box on its layer.
@@ -1677,6 +1705,8 @@ impl Editor {
         if let (Some(l), Some(b)) = (self.doc.layers.get_mut(t.layer), t.before.layers.get(t.layer)) {
             l.pixels = b.pixels.clone();
         }
+        // A selection put aside for the transform comes back.
+        self.doc.selection = t.before.selection.clone();
         let tiles: Vec<TileKey> = t.shown.union(&t.origin).copied().collect();
         self.mark_tiles(tiles);
     }

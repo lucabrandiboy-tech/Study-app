@@ -1147,3 +1147,24 @@ fn the_toolbar_pressure_switch_turns_pressure_sizing_on_and_off() {
     let (light, hard) = (width_at(&mut s, 200.0, 0.2), width_at(&mut s, 400.0, 1.0));
     assert!(light * 2 < hard, "on: a light press is thinner ({light} vs {hard})");
 }
+
+#[test]
+fn picking_the_transform_tool_with_a_selection_puts_the_box_round_it() {
+    let Some(g) = gpu() else { return };
+    let mut s = session();
+    let mut r = Renderer::new(&g.device, wgpu::TextureFormat::Rgba8Unorm, &s.ed);
+    let a = s.ed.active;
+    for y in 100..160 {
+        for x in 100..160 {
+            s.ed.doc.layers[a].pixels.set_pixel(x, y, [0, 0, 0, 255]);
+        }
+    }
+    s.ed.doc.selection = Some(std::sync::Arc::new(recedo_core::fill::rectangle(1280, 720, (100.0, 100.0), (160.0, 160.0))));
+    quiet(&g, &mut r, &mut s, vec![]);
+    let at = s.ui.strip.iter().find(|b| b.0 == Some(Tool::LassoTransform)).map(|b| b.1.center()).expect("Transform on the strip");
+    quiet(&g, &mut r, &mut s, click(at));
+    assert_eq!(s.ed.tool, Tool::LassoTransform);
+    assert_eq!(s.ed.transform.as_ref().map(|t| t.src), Some((100.0, 100.0, 160.0, 160.0)), "the box round the selection");
+    let (out, _) = frames(&g, &mut r, &mut s, vec![]);
+    shot(&g, &mut r, &mut s, out, "29-selection-transform");
+}
